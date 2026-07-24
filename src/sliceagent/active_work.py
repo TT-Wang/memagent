@@ -334,6 +334,11 @@ class WorkItem:
     output_refs: tuple[OutputRef, ...] = ()
     superseded_by: str = ""
     stop_reason: str = ""
+    # Plan-mode acceptance contract, fixed at plan time so execution cannot lower the bar:
+    # `verify` = commands whose exit status proves the item (host-run at completion, P2);
+    # `done_when` = the human-readable acceptance criterion. Optional; absent on legacy records.
+    verify: tuple[str, ...] = ()
+    done_when: str = ""
 
     def __post_init__(self) -> None:
         _text(self.id, "work_item.id")
@@ -343,6 +348,11 @@ class WorkItem:
             raise GraphValidationError(f"unsupported work status: {self.status!r}")
         if self.kind not in WORK_KINDS:
             raise GraphValidationError(f"unsupported work kind: {self.kind!r}")
+        if not isinstance(self.verify, tuple) or len(self.verify) > 8 or any(
+                not isinstance(cmd, str) or not cmd.strip() or len(cmd) > 500 for cmd in self.verify):
+            raise GraphValidationError("work_item.verify must be up to 8 non-empty commands (<=500 chars each)")
+        if not isinstance(self.done_when, str) or len(self.done_when) > 500:
+            raise GraphValidationError("work_item.done_when must be a string of at most 500 chars")
         if not self.logical_id and self.kind == "request":
             object.__setattr__(self, "logical_id", self.root_id)
         _text(self.logical_id, "work_item.logical_id", allow_empty=self.kind == "task")
@@ -396,6 +406,8 @@ class WorkItem:
             "output_refs": [ref.to_dict() for ref in self.output_refs],
             "superseded_by": self.superseded_by,
             "stop_reason": self.stop_reason,
+            "verify": list(self.verify),
+            "done_when": self.done_when,
         }
 
     @classmethod
@@ -430,6 +442,8 @@ class WorkItem:
             output_refs=tuple(OutputRef.from_dict(item) for item in outputs),
             superseded_by=value.get("superseded_by", ""),
             stop_reason=value.get("stop_reason", ""),
+            verify=tuple(str(cmd) for cmd in (value.get("verify") or ()) if str(cmd).strip()),
+            done_when=str(value.get("done_when") or ""),
         )
 
 
@@ -479,17 +493,22 @@ class WorkDelta:
 
 
 _ALLOWED_TRANSITIONS: dict[str, frozenset[str]] = {
-    "open": frozenset({"open", "in_progress", "waiting_user", "ready", "delivered", "cancelled", "superseded"}),
+    # ``verified`` is reachable from every working status — but ONLY via the host's promotion path:
+    # build_work_delta rewrites a model-supplied 'ready' to 'verified' after the item's verify commands
+    # ran green host-side (P2). The model itself can never submit 'verified' (intake guard), and a
+    # verified item must carry its typed verification evidence/output refs (invariants above).
+    "open": frozenset({"open", "in_progress", "waiting_user", "ready", "delivered", "verified",
+                       "cancelled", "superseded"}),
     "in_progress": frozenset({
-        "in_progress", "waiting_user", "ready", "delivered", "cancelled", "superseded",
+        "in_progress", "waiting_user", "ready", "delivered", "verified", "cancelled", "superseded",
     }),
     "waiting_user": frozenset({
-        "waiting_user", "in_progress", "ready", "delivered", "cancelled", "superseded",
+        "waiting_user", "in_progress", "ready", "delivered", "verified", "cancelled", "superseded",
     }),
     # ``ready`` says a child contribution is prepared. It may be model-maintained for local work or derived
     # by the host from a bound child's successful immutable seal. Only the host can attach the real response
     # artifact and advance it to delivered.
-    "ready": frozenset({"ready", "in_progress", "delivered", "cancelled", "superseded"}),
+    "ready": frozenset({"ready", "in_progress", "delivered", "verified", "cancelled", "superseded"}),
     # A delivered answer can be reopened when new evidence shows it is incomplete; verification is distinct.
     "delivered": frozenset({"delivered", "verified", "in_progress", "cancelled", "superseded"}),
     "verified": frozenset({"verified"}),
@@ -964,105 +983,6 @@ def request_root_item(event_id: str, utterance: str, *, workspace_epoch: int = 0
     )
 
 
-def attach_child_artifacts(
-    graph: WorkGraph,
-    recent_calls: Iterable[Mapping[str, Any]],
-    *,
-    workspace_epoch: int,
-) -> WorkGraph:
-    """Promote sealed child effects into their immutable Active Work binding.
-
-    This reducer is shared by live settlement, normal turn sealing, and crash replay.  A bound child's terminal
-    *execution* state is host arithmetic: a successful seal makes that delegated work item ``ready`` for parent
-    synthesis; a determinate failed/cancelled seal makes the attempt ``cancelled`` while its evidence gap remains
-    visible.  Neither transition claims that the child's testimony is correct, parent-verified, or delivered.
-    Indeterminate execution remains unresolved for reconciliation.
-    """
-    if not isinstance(graph, WorkGraph):
-        raise TypeError("attach_child_artifacts requires a WorkGraph")
-    _integer(workspace_epoch, "child artifact workspace_epoch")
-    from .fan_in import build_fan_in_manifest
-
-    current = graph
-    # Fold only at the existing normal seal/replay chokepoint.  The live model trajectory keeps its original
-    # WorkGraph revision, so adding parent-use accounting cannot manufacture a mid-turn CAS conflict.
-    # Join this segment's parent-read receipts to already persisted child rows. A later complete open may have
-    # no new spawn event; omitting the graph would make it live-correct yet lose the upgrade at the next reload.
-    manifest = build_fan_in_manifest(recent_calls, graph=graph, max_children=None)
-    for child in manifest.children:
-        work_item_id = child.work_item_id
-        artifact_ref = child.artifact_id
-        item = current.get(work_item_id) if work_item_id else None
-        if item is None or item.kind != "task" or not artifact_ref:
-            continue
-        source_qualifier = str(child.source_coverage_status or "").strip().casefold()
-        source_qualifier = {
-            "grounded": "source_complete", "partial": "source_partial",
-            "unsupported": "source_unsupported",
-        }.get(source_qualifier, source_qualifier)
-        if source_qualifier not in {
-            "source_complete", "source_partial", "source_unsupported", "not_assessed",
-        }:
-            source_qualifier = ""
-        additions = [EvidenceRef(
-            "child_artifact", artifact_ref, qualifier=source_qualifier,
-        )]
-        if child.operational_declared and child.operational_status:
-            additions.append(EvidenceRef(
-                "child_operational_status", artifact_ref,
-                qualifier=child.operational_status,
-            ))
-        if child.digest_delivered:
-            additions.append(EvidenceRef("child_digest_delivered", artifact_ref))
-        if child.artifact_opened in {"partial", "complete"}:
-            additions.append(EvidenceRef(
-                "child_artifact_opened", artifact_ref, qualifier=child.artifact_opened,
-            ))
-        if child.policy_declared:
-            additions.append(EvidenceRef(
-                "child_integration_policy", artifact_ref,
-                qualifier=child.integration_policy,
-            ))
-        if child.evidence_declared:
-            additions.append(EvidenceRef(
-                "child_evidence_status", artifact_ref,
-                qualifier=child.evidence_status,
-            ))
-        if child.evidence_account:
-            # Persist the bounded mechanical census, not merely its coarse label. This is derived truth and
-            # survives restart/replay without turning the child report into prompt narration.
-            additions.append(EvidenceRef(
-                "child_evidence_account", artifact_ref,
-                qualifier=json.dumps(
-                    dict(child.evidence_account), ensure_ascii=False,
-                    sort_keys=True, separators=(",", ":"),
-                ),
-            ))
-        operational = str(child.operational_status or "").strip().casefold()
-        terminal_status = item.status
-        stop_reason = item.stop_reason
-        if child.operational_declared and item.status in {
-            "open", "in_progress", "waiting_user", "ready",
-        }:
-            if operational in {"succeeded", "success", "ok", "end_turn", "ready", "sealed"}:
-                terminal_status = "ready"
-            elif operational in {
-                "failed", "failure", "error", "cancelled", "canceled", "timeout", "max_tokens",
-            }:
-                terminal_status = "cancelled"
-                stop_reason = f"child_{operational}"
-        current = current.upsert(replace(
-            item,
-            status=terminal_status,
-            stop_reason=stop_reason,
-            evidence_refs=tuple(dict.fromkeys((*item.evidence_refs, *additions))),
-            resource_refs=tuple(dict.fromkeys((*item.resource_refs, ResourceRef(
-                "subagent", artifact_ref, workspace_epoch=workspace_epoch,
-            )))),
-        ))
-    return current
-
-
 __all__ = [
     "ActiveWorkError",
     "EvidenceRef",
@@ -1082,6 +1002,5 @@ __all__ = [
     "WorkItem",
     "WorkKind",
     "WorkStatus",
-    "attach_child_artifacts",
     "request_root_item",
 ]

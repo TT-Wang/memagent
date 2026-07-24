@@ -26,6 +26,12 @@ class ModelCapability:
     supports_stream_options: bool = True   # OpenAI stream_options={include_usage}; set False if a provider 400s
     supports_vision: bool = False    # accepts image content parts (multimodal); gates @image attachment
     context_window: int = 0          # 0 = unknown (no fabricated values)
+    # Default per-request completion cap (AGENT_COMPLETION_TOKENS overrides; 0 = omit the param).
+    # Reasoning-output models spend chain-of-thought FROM this same budget, so the historical 8192 —
+    # sized for chat-only answers — parked long design/review steps mid-response ("length" finish) once
+    # streaming removed the read-timeout that used to hide the ceiling. Chat-only models keep 8192: their
+    # providers may reject larger caps, and an 8k pure-answer is already enormous.
+    completion_tokens_default: int = 8192
 
 
 _UNKNOWN = ModelCapability()
@@ -118,11 +124,15 @@ def capability(model: str, base_url: str = "") -> ModelCapability:
     vis = any(h in m for h in _VISION_HINTS)
     if m.startswith(("o1", "o3", "o4", "o5", "o6", "gpt-5", "gpt-6")) and _is_openai_endpoint(b):
         return ModelCapability("openai-reasoning", tokens_param="max_completion_tokens",
-                               supports_reasoning_effort=True, supports_vision=vis)
+                               supports_reasoning_effort=True, supports_vision=vis,
+                               completion_tokens_default=32768)
     if m in {"deepseek-v4-flash", "deepseek-v4-pro"}:
         return ModelCapability("deepseek", supports_vision=vis, context_window=1_000_000)
     if "deepseek" in m or "deepseek" in b:
-        return ModelCapability("deepseek", supports_vision=vis)   # reasoning via extra_body.thinking
+        # reasoning via extra_body.thinking; the retiring `deepseek-reasoner` alias emits CoT into the
+        # completion budget, so it gets the reasoning-sized default.
+        return ModelCapability("deepseek", supports_vision=vis,
+                               completion_tokens_default=32768 if "reasoner" in m or "thinking" in m else 8192)
     if "kimi" in m or "moonshot" in b:
         return ModelCapability("moonshot", supports_vision=vis)
     if "claude" in m or "anthropic" in b:

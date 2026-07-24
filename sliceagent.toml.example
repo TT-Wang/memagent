@@ -17,7 +17,7 @@
 model = "deepseek-v4-flash"       # AGENT_MODEL: the model id. NO built-in default — set it here, via a
                                   # provider table, or AGENT_MODEL (else `sliceagent init` picks one).
 mine = "deterministic"            # AGENT_MINE: deterministic | llm | off  (typed L2/skill consolidation)
-subagent_depth = 1                # AGENT_SUBAGENT_DEPTH: 0 disables spawn_subagent
+subagent_depth = 1                # AGENT_SUBAGENT_DEPTH: 0 disables spawn_agent
 show_slice = false                # SHOW_SLICE: print the reconstructed slice each turn
 
 [sandbox]

@@ -123,15 +123,17 @@ def parallel_agents_render_as_one_typed_outcome_group():
 
 
 @check
-def operational_success_and_partial_source_coverage_render_as_separate_facts():
+def operational_success_renders_report_readiness_without_source_coverage_facts():
     result = _agent_result(
         "synth-1", 1, "merge reports", ToolStatus.SUCCEEDED,
         source_coverage="source_partial",
     )
     out, _ = _render([result, StepEnd(1, {}, "tool_use")])
     assert "agents · 1/1 reports ready" in out, out
-    assert "source coverage · 1 source partial" in out, out
-    assert "source partial" in out and "ground" not in out and "verified" not in out, out
+    assert "✓ 1 explorer — merge reports" in out, out
+    # Source-coverage accounting was removed; its facts must not resurface as render lines.
+    assert "source coverage" not in out and "source partial" not in out, out
+    assert "ground" not in out and "verified" not in out, out
 
 
 @check
@@ -332,7 +334,7 @@ def adverse_receipt_facts_survive_an_ordinary_width_completion():
         },
     }
     out, _ = _render([
-        TurnStarted("delegate", plan=[{"step": "inspect", "status": "done"}]),
+        TurnStarted("delegate"),
         StepBegin(1), TurnEnd("end_turn", 1, {}),
         TurnCommitted(True, "end_turn", receipt=receipt),
     ], width=80)

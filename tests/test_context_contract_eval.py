@@ -14,7 +14,7 @@ from evals.context_contract_eval import (CASES, audit_fixtures, messages,  # noq
                                          prepared_system, score)
 from sliceagent.memory import NullMemory  # noqa: E402
 from sliceagent.pfc import Slice  # noqa: E402
-from sliceagent.regions import REGION_ORDER, render_cache_manifest, render_roster  # noqa: E402
+from sliceagent.regions import REGION_ORDER, render_cache_manifest  # noqa: E402
 from sliceagent.seed import make_build_slice  # noqa: E402
 from sliceagent.tools import LocalToolHost  # noqa: E402
 
@@ -106,12 +106,6 @@ def test_slice_regions_use_canonical_unshadowed_context_locators_and_memory_auth
     assert 'read_file("@sliceagent/history/turn-4.md")' in history
     assert 'read_file("@sliceagent/history/index.md")' in history
     assert 'read_file("history/' not in history
-
-    roster = render_roster([
-        {"name": f"spec-{index}", "kind": "explorer", "jobs": 0, "last_active": "2026-07-12"}
-        for index in range(13)
-    ])
-    assert 'read_file("@sliceagent/roster/index.md")' in roster
 
     memory_renderer = next(row[2] for row in REGION_ORDER if row[0] == "memory")
     memory_region = memory_renderer({"memory": "candidate"})

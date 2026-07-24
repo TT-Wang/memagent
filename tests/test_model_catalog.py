@@ -95,6 +95,19 @@ def likely_endpoint_mismatch_no_false_positive_on_matching_or_ambiguous_pairs():
     assert likely_endpoint_mismatch("some-future-model", "https://api.deepseek.com/v1") is None
 
 
+@check
+def completion_cap_default_is_model_aware():
+    """Reasoning-output models spend chain-of-thought from the completion budget: the 8192 chat-era cap
+    parked long review/design steps mid-response once streaming stopped hiding the ceiling behind the old
+    60s read-timeout. The default must scale for them; chat models keep 8192 (provider caps may reject
+    more); AGENT_COMPLETION_TOKENS always overrides (exercised in the llm suite)."""
+    assert capability("deepseek-reasoner", "https://api.deepseek.com/v1").completion_tokens_default == 32768
+    assert capability("deepseek-chat", "https://api.deepseek.com/v1").completion_tokens_default == 8192
+    assert capability("deepseek-v4-flash", "https://api.deepseek.com/v1").completion_tokens_default == 8192
+    assert capability("gpt-5.5", "https://api.openai.com/v1").completion_tokens_default == 32768
+    assert capability("kimi-k2", "https://api.moonshot.cn/v1").completion_tokens_default == 8192
+
+
 def main():
     failed = 0
     for fn in CHECKS:

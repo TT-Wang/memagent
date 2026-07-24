@@ -411,8 +411,16 @@ def absolute_deadline_matches_completion_budget_across_providers_and_sdk_stays_o
                              base_url="https://api.deepseek.com/v1", timeout=60)
         other = OpenAILLM(model="gpt-5", api_key="test", proxy="none",
                           base_url="https://api.openai.com/v1", timeout=60)
-        assert deepseek._hard_timeout == 286, deepseek._hard_timeout
-        assert other._hard_timeout == 286, other._hard_timeout
+        # Reasoning-output models default to the 32768 completion cap (CoT spends the same budget), so
+        # the derived absolute ceiling is (32768+31)//32+30 = 1054s; chat models keep 8192 → 286s.
+        chat = OpenAILLM(model="deepseek-chat", api_key="test", proxy="none",
+                         base_url="https://api.deepseek.com/v1", timeout=60)
+        try:
+            assert deepseek._hard_timeout == 1054, deepseek._hard_timeout
+            assert other._hard_timeout == 1054, other._hard_timeout
+            assert chat._hard_timeout == 286, chat._hard_timeout
+        finally:
+            _close(chat)
         assert deepseek._timeout == other._timeout == 60
         assert deepseek.client.max_retries == other.client.max_retries == 0
     finally:
@@ -453,16 +461,23 @@ def defaults_recompute_on_switch_and_stay_isolated_in_shallow_child_view():
         parent = OpenAILLM(model="gpt-5", api_key="test", proxy="none",
                            base_url="https://api.openai.com/v1", timeout=60)
         child = copy.copy(parent)
-        assert child._hard_timeout == parent._hard_timeout == 286
+        assert child._hard_timeout == parent._hard_timeout == 1054   # reasoning default 32768 → 1054s
+        # A caller's MANUAL cap on a shallow child view must survive that child's own model switch
+        # (only an untouched model default recomputes on a hop): 16384 → (16384+31)//32+30 = 542s.
         child.max_tokens = 16_384
         child.switch(model="deepseek-reasoner")
+        assert child.max_tokens == 16_384, "manual child cap must survive the switch"
         assert child._hard_timeout == 542
-        assert parent._hard_timeout == 286 and parent.model == "gpt-5", \
+        assert parent._hard_timeout == 1054 and parent.model == "gpt-5", \
             "a child model switch must not mutate the parent's deadline/model"
+        # Untouched defaults DO recompute across hops: reasoning→reasoning keeps 32768/1054s, and a hop
+        # to a chat model drops to 8192/286s.
         parent.switch(model="deepseek-reasoner", base_url="https://api.deepseek.com/v1", api_key="test")
-        assert parent._hard_timeout == 286
+        assert parent.max_tokens == 32_768 and parent._hard_timeout == 1054
+        parent.switch(model="deepseek-chat")
+        assert parent.max_tokens == 8_192 and parent._hard_timeout == 286
         parent.switch(model="gpt-5", base_url="", api_key="test")
-        assert parent._hard_timeout == 286
+        assert parent.max_tokens == 32_768 and parent._hard_timeout == 1054
     finally:
         _close(parent) if parent is not None else None
         if old is not None:

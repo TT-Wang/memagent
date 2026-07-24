@@ -2,22 +2,19 @@
 
 _Auto-generated from `src/sliceagent/envspec.py` — do not edit by hand (`python scripts/gen_config_reference.py`)._
 
-sliceagent reads **59** environment variables across **6** groups; every value is validated at startup (a misspelled enum warns instead of silently defaulting). Run `sliceagent config --list` to see the resolved value of each on your machine. Secrets (🔒) are read from the environment / config and never printed.
+sliceagent reads **57** environment variables across **6** groups; every value is validated at startup (a misspelled enum warns instead of silently defaulting). Run `sliceagent config --list` to see the resolved value of each on your machine. Secrets (🔒) are read from the environment / config and never printed.
 
 ## agent
 
 | variable | default | description |
 |---|---|---|
-| `AGENT_ADVANCED_AGENTS` | — | Enable writable/nested/named specialist delegation; default core mode exposes one-shot read-only explorers only. |
 | `AGENT_ADVANCED_TOOLS` | — | Expose persistent process and interactive terminal tools; off by default in the demo kernel. |
 | `AGENT_ALLOW_PLUGINS` | — | Set truthy to load project/user plugins. |
 | `AGENT_BACKGROUND_REVIEW` | — | Set truthy to run an off-thread reviewer that consolidates lessons after each turn. |
-| `AGENT_COMPLETION_TOKENS` | `8192` | Per-REQUEST completion cap (max output tokens); distinct from the AGENT_MAX_TOKENS turn budget. |
+| `AGENT_COMPLETION_TOKENS` | `model-aware` | Per-REQUEST completion cap (max output tokens); distinct from the AGENT_MAX_TOKENS turn budget. Unset = model-aware default (8192; 32768 for reasoning-output models, whose chain-of-thought spends this same budget). 0 = provider default. |
 | `AGENT_CONTEXT_WINDOW` | — | Provider context window used for strict per-call capacity preflight when the model catalog cannot supply one (0/unset = explicit compatibility mode). |
 | `AGENT_DELEGATION_TIMEOUT` | `900` | Hard ceiling for a child-agent wave in seconds; invalid/non-positive values use 900. |
-| `AGENT_EXPLORER_NAV_STEPS` | `6` | Fast-navigation model-step ceiling for staged explorers. Values are clamped to 1..(the child max minus the reserved synthesis step). |
-| `AGENT_EXPLORER_REASONING` | `staged` | Explorer profile: staged uses fast evidence navigation plus one full tool-free synthesis; fast/full/high/max keep a single-stage override. _(choices: staged, fast, full, high, max)_ |
-| `AGENT_MAX_STEPS` | `60` | Per-turn step ceiling (runaway backstop); raise for deep analysis. |
+| `AGENT_MAX_STEPS` | `120` | Per-turn step ceiling (runaway backstop, NOT a work meter — the budget and the user are); raise for deep analysis. |
 | `AGENT_MAX_TOKENS` | — | Per-turn task token budget, including delegated child usage (parks when exhausted). |
 | `AGENT_MINE` | `deterministic` | Lesson-mining mode for end-of-session consolidation. |
 | `AGENT_MODEL` | — | LLM model id to drive the agent. REQUIRED — no default; set it here or pick a provider+model via `sliceagent init`. |
@@ -56,7 +53,7 @@ sliceagent reads **59** environment variables across **6** groups; every value i
 | `SLICEAGENT_PROJECT_REGISTRY` | — | Override the private stable project-identity registry path. |
 | `SLICEAGENT_SKILLS_DIR` | — | Extra directory to discover skills from. |
 | `SLICEAGENT_USER_ID` | `local-user` | Stable local user scope key for typed USER knowledge. |
-| `SLICEAGENT_VAULT` | — | Legacy episodic/task/roster compatibility vault. |
+| `SLICEAGENT_VAULT` | — | Legacy episodic/task compatibility vault. |
 
 ## monitor
 
@@ -75,6 +72,7 @@ sliceagent reads **59** environment variables across **6** groups; every value i
 | `AGENT_PROXY` | — | HTTP proxy URL for LLM calls; 'none'/'off' forces direct. Unset = direct (no proxy). |
 | `LLM_API_KEY` 🔒 | — | API key for the LLM provider (REQUIRED). |
 | `LLM_BASE_URL` | — | OpenAI-compatible endpoint (e.g. https://api.moonshot.cn/v1). |
+| `LLM_GATE_LEASE_MARGIN_SEC` | `60` | Teardown margin added to the provider call hard timeout to bound a physical gate lease's lifetime; leases older than that horizon are reclaimed at admission (self-heals unconfirmed-close capacity bricks). |
 | `LLM_HARD_TIMEOUT_SEC` | — | Absolute whole-request watchdog in seconds; unset derives a provider-agnostic ceiling from the completion-token budget (minimum 180 seconds). |
 | `LLM_PROVIDER_MAX_INFLIGHT` | `4` | Process-wide physical request ceiling per provider account. Timed-out calls retain a slot until their transport actually closes; invalid or non-positive values use the default. |
 | `LLM_STREAM_CLOSE_GRACE_SEC` | `2` | Seconds to confirm SSE connection closure after cancellation/deadline before reporting an indeterminate call. |
@@ -90,5 +88,5 @@ sliceagent reads **59** environment variables across **6** groups; every value i
 | variable | default | description |
 |---|---|---|
 | `AGENT_SPINNER` | `on` | Animated in-place status spinner during a turn (a Rich live region). Set off to drop just the spinner; all other Rich formatting stays. _(choices: on, off)_ _(aliases: 1, true, yes, 0, false, no)_ |
-| `AGENT_TUI` | `rich` | UI mode: rich (default inline), live (pinned box), off (plain). _(choices: rich, live, off)_ _(aliases: 1, on, true, yes, 0, false, no)_ |
+| `AGENT_TUI` | `live` | UI mode: live (default — the pinned rich TUI) or off (plain stdout; pipes/CI). The inline REPL tier is retired; legacy values rich/inline/repl mean live. _(choices: live, off)_ _(aliases: rich, inline, repl, 1, on, true, yes, 0, false, no)_ |
 | `SHOW_SLICE` | — | Set truthy to print the rebuilt slice each turn (debug view). |

@@ -13,7 +13,7 @@ try:
     from rich.cells import cell_len  # noqa: E402
     from rich.console import Console  # noqa: E402
     from sliceagent.tui import (RichSink, _ToolTiming, _agent_matrix_plain_lines, _box_width,  # noqa: E402
-                                _live_status_line, _render_agent_batch, _render_plan, _render_read_summary,
+                                _live_status_line, _render_agent_batch, _render_read_summary,
                                 _private_prompt_history, _record_usage, _render_tool_result,
                                 _response_panel, _toolbar)
     from sliceagent.tui_projection import AgentResultView, output_preview  # noqa: E402
@@ -35,19 +35,6 @@ def _sink_capture():
     buf = io.StringIO()
     con = Console(file=buf, width=100, force_terminal=False, color_system=None)
     return RichSink(con, {}), buf
-
-
-@check
-def plan_renders_as_one_settled_summary():
-    sink, buf = _sink_capture()
-    sink(ToolResult("update_plan", {"steps": [
-        {"step": "write the parser", "status": "done"},
-        {"step": "add error handling", "status": "in_progress"},
-        {"step": "write tests", "status": "pending"}]}, "PLAN updated", failing=False))
-    out = buf.getvalue()
-    assert out == "│ plan 1/3 · add error handling\n", out
-    assert "write the parser" not in out and "write tests" not in out, \
-        "full plan history belongs in /plan, not scrollback"
 
 
 @check
@@ -102,12 +89,6 @@ def prompt_history_is_created_and_repaired_private():
 
 
 @check
-def render_plan_handles_empty_and_bad_input():
-    assert _render_plan([]) is not None                 # empty → compact "plan 0/0" row, no crash
-    assert _render_plan([{"step": "x", "status": "weird"}, "not a dict"]) is not None
-
-
-@check
 def settled_rows_never_wrap_at_common_terminal_widths():
     event = ToolResult(
         "run_command", {"command": "pytest -q " + "very_long_test_name_" * 8},
@@ -119,7 +100,6 @@ def settled_rows_never_wrap_at_common_terminal_widths():
         {"step": "add a deliberately long regression test " * 5, "status": "in_progress"},
     ]
     for width in (60, 80, 120):
-        assert cell_len(_render_plan(plan, width).plain) <= width
         summary = _render_read_summary(reads, width)
         assert summary is not None and cell_len(summary.plain) <= width
         buf = io.StringIO()
@@ -151,16 +131,16 @@ def agent_groups_and_busy_meter_are_width_safe_with_wide_text():
 
 
 @check
-def live_agent_matrix_keeps_report_readiness_separate_from_source_partial():
+def live_agent_matrix_shows_report_readiness_without_source_coverage_tokens():
     machine = TurnProgress(await_commit=True)
     machine.reduce(TurnStarted("merge reports", turn_id="turn-source"))
     machine.reduce(StepBegin(1))
     invocation = ToolInvocation(
-        "synth-1", "spawn_agent", {"agent": "synthesiser", "task": "merge reports"}, 0,
+        "synth-1", "spawn_agent", {"agent": "explorer", "task": "merge reports"}, 0,
     )
     machine.reduce(ToolStarted(invocation.name, dict(invocation.args), invocation))
     outcome_effect = ToolEffect("child-source:outcome", "child_outcome", {
-        "kind": "synthesiser", "status": "ok",
+        "kind": "explorer", "status": "ok",
         "report_completion": "complete",
         "source_coverage_status": "source_partial",
     })
@@ -176,9 +156,10 @@ def live_agent_matrix_keeps_report_readiness_separate_from_source_partial():
     ))
 
     rendered = "\n".join(line for _, line in _agent_matrix_plain_lines(machine.snapshot(), 120))
-    assert "1 ready" in rendered and "1 source partial" in rendered, rendered
-    assert "✓ ready" in rendered and "source partial" in rendered, rendered
-    assert "ground" not in rendered and "verified" not in rendered, rendered
+    assert "1 ready" in rendered and "✓ ready" in rendered, rendered
+    assert "not assessed" in rendered, rendered
+    # Source-coverage accounting was removed; its tokens must not resurface in the matrix.
+    assert "source partial" not in rendered and "ground" not in rendered and "verified" not in rendered, rendered
 
 
 @check

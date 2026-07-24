@@ -100,13 +100,7 @@ def test_child_outcome_metadata_is_retained_without_copying_report_prose_into_fi
         "child_artifact",
         {
             "artifact_id": "child:sealed-report",
-            "delegation_target": "inspect CI",
             "scope": [".github/workflows"],
-            "claims": [{
-                "text": "A CI workflow exists",
-                "report_exact": "A CI workflow exists",
-                "observation_refs": ["0" * 64],
-            }],
         },
     )
 
@@ -123,7 +117,7 @@ def test_child_outcome_metadata_is_retained_without_copying_report_prose_into_fi
     assert call["child_operational_status"] == "succeeded"
     assert call["child_digest_delivered"] is True
     assert call["child_scope"] == [".github/workflows"]
-    assert call["child_claims"][0]["observation_refs"] == ["0" * 64]
+    assert "child_claims" not in call
     assert "A CI workflow exists" not in state.finding_source
     assert state.findings == []
 

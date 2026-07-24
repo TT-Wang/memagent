@@ -19,7 +19,6 @@ Design (a rich + prompt_toolkit terminal UI):
 """
 from __future__ import annotations
 
-import contextlib
 import os
 import shutil
 import sys
@@ -46,6 +45,8 @@ from .events import (AssistantText, ApiRetry, Event, LessonSaved, StepBegin, Ste
                      SubagentProgress, ToolResult, ToolStarted, TurnCommitted, TurnEnd,
                      TurnInterrupted, TurnStarted)
 from .mentions import completion_path
+from .plan_mode import plan_objective as _plan_objective
+from .plan_mode import plan_switch as _plan_switch
 from .progress import ProgressPhase, TurnProgress
 from .receipts import (receipt_completion_label, receipt_has_adverse_lifecycle,
                        receipt_summary_parts)
@@ -114,8 +115,6 @@ _TOOL = {
     "new_topic":      ("task",    "goal"),
     "switch_topic":   ("switch",  "task_id"),
     "spawn_agent":    ("delegate", "task"),
-    "spawn_subagent": ("delegate", "task"),
-    "spawn_explore":  ("explore",  "task"),
 }
 
 
@@ -196,31 +195,6 @@ def _diff(name: str, args: dict, width: int = 100):
     return Group(*lines) if lines else None
 
 
-def _render_plan(steps: list, width: int = 100) -> Text:
-    """One settled plan summary; ``/plan`` remains the home for the full checklist."""
-    steps = steps if isinstance(steps, list) else []
-    valid = [it for it in steps if isinstance(it, dict)]
-    done = sum(1 for it in valid if it.get("status") == "done")
-    current = next((str(it.get("step", "")) for it in valid
-                    if it.get("status") == "in_progress" and it.get("step")), "")
-    if not current:
-        current = next((str(it.get("step", "")) for it in valid
-                        if it.get("status") != "done" and it.get("step")), "")
-    if not valid:
-        tail = "empty"
-    elif done == len(valid):
-        tail = "complete"
-    else:
-        tail = _shorten(current or "next step pending", 100)
-    return _fit_line(Text.assemble(
-        Text("│ ", style=TH["gutter"]),
-        Text("plan", style=f"bold {TH['accent']}"),
-        Text(f" {done}/{len(valid)} · ", style=TH["dim"]),
-        Text(tail, style=TH["dim"] if not valid or done == len(valid) else "default"),
-    ), width)
-
-
-# ── the rendering sink (consumes the loop's events) ──────────────────────────────────────────
 def _box_width(console: Console) -> int:
     """Bound the response box so long replies read as a column, not edge-to-edge."""
     try:
@@ -386,6 +360,7 @@ def _render_agent_batch(agents: list[AgentResultView], width: int = 100) -> Grou
     completed_without_report = sum(
         view.status == "succeeded" and not view.report_ready for _, view in ordered
     )
+    partial = sum(view.status == "partial" for _, view in ordered)
     steered = sum(view.status == "steered" for _, view in ordered)
     timed_out = sum(view.status == "failed" and view.timed_out for _, view in ordered)
     failed = sum(view.status == "failed" and not view.timed_out for _, view in ordered)
@@ -397,6 +372,7 @@ def _render_agent_batch(agents: list[AgentResultView], width: int = 100) -> Grou
     ), width)]
     for count, label, style in (
         (completed_without_report, "completed without report", TH["warn"]),
+        (partial, "partial", TH["warn"]),
         (steered, "steered", TH["dim"]), (failed, "failed", TH["fail"]),
         (timed_out, "timed out", TH["warn"]),
         (cancelled, "cancelled", TH["dim"]),
@@ -406,24 +382,6 @@ def _render_agent_batch(agents: list[AgentResultView], width: int = 100) -> Grou
             rows.append(_fit_line(Text.assemble(
                 Text("│   ", style=TH["gutter"]), Text(f"{count} {label}", style=style),
             ), width))
-    source_counts = Counter(
-        view.source_coverage_status for _, view in ordered
-        if view.source_coverage_status in {"source_complete", "source_partial", "source_unsupported"}
-    )
-    if source_counts:
-        source_facts = [
-            f"{source_counts[status]} {label}"
-            for status, label in (
-                ("source_complete", "source complete"),
-                ("source_partial", "source partial"),
-                ("source_unsupported", "source unsupported"),
-            )
-            if source_counts[status]
-        ]
-        rows.append(_fit_line(Text.assemble(
-            Text("│   ", style=TH["gutter"]),
-            Text("source coverage · " + " · ".join(source_facts), style=TH["warn"]),
-        ), width))
     evidence_counts = Counter(_evidence_key(view.evidence_status) for _, view in ordered)
     evidence_facts = []
     for status in (
@@ -468,6 +426,8 @@ def _render_agent_batch(agents: list[AgentResultView], width: int = 100) -> Grou
             glyph, style = "✓", TH["ok"]
         elif view.status in {"steered", "cancelled"}:
             glyph, style = "↷", TH["dim"]
+        elif view.status == "partial":
+            glyph, style = "◐", TH["warn"]
         elif view.status == "indeterminate" or view.timed_out:
             glyph, style = "!", TH["warn"]
         else:
@@ -503,13 +463,6 @@ def _render_agent_batch(agents: list[AgentResultView], width: int = 100) -> Grou
             " · evidence " + _evidence_token(view.evidence_status, view.evidence_account),
             style=TH[_evidence_style(view.evidence_status)],
         )
-        if view.source_coverage_status in {
-            "source_complete", "source_partial", "source_unsupported",
-        }:
-            row.append(
-                " · " + view.source_coverage_status.replace("_", " "),
-                style=TH["warn"],
-            )
         rows.append(_fit_line(row, width))
         show_inline_report = view.status == "succeeded" and not view.artifact_id and bool(view.detail)
         show_adverse_detail = view.status != "succeeded" and view.detail and detail_rows < 3
@@ -562,7 +515,7 @@ def _accepted_agent_finished_at(snapshot, view: AgentResultView) -> float | None
             and item.invocation_id == view.invocation_id
         )
         if (matches_artifact or matches_invocation) and item.phase in {
-            "report_ready", "completed", "steered", "failed", "timed_out", "cancelled",
+            "report_ready", "completed", "steered", "partial", "failed", "timed_out", "cancelled",
             "indeterminate",
         }:
             return item.finished_at
@@ -582,9 +535,6 @@ def _render_tool_result(e, width: int = 100, *, duration_s: float | None = None)
     indeterminate = status == "indeterminate"
     safety_stop = cancelled and str(getattr(e, "output", "") or "").startswith("Safety stop:")
     display_failure = status == "failed"
-    if e.name == "update_plan" and status == "succeeded":
-        args = e.args if isinstance(e.args, dict) else {}
-        return _render_plan(args.get("steps") or [], width)
     if safety_stop:
         mark = Text("! ", style=TH["warn"])
     elif indeterminate:
@@ -703,7 +653,6 @@ class _EscSentinel:
     def start(self) -> None:
         """No-op (never spawns a thread) unless this is a real POSIX tty on the MAIN thread — the SAME
         safety gate _arrow_select uses, so a non-tty/headless/eval run is byte-for-byte unaffected."""
-        import sys
         global _ACTIVE_ESC_SENTINEL
         if threading.current_thread() is not threading.main_thread():
             return
@@ -951,7 +900,6 @@ class _AgentMatrixRow:
     elapsed: str
     last_activity: str
     stable_index: int
-    source_coverage_status: str = "not_assessed"
     evidence_status: str = "not_assessed"
     evidence_account: tuple[tuple[str, int], ...] = ()
     attempt: int = 0
@@ -977,6 +925,7 @@ _AGENT_PHASE_VIEW = {
     "report_ready": ("✓", "ready", "ok"),
     "completed": ("✓", "completed", "warn"),
     "steered": ("↷", "steered", "dim"),
+    "partial": ("◐", "partial", "warn"),
     "failed": ("✗", "failed", "fail"),
     "timed_out": ("!", "timed out", "warn"),
     "cancelled": ("↷", "cancelled", "dim"),
@@ -1086,7 +1035,7 @@ def _agent_matrix_rows(snap, *, now: float | None = None) -> list[_AgentMatrixRo
                 if report_completion == "absent"
                 else "completed · report status unknown"
             )
-        elif phase in {"steered", "failed", "timed_out", "cancelled", "indeterminate"}:
+        elif phase in {"steered", "partial", "failed", "timed_out", "cancelled", "indeterminate"}:
             activity = terminal_reason or item.detail or phase.replace("_", " ")
             incompleteness = child_incompleteness_label(report_completion, partial)
             if incompleteness:
@@ -1117,7 +1066,6 @@ def _agent_matrix_rows(snap, *, now: float | None = None) -> list[_AgentMatrixRo
             elapsed=_duration(max(0.0, ended - (began if began is not None else ended))),
             last_activity=_duration(max(0.0, now - item.updated_at)),
             stable_index=len(rows),
-            source_coverage_status=getattr(item, "source_coverage_status", "not_assessed"),
             evidence_status=getattr(item, "evidence_status", "not_assessed"),
             evidence_account=getattr(item, "evidence_account", ()),
             attempt=attempt, max_attempts=max_attempts, retry_delay_s=retry_delay_s,
@@ -1156,7 +1104,10 @@ def _select_agent_matrix_rows(rows: list[_AgentMatrixRow], cap: int = _AGENT_MAT
     """Keep a bounded live surface while preserving the rows needing attention first."""
     if len(rows) <= cap:
         return rows, []
-    adverse = [row for row in rows if row.phase in {"failed", "timed_out", "cancelled", "indeterminate"}]
+    adverse = [
+        row for row in rows
+        if row.phase in {"partial", "failed", "timed_out", "cancelled", "indeterminate"}
+    ]
     steered = [row for row in rows if row.phase == "steered"]
     active = [row for row in rows if row.phase in _ACTIVE_AGENT_MATRIX_PHASES]
     completed = [row for row in rows if row.phase == "completed"]
@@ -1188,23 +1139,12 @@ def _agent_matrix_plain_lines(snap, width: int, *, now: float | None = None,
         ("reasoning", "reasoning"), ("writing", "writing"), ("running_tool", "using tool"),
         ("retry_wait", "retrying"), ("settling", "finalizing"), ("running", "working"),
         ("report_ready", "ready"), ("completed", "completed, no report"),
-        ("steered", "steered"),
+        ("partial", "partial"), ("steered", "steered"),
         ("failed", "failed"), ("timed_out", "timed out"),
         ("cancelled", "cancelled"), ("indeterminate", "unknown"),
     ):
         if counts[phase]:
             summary.append(f"{counts[phase]} {label}")
-    source_counts = Counter(
-        row.source_coverage_status for row in rows
-        if row.source_coverage_status in {"source_complete", "source_partial", "source_unsupported"}
-    )
-    for status, label in (
-        ("source_complete", "source complete"),
-        ("source_partial", "source partial"),
-        ("source_unsupported", "source unsupported"),
-    ):
-        if source_counts[status]:
-            summary.append(f"{source_counts[status]} {label}")
     # Active children have not produced their evidence account yet. Keep the header focused on settled facts;
     # their column still truthfully shows ``not assessed`` until an authoritative ToolResult arrives.
     evidence_counts = Counter(
@@ -1246,10 +1186,6 @@ def _agent_matrix_plain_lines(snap, width: int, *, now: float | None = None,
             glyph, state, style = _AGENT_PHASE_VIEW[row.phase]
             state_cell = f"{glyph} {state}"
             activity = row.activity
-            if row.source_coverage_status in {
-                "source_complete", "source_partial", "source_unsupported",
-            }:
-                activity += " · " + row.source_coverage_status.replace("_", " ")
             row_style = _evidence_style(row.evidence_status) if row.phase == "report_ready" else style
             lines.append((row_style, "  " + _pad_cells(row.display_id, id_w) + " "
                           + _pad_cells(row.identity, agent_w) + " " + _pad_cells(state_cell, state_w)
@@ -1270,10 +1206,6 @@ def _agent_matrix_plain_lines(snap, width: int, *, now: float | None = None,
             glyph, state, style = _AGENT_PHASE_VIEW[row.phase]
             state_cell = f"{glyph} {state}"
             activity = row.activity
-            if row.source_coverage_status in {
-                "source_complete", "source_partial", "source_unsupported",
-            }:
-                activity += " · " + row.source_coverage_status.replace("_", " ")
             activity += f" · {row.tool_count} tools" if row.tool_count else ""
             row_style = _evidence_style(row.evidence_status) if row.phase == "report_ready" else style
             lines.append((row_style, "  " + _pad_cells(row.display_id, id_w) + " "
@@ -1294,10 +1226,6 @@ def _agent_matrix_plain_lines(snap, width: int, *, now: float | None = None,
                 glyph, state, style = _AGENT_PHASE_VIEW[row.phase]
                 activity = row.activity
                 activity += " · e:" + _evidence_token(row.evidence_status, row.evidence_account)
-                if row.source_coverage_status in {
-                    "source_complete", "source_partial", "source_unsupported",
-                }:
-                    activity += " · " + row.source_coverage_status.replace("_", " ")
                 row_style = _evidence_style(row.evidence_status) if row.phase == "report_ready" else style
                 lines.append((row_style, "  " + _pad_cells(row.display_id, id_w) + " "
                               + _pad_cells(row.identity, agent_w) + " "
@@ -1324,7 +1252,7 @@ def _agent_matrix_plain_lines(snap, width: int, *, now: float | None = None,
                              ("running", "working"),
                              ("starting", "starting"), ("queued", "queued"),
                              ("report_ready", "ready"), ("completed", "completed, no report"),
-                             ("steered", "steered"),
+                             ("partial", "partial"), ("steered", "steered"),
                              ("failed", "failed"), ("timed_out", "timed out"),
                              ("cancelled", "cancelled"), ("indeterminate", "unknown")):
             if hidden_counts[phase]:
@@ -1521,6 +1449,17 @@ class _EventSinkCore:
                 self.progress.subagent_activity(update)
                 self._sync_status()
         except Exception:  # noqa: BLE001 — presentation must never break a child worker
+            pass
+
+    def host_notify(self, detail: str) -> None:
+        """Host-side operation announcement (verify commands during update_work) → live status line."""
+        try:
+            with self._lock:
+                if not self._accept_events():
+                    return
+                self.progress.host_activity(detail)
+                self._sync_status()
+        except Exception:  # noqa: BLE001 — presentation must never break the host worker
             pass
 
     def on_delta(self, kind: str, text: str) -> None:
@@ -2052,17 +1991,30 @@ def build_live_app(*, console: Console, stats: dict, root: str | None, run_one_t
         if text == "/learn" or text.startswith("/learn "):   # transcript → reusable skill, runs as a TURN (mirror the REPL)
             from .neocortex import build_learn_prompt
             text = build_learn_prompt(text[len("/learn"):].strip())
-        elif text in {"/config", "/model"} and handle_slash is not None:
-            # These commands own an interactive wizard/selector. A prompt_toolkit Application cannot safely
-            # nest another one, so ask run_live to retire this idle composer, run the modal at a clean terminal
-            # boundary, and resume with the same model/session and current workspace.
+        elif _plan_switch(text) and handle_slash is not None:
+            # `/plan on|off` (and the bare `plan off` form) is mode STATE, not a request: route it to
+            # the palette so it never mints an LLM turn whose text is the literal switch.
+            handle_slash(f"/plan {_plan_switch(text)}")
+            return
+        elif _plan_objective(text):
+            # A planning REQUEST (`/plan <objective>`) runs as a TURN — the host arms the sticky
+            # read-only surface in _run_one_turn. Bare /plan and the `/plan on|off` switches carry no
+            # objective, so they fall through to the palette below and never mint a turn.
+            pass
+        elif text.startswith("/") and handle_slash is not None:
+            # EVERY slash command runs at a clean terminal boundary: print-only ones (/help, /cost, …)
+            # write via the plain console, and modal ones (/config, /model) own an interactive selector.
+            # The patch_stdout proxy never coordinates with this Application (its app_session tracks a
+            # session the app never registers on), so any output printed while the composer is up lands
+            # INSIDE the box. Retire the idle composer; run_live runs the command outside the app and
+            # resumes with the same session/workspace.
             state["suspended_slash"] = text
             ev.app.exit()
             return
-        elif text.startswith("/") and handle_slash is not None:
-            handle_slash(text)
-            return
-        user_echo(console, text)           # echo ABOVE the box (instant), THEN run the turn
+        # The echo must NOT print here: this handler runs on the Application's event-loop thread, where the
+        # patch_stdout proxy cannot erase/repaint the composer (same constraint the slash path documents
+        # above) — every UI-thread print left one mangled frame corpse in scrollback per submitted turn.
+        # The worker thread below is where output provably renders clean; the echo becomes its first print.
         state["last"] = text
         with state_lock:
             state["sink_generation"] += 1
@@ -2113,6 +2065,7 @@ def build_live_app(*, console: Console, stats: dict, root: str | None, run_one_t
 
         def _work():
             try:
+                user_echo(console, text)   # echo ABOVE the box from the render-safe worker thread
                 run_one_turn(text, sink, sig)
             except Exception as exc:       # a turn crash must NOT kill the composer
                 console.print(_fit_line(Text.assemble(
@@ -2230,13 +2183,128 @@ def build_live_app(*, console: Console, stats: dict, root: str | None, run_one_t
     return app, state
 
 
+class _LivePrintRouter:
+    """File target for the live composer's Rich console.
+
+    While an Application is running, writes buffer per print (Rich writes then flushes once per
+    ``console.print``) and each flush is drained ON THE APP LOOP inside ``run_in_terminal`` — prompt_toolkit
+    erases the composer from its own render state, writes the batch to the real stream, and repaints below.
+    This replaces ``patch_stdout``, whose CPR-based cursor math mangled scrollback on macOS Terminal.app
+    (one frame corpse per print burst). With no app attached (banner before run, retirement prints after,
+    plain fallback), writes pass straight through to the real stream.
+    """
+
+    def __init__(self, real):
+        import threading as _threading
+        self._real = real
+        self._app = None
+        self._lock = _threading.Lock()
+        self._pending: list[str] = []
+        self._scheduled = False
+
+    # ── file protocol (called from ANY thread by Rich) ─────────────────────────────────────────
+    def write(self, text: str) -> int:
+        with self._lock:
+            app = self._app
+            if app is None or not getattr(app, "is_running", False):
+                self._real.write(text)
+                return len(text)
+            self._pending.append(text)
+            return len(text)
+
+    def flush(self) -> None:
+        with self._lock:
+            app = self._app
+            loop = getattr(app, "loop", None) if app is not None else None
+            if app is None or not getattr(app, "is_running", False) or loop is None:
+                try:
+                    self._real.flush()
+                except Exception:  # noqa: BLE001 — flush of a closed/odd stream must not kill a print
+                    pass
+                return
+            if not self._pending or self._scheduled:
+                return
+            self._scheduled = True
+        try:
+            loop.call_soon_threadsafe(self._drain_on_app_loop)
+        except RuntimeError:
+            # The loop closed between the check and the call: fall back to a direct write.
+            with self._lock:
+                self._scheduled = False
+            self._flush_direct()
+
+    def isatty(self) -> bool:
+        try:
+            return bool(self._real.isatty())
+        except Exception:  # noqa: BLE001
+            return False
+
+    @property
+    def encoding(self):  # Rich probes the encoding of its file
+        return getattr(self._real, "encoding", "utf-8")
+
+    # ── lifecycle (run_live only) ──────────────────────────────────────────────────────────────
+    def attach(self, app) -> None:
+        with self._lock:
+            self._app = app
+
+    def detach(self) -> None:
+        with self._lock:
+            self._app = None
+        self._flush_direct()
+
+    # ── internals ──────────────────────────────────────────────────────────────────────────────
+    def _flush_direct(self) -> None:
+        with self._lock:
+            chunks, self._pending = self._pending, []
+        if chunks:
+            try:
+                self._real.write("".join(chunks))
+                self._real.flush()
+            except Exception:  # noqa: BLE001 — losing a late print beats crashing retirement
+                pass
+
+    def _drain_on_app_loop(self) -> None:
+        """Runs ON the app's event loop: flush the batch inside run_in_terminal."""
+        import asyncio
+
+        from prompt_toolkit.application import run_in_terminal
+
+        def render():
+            with self._lock:
+                chunks, self._pending = self._pending, []
+            if chunks:
+                self._real.write("".join(chunks))
+                self._real.flush()
+
+        def _done(_task):
+            with self._lock:
+                self._scheduled = False
+                again = bool(self._pending) and self._app is not None
+            if again:
+                self.flush()
+
+        try:
+            task = asyncio.ensure_future(run_in_terminal(render))
+            task.add_done_callback(_done)
+        except Exception:  # noqa: BLE001 — app tearing down: never lose the bytes
+            with self._lock:
+                self._scheduled = False
+            self._flush_direct()
+
+
 def run_live(*, console: Console, stats: dict, banner_info: str, root: str | None,
              run_one_turn, handle_slash=None, handle_modal_slash=None, on_ready=None,
              worker_retire_timeout: float = 5.0) -> None:
     """The LIVE composer (AGENT_TUI=live): a bordered input box stays pinned at the bottom EVEN WHILE the
     agent streams — output prints above it in the NORMAL terminal buffer (native copy/paste preserved), the
-    Python analogue of Ink's <Static>+live-region. ctrl-c aborts a running turn; ctrl-c at idle / ctrl-d quits."""
-    from prompt_toolkit.patch_stdout import patch_stdout
+    Python analogue of Ink's <Static>+live-region. ctrl-c aborts a running turn; ctrl-c at idle / ctrl-d quits.
+
+    Printing above the box deliberately does NOT use ``patch_stdout``: its erase-before-print positioning
+    depends on cursor-position reports (CPR), and on CPR-slow terminals (macOS Terminal.app) every print
+    burst raced the probe and stamped a mangled frame corpse into scrollback. All console output is instead
+    routed through :class:`_LivePrintRouter` → ``run_in_terminal``, where the Application erases itself from
+    its own render bookkeeping — no cursor guessing on any terminal."""
 
     current_root = root
     show_banner = True
@@ -2256,21 +2324,18 @@ def run_live(*, console: Console, stats: dict, banner_info: str, root: str | Non
             if show_banner:
                 banner(console, banner_info)
                 show_banner = False
-            # ``patch_stdout`` asks prompt_toolkit to autodetect a console from ``sys.stdout``.  There is no
-            # live renderer to protect when stdout is captured/piped, and on Windows under Git Bash that
-            # autodetection raises NoConsoleScreenBufferError before an injected/headless Application can run.
-            # Interactive terminals retain the proxy; non-interactive embedding/tests execute directly.
-            with contextlib.ExitStack() as stdout_stack:
-                if sys.stdout.isatty():
-                    # Bind the proxy to the Application's already-selected I/O.  Falling back to the global
-                    # AppSession makes prompt_toolkit re-detect sys.stdout; MSYS/Git-Bash then asks for a Win32
-                    # console screen buffer even when the Application is already using a valid VT output.
-                    from prompt_toolkit.application.current import create_app_session
-                    stdout_stack.enter_context(create_app_session(
-                        input=getattr(app, "input", None), output=getattr(app, "output", None),
-                    ))
-                    stdout_stack.enter_context(patch_stdout(raw=True))
+            # Route every Rich print (turn output, echo, ask_user, crash notes) through the router while
+            # the Application runs: batches flush inside run_in_terminal, so the app retires its own frame
+            # before the bytes land and repaints after — correct on CPR-less and CPR-slow terminals alike.
+            router = _LivePrintRouter(console.file)
+            original_file = console.file
+            console.file = router
+            router.attach(app)
+            try:
                 app.run()
+            finally:
+                router.detach()
+                console.file = original_file
         finally:
             # Any exit path (EOF, renderer exception, startup/fallback failure) must retire the worker before the
             # caller can reuse or clean up its workspace. A daemon turn surviving into the inline fallback would
@@ -2637,6 +2702,10 @@ def _toolbar(stats: dict, width_fn=None):
             width = 100
         workspace = str(stats.get("workspace") or "—")
         model = str(stats.get("model") or "—")
+        # A sticky read-only mode must never be invisible: this chip is the standing reminder that
+        # the next turn cannot write, and it survives every width tier (it is prepended, not clipped
+        # away with the optional fields).
+        planning = bool(stats.get("planning"))
         tokens = f"{_compact_count(stats.get('tokens', 0))} tok"
         fresh = f"{_compact_count(stats.get('fresh', 0))} fresh"
         savings = _savings_label(stats)
@@ -2672,6 +2741,9 @@ def _toolbar(stats: dict, width_fn=None):
             ]
             if elapsed:
                 fields.append((dim, elapsed))
+
+        if planning:
+            fields.insert(1, ("fg:ansiyellow bold", "◦ planning"))
 
         segments = []
         for index, field in enumerate(fields):
@@ -2822,7 +2894,6 @@ def _arrow_select(options: list[str], default: int = 0) -> "int | None":
     first letter of each option is also a hotkey. Returns the chosen index, -1 if cancelled, or None
     if a selector can't SAFELY run (not a TTY, not the main thread, no termios, raw-mode error) so the
     caller falls back to typed input. POSIX only — Windows returns None. termios + ANSI on one line."""
-    import sys
     import threading
     # Raw mode is process-global terminal state — only ever drive it from the MAIN thread with nothing
     # else owning the terminal. A worker-thread turn or a live prompt_toolkit app would race and corrupt it.
@@ -2925,7 +2996,6 @@ def _menu_select(options: list[str], default: int = 0) -> "int | None":
     lesson). Same gates + return contract as _arrow_select: index | -1 cancelled | None when a
     selector can't safely run (caller falls back to typed input)."""
     import shutil
-    import sys
     import threading
     if threading.current_thread() is not threading.main_thread():
         return None

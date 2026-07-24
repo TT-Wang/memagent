@@ -992,6 +992,9 @@ def _run_cli_workspace_continuation(
         def subagent_notify(self, _text):
             pass
 
+        def host_notify(self, _detail):
+            pass
+
     class _Input:
         def __init__(self, *_args, **_kwargs):
             pass

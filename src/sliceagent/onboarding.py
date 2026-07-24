@@ -433,7 +433,7 @@ def print_usage() -> int:
   sliceagent {_version()} — a memory-native coding agent (the slice/cache-not-log kernel)
 
   usage:
-    sliceagent                 start the interactive agent (inline UI; AGENT_TUI=live|off to switch)
+    sliceagent                 start the interactive agent (rich live TUI; AGENT_TUI=off for plain)
     sliceagent init            interactive first-run setup (provider, key, model) → ~/.sliceagent/config.toml
     sliceagent config          show resolved settings, providers, and config path
     sliceagent config --list   list every environment variable, default, and current value

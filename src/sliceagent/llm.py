@@ -257,8 +257,56 @@ class _ProviderCapacityTimeout(Exception):
     """No physical provider slot became available before the local admission deadline."""
 
 
+def _reap_grace_margin() -> tuple[float, float]:
+    """Validated (close grace, teardown margin) for reap horizons. Garbage, negative, or non-finite
+    operator values fall back to defaults — a NaN must not silently disable the reaper, and a negative
+    value must not turn admission into reap-all."""
+    import math
+    try:
+        grace = float(os.environ.get("LLM_STREAM_CLOSE_GRACE_SEC") or 2.0)
+    except (TypeError, ValueError):
+        grace = 2.0
+    if not math.isfinite(grace) or grace < 0:
+        grace = 2.0
+    try:
+        margin = float(os.environ.get("LLM_GATE_LEASE_MARGIN_SEC") or 60.0)
+    except (TypeError, ValueError):
+        margin = 60.0
+    if not math.isfinite(margin) or margin < 0:
+        margin = 60.0
+    return grace, margin
+
+
+def _gate_lease_max_age() -> float:
+    """Oldest a physical call lease may legitimately live WITHOUT a call-specific horizon.
+
+    Computed from the hard timeout (operator override ``LLM_HARD_TIMEOUT_SEC``, else the catalog's
+    largest completion budget at the 32 tok/s floor), plus stream close grace and a teardown margin
+    (``LLM_GATE_LEASE_MARGIN_SEC``, default 60s). Beyond this horizon the watchdog has provably fired
+    and the socket is dead, so the gate's expiry reaper cannot overlap a live request — it only retires
+    calls whose close was never confirmed (the ``_UnconfirmedStreamClose`` capacity brick).
+
+    This is only the FALLBACK: admission that knows its call's absolute deadline stores an exact
+    per-lease horizon instead (``acquire_lease(call_deadline=...)``), so an operator raising
+    ``AGENT_COMPLETION_TOKENS`` or ``LLM_TIMEOUT_SEC`` beyond this constant's assumptions can never
+    cause a live long call to be reaped.
+    """
+    override = _positive_deadline(os.environ.get("LLM_HARD_TIMEOUT_SEC"))
+    hard = float(override if override is not None else _default_hard_timeout(60, "", "", 32768))
+    grace, margin = _reap_grace_margin()
+    return hard + grace + margin
+
+
 class _UnconfirmedStreamClose(Exception):
     """A provider stream's explicit close path raised; its physical socket may still be live."""
+
+
+class _LeaseAlreadyActive(RuntimeError):
+    """A caller re-admitted a lease that already holds capacity — admission misuse, not ownership.
+
+    Raised INSTEAD of a bare RuntimeError so the admission cleanup path can distinguish it: the
+    detected lease belongs to a LIVE physical call and must never be retired by the guard that
+    merely observed the misuse (releasing it would breach the concurrency ceiling)."""
 
 
 class _PhysicalCallLease:
@@ -280,12 +328,43 @@ class _PhysicalCallGate:
     Logical worker counts are insufficient here: Python cannot kill an abandoned blocking SDK thread, and an
     async transport can ignore task cancellation.  The worker/stream owns this lease until its physical
     ``finally`` runs, so a later logical attempt cannot exceed the configured provider concurrency ceiling.
+
+    REAPER: admission timestamps bound that conservatism.  A lease whose close was never confirmed
+    (``_UnconfirmedStreamClose``) would otherwise brick one capacity slot for the process lifetime —
+    the observed long-session fan-out starvation.  Any lease older than ``_gate_lease_max_age()`` is
+    reclaimed lazily at admission: by that horizon the watchdog has provably fired and the socket is
+    dead, so reclamation cannot overlap a live request.
     """
 
     def __init__(self, capacity: int) -> None:
         self.capacity = max(1, int(capacity))
         self._condition = threading.Condition()
-        self._leases: set[_PhysicalCallLease] = set()
+        # lease → (admission monotonic, per-call horizon | None). None = fall back to the module-level
+        # default at reap time (keeps the test seam: _gate_lease_max_age stays monkeypatchable).
+        self._leases: dict[_PhysicalCallLease, tuple[float, float | None]] = {}
+        self._reaped_total = 0
+
+    def _reap_expired(self, now: float) -> None:
+        default_horizon = None
+        expired = []
+        for lease, (admitted, horizon) in self._leases.items():
+            if horizon is None:
+                if default_horizon is None:
+                    default_horizon = _gate_lease_max_age()
+                horizon = default_horizon
+            if now - admitted > horizon:
+                expired.append(lease)
+        for lease in expired:
+            self._leases.pop(lease, None)
+        if expired:
+            self._reaped_total += len(expired)
+            self._condition.notify_all()
+
+    @property
+    def reaped(self) -> int:
+        """Diagnostic: leases reclaimed by the expiry reaper (each was a potential capacity brick)."""
+        with self._condition:
+            return self._reaped_total
 
     @staticmethod
     def _cancelled(should_cancel) -> bool:
@@ -296,9 +375,11 @@ class _PhysicalCallGate:
         except Exception:  # noqa: BLE001 - cancellation observation is fail-open
             return False
 
-    def acquire(self, *, timeout: float | None, should_cancel=None) -> _PhysicalCallLease:
+    def acquire(self, *, timeout: float | None, should_cancel=None,
+                call_deadline: float | None = None) -> _PhysicalCallLease:
         return self.acquire_lease(
             self.new_lease(), timeout=timeout, should_cancel=should_cancel,
+            call_deadline=call_deadline,
         )
 
     def new_lease(self) -> _PhysicalCallLease:
@@ -307,12 +388,19 @@ class _PhysicalCallGate:
 
     def acquire_lease(
         self, lease: _PhysicalCallLease, *, timeout: float | None, should_cancel=None, on_wait=None,
+        call_deadline: float | None = None,
     ) -> _PhysicalCallLease:
         """Admit a lease whose identity is already stored by the caller.
 
         Production paths use this form so an asynchronous exception after this method returns but before the
         next caller bytecode cannot strand the only reference inside the gate's active set.
+
+        ``call_deadline`` (absolute monotonic) is the call's own hard-watchdog deadline; when given, the
+        lease's reap horizon is EXACTLY that call's remaining life plus close grace and teardown margin —
+        so a legitimately long call (large completion budget, raised transport timeout) can never be
+        reaped while live, regardless of what the module-level default assumes.
         """
+        import math
         import time
 
         if not isinstance(lease, _PhysicalCallLease) or lease._gate is not self:
@@ -324,12 +412,18 @@ class _PhysicalCallGate:
                 report_wait = False
                 wait_state = None
                 with self._condition:
+                    self._reap_expired(time.monotonic())   # unbrick stale slots before the capacity check
                     if lease in self._leases:
-                        raise RuntimeError("provider lease is already active")
+                        raise _LeaseAlreadyActive("provider lease is already active")
                     if len(self._leases) < self.capacity:
                         if self._cancelled(should_cancel):
                             raise RetryCancelledError("model call cancelled before provider capacity admission")
-                        self._leases.add(lease)
+                        now_admit = time.monotonic()
+                        horizon = None
+                        if call_deadline is not None and math.isfinite(call_deadline):
+                            grace, margin = _reap_grace_margin()
+                            horizon = max(0.0, call_deadline - now_admit) + grace + margin
+                        self._leases[lease] = (now_admit, horizon)
                         return lease
                     if self._cancelled(should_cancel):
                         raise RetryCancelledError("model call cancelled while waiting for provider capacity")
@@ -351,6 +445,10 @@ class _PhysicalCallGate:
                             on_wait(*wait_state)
                     except Exception:  # noqa: BLE001 - admission observation is fail-open
                         pass
+        except _LeaseAlreadyActive:
+            # The detected lease is a LIVE call's capacity slot; the guard that observed the misuse must
+            # not retire it — that would breach the concurrency ceiling the gate exists to enforce.
+            raise
         except BaseException:  # noqa: BLE001 - includes async interruption during the lease handoff
             # Identity-based retirement is safe whether interruption landed just before or just after add().
             lease.release()
@@ -358,9 +456,8 @@ class _PhysicalCallGate:
 
     def _release(self, lease: _PhysicalCallLease) -> None:
         with self._condition:
-            if lease not in self._leases:
+            if self._leases.pop(lease, None) is None:
                 return
-            self._leases.remove(lease)
             self._condition.notify()
 
     @property
@@ -820,6 +917,7 @@ class _AsyncTransportHub:
                         timeout=max(0.0, request_deadline - time.monotonic()),
                         should_cancel=should_cancel,
                         on_wait=report_capacity_wait,
+                        call_deadline=request_deadline,
                     )
                 except _ProviderCapacityTimeout as error:
                     raise ProviderCapacityError(
@@ -1118,8 +1216,19 @@ class OpenAILLM:
         # per-REQUEST completion cap — its OWN env var, decoupled from AGENT_MAX_TOKENS (which is the
         # per-turn BudgetHook budget; sharing the key made one value drive two quantities orders of
         # magnitude apart). Guarded so a malformed value degrades to the default instead of crashing init.
+        # The DEFAULT is model-aware (model_catalog.completion_tokens_default): reasoning-output models
+        # spend chain-of-thought from this same budget, so their 8192-era cap parked long design steps
+        # mid-response; AGENT_COMPLETION_TOKENS always overrides, and a live /model switch recomputes the
+        # default unless the env pinned it.
+        self._completion_tokens_pinned = False
         try:
-            self.max_tokens = int(os.environ.get("AGENT_COMPLETION_TOKENS") or 8192)
+            raw_cap = os.environ.get("AGENT_COMPLETION_TOKENS")
+            if raw_cap is not None and str(raw_cap).strip() != "":
+                self.max_tokens = int(raw_cap)
+                self._completion_tokens_pinned = True
+            else:
+                from .model_catalog import capability as _capability
+                self.max_tokens = _capability(self.model, self._base_url).completion_tokens_default
         except (TypeError, ValueError):
             self.max_tokens = 8192
         # The absolute stream ceiling and completion cap must be coherent. Derive it only after parsing the
@@ -1150,6 +1259,7 @@ class OpenAILLM:
         object every turn, so the change applies from the next turn on. base_url semantics: None = keep
         the current endpoint; "" = the SDK's default endpoint (OpenAI). Resets the
         reasoning_effort+tools degrade memory (a different model/provider may support the pairing)."""
+        prev_model, prev_base = self.model, self._base_url
         if base_url is not None or api_key:
             import httpx
             from openai import OpenAI
@@ -1185,6 +1295,17 @@ class OpenAILLM:
             self._drop_reasoning_effort = False
         if reasoning:
             self.reasoning = reasoning.strip().lower()
+        if (model or base_url is not None) and not getattr(self, "_completion_tokens_pinned", False):
+            # A live /model hop can cross the chat↔reasoning-output boundary; keep the completion cap
+            # model-aware. Recompute ONLY when the current value is the outgoing model's untouched
+            # default — an AGENT_COMPLETION_TOKENS pin and a caller's manual assignment (shallow child
+            # views tune their own cap) must both survive the hop.
+            try:
+                from .model_catalog import capability as _capability
+                if self.max_tokens == _capability(prev_model, prev_base).completion_tokens_default:
+                    self.max_tokens = _capability(self.model, self._base_url).completion_tokens_default
+            except Exception:  # noqa: BLE001 — a catalog hiccup must never break a provider switch
+                pass
         # Recompute after BOTH endpoint and model updates: model-only switches are common, and a shallow
         # child view may switch its own model without mutating the parent's watchdog policy.
         self._refresh_hard_timeout()
@@ -1336,6 +1457,7 @@ class OpenAILLM:
                 try:
                     gate.acquire_lease(
                         lease, timeout=max(0.0, deadline - time.monotonic()),
+                        call_deadline=deadline,
                     )
                 except _ProviderCapacityTimeout as error:
                     raise ProviderCapacityError(
@@ -1398,6 +1520,7 @@ class OpenAILLM:
             try:
                 gate.acquire_lease(
                     lease, timeout=max(0.0, deadline - time.monotonic()),
+                    call_deadline=deadline,
                 )
             except _ProviderCapacityTimeout as error:
                 raise ProviderCapacityError(

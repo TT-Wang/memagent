@@ -79,17 +79,17 @@ You get an inline prompt with a pinned input box. Type a task — e.g. *"add a `
 test for it"* — and watch it work. The conversation stays in your normal terminal scrollback, so
 **select + copy/paste and scroll work natively** on any terminal (including macOS Terminal.app).
 
-The demo defaults to the narrow core: the parent can edit and run regular commands, while delegation creates
-a fresh, one-shot, read-only explorer. Advanced surfaces are explicit opt-ins:
+The demo defaults to the narrow core: the parent can edit and run regular commands, and delegation via
+`spawn_agent` creates a fresh one-shot child — built-in kinds are the read-only `explorer`, the writable
+`general` worker, `reviewer`, and `verification`, plus any `agents/*.md` definitions of your
+own (always loaded, no opt-in). One optional surface stays gated:
 
 ```bash
-export AGENT_ADVANCED_AGENTS=1   # writable and named specialists; nesting uses AGENT_SUBAGENT_DEPTH
 export AGENT_ADVANCED_TOOLS=1    # persistent processes and interactive terminal/PTY tools
 ```
 
-The flags are independent; leave either unset to keep that surface out of the model's tool set. Delegation
-depth defaults to `1`; raise `AGENT_SUBAGENT_DEPTH` only if you intentionally want advanced agents to spawn
-children. Local checkpoints and immutable turn/subagent artifacts are always on and can be read through
+Leave it unset to keep that surface out of the model's tool set. Delegation depth defaults to `1`; raise
+`AGENT_SUBAGENT_DEPTH` only if you intentionally want agents to spawn children of their own. Local checkpoints and immutable turn/subagent artifacts are always on and can be read through
 `artifacts/`. Semantic cross-session lessons are an optional derived layer; recovery does not depend on them.
 An uncertain timeout pauses only the current turn so later calls in that batch cannot overtake an operation
 whose outcome is unknown. The receipt remains advisory evidence on later turns: the agent should re-observe
@@ -101,8 +101,8 @@ Useful keys & commands:
 - `/help` lists slash commands · `/plan` shows the agent's plan · `/threads` lists topics · `/exit` quits.
 - Start an unrelated task explicitly with `New task: ...`; the current task is parked for `/resume`.
 
-UI modes (via `AGENT_TUI`): `rich` (default, inline) · `live` (always-pinned box, streams above it) ·
-`off` (plain stdout, good for pipes/CI).
+UI modes (via `AGENT_TUI`): `live` (default — the always-pinned rich TUI, streams above the box) ·
+`off` (plain stdout, good for pipes/CI). That's the whole list — there is no inline-REPL tier.
 
 Sandbox note: `AGENT_SANDBOX=docker` is supported on POSIX and inside WSL2. On native Windows, use the
 default `local` backend or launch SliceAgent inside WSL2; native-Windows Docker is rejected at startup so a

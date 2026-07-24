@@ -48,34 +48,6 @@ def _status(value: object) -> str:
     return text if text in {"succeeded", "steered", "failed", "cancelled", "indeterminate"} else ""
 
 
-_SOURCE_COVERAGE_STATUSES = (
-    "source_complete", "source_partial", "source_unsupported", "not_assessed",
-)
-_LEGACY_SOURCE_COVERAGE = {
-    "grounded": "source_complete", "partial": "source_partial", "unsupported": "source_unsupported",
-}
-_MAX_RECEIPT_REF_COUNT = 10_000
-
-
-def _source_coverage_status(value: object) -> str:
-    status = str(value or "").strip().casefold()
-    status = _LEGACY_SOURCE_COVERAGE.get(status, status)
-    return status if status in _SOURCE_COVERAGE_STATUSES else ""
-
-
-def _bounded_sequence_count(value: object) -> int:
-    if not isinstance(value, (list, tuple)):
-        return 0
-    return min(len(value), _MAX_RECEIPT_REF_COUNT)
-
-
-def _bounded_count(value: object) -> int:
-    try:
-        return min(max(0, int(value or 0)), _MAX_RECEIPT_REF_COUNT)
-    except (TypeError, ValueError, OverflowError):
-        return 0
-
-
 @dataclass(frozen=True)
 class OperationReceipt:
     """Lifecycle of one provider invocation, in provider-request order."""
@@ -100,12 +72,6 @@ class OperationReceipt:
     child_stop_reason: str = ""
     child_stop_cause: str = ""
     child_recovered_from: tuple[str, ...] = ()
-    child_source_coverage_status: str = ""
-    child_required_ref_count: int = 0
-    child_consumed_ref_count: int = 0
-    child_cited_ref_count: int = 0
-    child_covered_ref_count: int = 0
-    child_source_gap_count: int = 0
 
     @property
     def disposition(self) -> str:
@@ -142,12 +108,6 @@ class OperationReceipt:
             "child_stop_reason": self.child_stop_reason,
             "child_stop_cause": self.child_stop_cause,
             "child_recovered_from": list(self.child_recovered_from),
-            "child_source_coverage_status": self.child_source_coverage_status,
-            "child_required_ref_count": self.child_required_ref_count,
-            "child_consumed_ref_count": self.child_consumed_ref_count,
-            "child_cited_ref_count": self.child_cited_ref_count,
-            "child_covered_ref_count": self.child_covered_ref_count,
-            "child_source_gap_count": self.child_source_gap_count,
         }
 
 
@@ -272,9 +232,6 @@ def derive_turn_receipt(
                 "work_item_id": "",
                 "child_status": "", "child_stop_reason": "", "child_stop_cause": "",
                 "child_recovered_from": [],
-                "child_source_coverage_status": "", "child_required_ref_count": 0,
-                "child_consumed_ref_count": 0, "child_cited_ref_count": 0,
-                "child_covered_ref_count": 0, "child_source_gap_count": 0,
                 "canonical_requested": False, "canonical_started": False, "canonical_settled": False,
             }
             order.append(identity)
@@ -305,22 +262,6 @@ def derive_turn_receipt(
             value = _one_line(effect_payload.get(payload_key), 80)
             if value:
                 target[target_key] = value
-        source_status = _source_coverage_status(
-            effect_payload.get("source_coverage_status") or effect_payload.get("epistemic_status")
-        )
-        if source_status:
-            target["child_source_coverage_status"] = source_status
-        if "required_ref_count" in effect_payload:
-            target["child_required_ref_count"] = _bounded_count(effect_payload.get("required_ref_count"))
-        for target_key, current_key, legacy_key in (
-            ("child_consumed_ref_count", "consumed_refs", ""),
-            ("child_cited_ref_count", "cited_refs", ""),
-            ("child_covered_ref_count", "covered_refs", "grounding_refs"),
-            ("child_source_gap_count", "source_gaps", "grounding_gaps"),
-        ):
-            if current_key in effect_payload or (legacy_key and legacy_key in effect_payload):
-                raw = effect_payload.get(current_key) or effect_payload.get(legacy_key) or ()
-                target[target_key] = _bounded_sequence_count(raw)
         raw_recovered = effect_payload.get("recovered_from") or ()
         if isinstance(raw_recovered, (list, tuple)):
             target["child_recovered_from"] = list(dict.fromkeys(
@@ -474,12 +415,6 @@ def derive_turn_receipt(
         child_stop_reason=target["child_stop_reason"],
         child_stop_cause=target["child_stop_cause"],
         child_recovered_from=tuple(target["child_recovered_from"]),
-        child_source_coverage_status=target["child_source_coverage_status"],
-        child_required_ref_count=target["child_required_ref_count"],
-        child_consumed_ref_count=target["child_consumed_ref_count"],
-        child_cited_ref_count=target["child_cited_ref_count"],
-        child_covered_ref_count=target["child_covered_ref_count"],
-        child_source_gap_count=target["child_source_gap_count"],
     ) for identity in order for target in (rows[identity],))
 
     warnings = []
@@ -517,7 +452,7 @@ _COMPACT_COUNT_KEYS = (
     "succeeded", "steered", "steered_before_execution", "failed", "cancelled",
     "lifecycle_not_run", "indeterminate", "not_started",
 )
-_SPAWN_TOOLS = frozenset({"spawn_agent", "spawn_explore", "spawn_subagent"})
+_SPAWN_TOOLS = frozenset({"spawn_agent"})
 
 
 def _count(value: object) -> int:
@@ -557,32 +492,6 @@ def _operation_count_projection(operations: Iterable[Mapping[str, Any]]) -> dict
     return counts
 
 
-def _source_coverage_projection(operations: Iterable[Mapping[str, Any]]) -> dict[str, int]:
-    """Aggregate only bounded source-coverage arithmetic; report text and gap prose stay in the artifact."""
-    projection = {status: 0 for status in _SOURCE_COVERAGE_STATUSES}
-    projection.update({
-        "required_refs": 0, "consumed_refs": 0, "cited_refs": 0,
-        "covered_refs": 0, "source_gaps": 0,
-    })
-    for operation in operations:
-        status = _source_coverage_status(operation.get("child_source_coverage_status"))
-        if not status:
-            continue
-        projection[status] += 1
-        for target, source in (
-            ("required_refs", "child_required_ref_count"),
-            ("consumed_refs", "child_consumed_ref_count"),
-            ("cited_refs", "child_cited_ref_count"),
-            ("covered_refs", "child_covered_ref_count"),
-            ("source_gaps", "child_source_gap_count"),
-        ):
-            projection[target] = min(
-                _MAX_RECEIPT_REF_COUNT,
-                projection[target] + _bounded_count(operation.get(source)),
-            )
-    return projection
-
-
 def compact_receipt_projection(receipt: Mapping[str, Any] | None) -> dict[str, Any] | None:
     """Return a constant-size, presentation-safe projection of one sealed receipt.
 
@@ -617,10 +526,6 @@ def compact_receipt_projection(receipt: Mapping[str, Any] | None) -> dict[str, A
         if ref
     }
     agents["child_artifacts"] = len(child_refs)
-    agents["source_coverage"] = _source_coverage_projection(
-        operation for operation in operations
-        if str(operation.get("name") or "") in _SPAWN_TOOLS
-    )
     warnings = receipt.get("warnings")
     warning_count = len(warnings) if isinstance(warnings, (list, tuple)) else 0
     return {
@@ -702,26 +607,7 @@ def receipt_summary_parts(receipt: Mapping[str, Any] | None) -> tuple[str, ...]:
     operation_parts = _lifecycle_parts(
         _subtract_counts(counts, agents), agent=False, other=bool(agent_parts),
     )
-    source_parts: tuple[str, ...] = ()
-    source = agents.get("source_coverage")
-    if isinstance(source, Mapping):
-        complete = _count(source.get("source_complete"))
-        partial = _count(source.get("source_partial"))
-        unsupported = _count(source.get("source_unsupported"))
-        if complete or partial or unsupported:
-            labels = []
-            for count, label in (
-                (complete, "source complete"),
-                (partial, "source partial"),
-                (unsupported, "source unsupported"),
-            ):
-                if count:
-                    labels.append(f"{count} {label}")
-            covered = _count(source.get("covered_refs"))
-            required = _count(source.get("required_refs"))
-            ref_summary = f" · {covered}/{required} granted reports covered" if required else ""
-            source_parts = ("agents · " + " · ".join(labels) + ref_summary,)
-    return (*agent_parts, *source_parts, *operation_parts)
+    return (*agent_parts, *operation_parts)
 
 
 def receipt_has_adverse_lifecycle(receipt: Mapping[str, Any] | None) -> bool:

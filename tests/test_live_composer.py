@@ -766,23 +766,22 @@ def live_renderer_failure_never_waits_forever_or_starts_a_second_owner():
 
 
 @check
-def live_app_cwd_switch_stays_open_for_the_next_turn():
-    turn_calls, slash_calls = [], []
+def live_app_cwd_switch_suspends_and_preserves_the_session():
+    slash_calls, turn_calls = [], []
 
     def switch_slash(text):
         slash_calls.append(text)
         return "switched"                 # ordinary handled state, deliberately NOT the old "restart"
 
-    state, out = _drive_live(
-        "/cwd /tmp/next\rinspect target\r\x04",
+    state, _ = _drive_live(
+        "/cwd /tmp/next\r\x04",
         lambda text, *_: turn_calls.append(text),
         handle_slash=switch_slash,
     )
-    assert slash_calls == ["/cwd /tmp/next"]
-    assert turn_calls == ["inspect target"], \
-        "the same live Application must accept another turn after /cwd"
-    assert state["last"] == "inspect target" and state["running"] is False
-    assert "turn error" not in out.lower()
+    assert state["suspended_slash"] == "/cwd /tmp/next"
+    assert not slash_calls and not turn_calls, \
+        "the workspace switch runs at the clean boundary after retire; run_live resumes the session " \
+        "(covered by run_live_executes_modal_then_resumes_with_the_current_workspace)"
 
 
 @check
@@ -850,11 +849,12 @@ def live_app_ctrl_d_quits_without_a_turn():
 
 
 @check
-def live_app_slash_is_handled_not_run_as_a_turn():
+def live_app_slash_suspends_to_a_clean_boundary_not_a_turn():
     seen, turns = [], []
     state, _ = _drive_live("/threads\r\x04", lambda *a: turns.append(a), handle_slash=lambda s: seen.append(s))
-    assert seen == ["/threads"], seen
-    assert not turns, "a slash command must NOT be dispatched as a turn"
+    assert state["suspended_slash"] == "/threads"
+    assert not seen and not turns, \
+        "slash output must print at a clean terminal boundary (after retire), never inside the composer"
 
 
 @check
@@ -925,9 +925,6 @@ def shared_tool_renderer_uses_the_same_visual_grammar():
         c.print(_render_tool_result(e))
         return c.file.getvalue()
 
-    assert "│ plan 1/1 · complete" in render(
-        ToolResult("update_plan", {"steps": [{"step": "a", "status": "done"}]}, "", False)
-    )
     run_ok = render(ToolResult("run_command", {"command": "pytest"}, "3 passed", False))
     assert "│ run pytest" in run_ok and "3 passed" in run_ok and "✓" not in run_ok, run_ok
     run_bad = render(ToolResult("run_command", {"command": "x"}, "boom", True))
@@ -1030,6 +1027,40 @@ def queued_agents_project_before_physical_start_on_both_surfaces():
     assert cancelled.active_tools == () and cancelled.counts == {}, cancelled
     assert cancelled.subagents[0].phase == "cancelled"
     assert cancelled.subagents[0].started_at is None
+
+
+@check
+def submit_echo_prints_only_from_the_render_safe_worker_thread():
+    """Regression pin for the scrollback frame-corpse bug: a print issued from the Application's event-loop
+    thread (the accept key-binding) cannot be coordinated by the patch_stdout proxy, so every submit left a
+    mangled composer frame in scrollback. The user echo must therefore be issued ONLY inside the turn worker
+    (_work), never in the accept handler itself."""
+    import inspect
+    from sliceagent import tui
+    source = inspect.getsource(tui.build_live_app)
+    before_worker, _, worker_and_after = source.partition("def _work")
+    assert "user_echo(" not in before_worker, (
+        "user_echo is called on the Application event-loop thread — this reintroduces the "
+        "one-frame-corpse-per-submit scrollback corruption"
+    )
+    assert "user_echo(" in worker_and_after, "the worker no longer echoes the user's message at all"
+
+
+@check
+def live_printing_never_uses_patch_stdout():
+    """Regression pin for the Terminal.app scrollback-corpse bug: patch_stdout positions its erase via
+    cursor-position reports (CPR), and on CPR-slow/absent terminals every print burst stamped a mangled
+    composer frame into scrollback. Live-mode printing must route through _LivePrintRouter/run_in_terminal,
+    where the Application retires its own frame from internal render state instead of cursor guessing."""
+    import inspect
+    from sliceagent import tui
+    run_live_src = inspect.getsource(tui.run_live)
+    assert "patch_stdout" not in run_live_src.replace("does NOT use ``patch_stdout``", ""), (
+        "run_live reintroduced patch_stdout — the CPR-dependent print path that corrupts Apple Terminal"
+    )
+    assert "_LivePrintRouter" in run_live_src, "run_live no longer routes prints through _LivePrintRouter"
+    router_src = inspect.getsource(tui._LivePrintRouter)
+    assert "run_in_terminal" in router_src, "_LivePrintRouter must flush inside run_in_terminal"
 
 
 def main():

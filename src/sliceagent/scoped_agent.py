@@ -1,0 +1,274 @@
+"""SCOPED AGENT — a delegation as a *scoped turn*, not a nested agent.
+
+Thesis (docs/SUBAGENT-SCOPED-TURN.md): a subagent is not a new kind of object — it is the same turn
+morphism over the sealed archive, with a restricted domain. Where the nested-subagent stack builds a
+child host, a separate child-seed path, an observation sink, a seal contract, private state, roster,
+depth/grants — this reproduces a delegation with three ingredients that already exist:
+
+  1. a fresh Slice seeded with the sub-task AS ACTIVE WORK (so the dependency-first compiler scopes the
+     context — furniture like the repo map is shed automatically: the R5 baggage gate keys on active_work);
+  2. a ScopedSurface — the plan-mode read-only pattern, gating EVERY dispatch protocol (run +
+     preflight_run/run_preflighted; the plan-mode review proved that filtering only run() is bypassed);
+  3. run_turn — the same loop the parent uses. Its report is the last assistant text.
+
+Isolation is free (the scoped turn's accumulated context is discarded; only the report survives).
+model_id is threaded so the child shares the parent's cache prefix (the R6 fix, for free — one seed path).
+Depth 1 is free: the spawn tool is simply absent from the child's allowed surface.
+"""
+from __future__ import annotations
+
+import copy
+import time
+from dataclasses import dataclass, field
+
+import posixpath
+
+from .agents import READ_ONLY_TOOLS, SUBAGENT_EXCLUDED_TOOLS
+from .context import ResourceKind, ResourceRef, reserved_resource_ref
+from .events import AssistantText, StepEnd, ToolResult
+from .execution import ToolStatus
+from .hooks import Hooks
+from .loop import run_turn
+from .pfc import Slice, record_user
+from .registry import ToolText
+from .safety import redact_text
+from .seed import make_build_slice
+
+# Depth 1 by construction: no child surface ever contains a spawn tool.
+SPAWN_TOOLS = frozenset({"spawn_agent", "spawn_explore", "spawn_subagent"})
+
+# Tools no child may ever call, regardless of kind: delegation (depth 1), the end-user channel
+# (ambiguity is the parent's to resolve), the parent's Active Work, workspace rerooting, and the
+# parent's private history index. Hallucinated calls are harmless request-shape corrections (↷).
+CHILD_STEERED_TOOLS = SPAWN_TOOLS | SUBAGENT_EXCLUDED_TOOLS | {"search_history"}
+
+# Parent-private resource kinds: a child's report is built from the WORKSPACE, never from the
+# parent's archives (its history, other children's seals, artifact provenance).
+_CHILD_PRIVATE_RESOURCE_KINDS = frozenset({
+    ResourceKind.ARTIFACT, ResourceKind.HISTORY, ResourceKind.SUBAGENT, ResourceKind.ROSTER,
+    ResourceKind.INTERNAL_CONTEXT,
+})
+_READ_TOOLS = frozenset({"read_file", "list_files", "grep", "glob"})
+
+
+def _norm_vpath(path) -> str:
+    """CANONICAL virtual-namespace path ('./subagents\\sub-1.md/' -> 'subagents/sub-1.md'). posixpath.normpath
+    collapses '..' and '.' SEGMENTS — load-bearing for every prefix-based guard downstream: without it,
+    a '../'-spelled path passes a prefix check and the mounted FS then normalizes it into another
+    namespace (guard and FS must normalize identically, or the gap between them is a traversal)."""
+    p = (path or "").strip().replace("\\", "/") if isinstance(path, str) else ""
+    if not p:
+        return ""
+    p = posixpath.normpath(p)
+    return "" if p == "." else p.rstrip("/")
+
+
+def _classified_read_target(args, resource_ref=None, *, canonicalize=None):
+    """Return the host-routed resource, its canonical handle, and private-host-dir status.
+
+    Namespace spelling alone is not authoritative: ``/workspace/history/turn-1.md`` can be the same
+    virtual handle as ``history/turn-1.md``, while a real ``history/`` or ``artifacts/`` project path
+    shadows that mount and must remain readable. Prefer the host's canonical ``resource_ref`` seam;
+    the lexical fallback exists only for minimal legacy/test hosts."""
+    path = args.get("path") if isinstance(args, dict) else ""
+    ref = None
+    if callable(resource_ref):
+        try:
+            candidate = resource_ref(str(path or ""))
+            if isinstance(candidate, ResourceRef):
+                ref = candidate
+        except Exception:  # noqa: BLE001 — a classifier failure must fail closed via the lexical fallback
+            ref = None
+    if ref is None:
+        ref = reserved_resource_ref(_norm_vpath(path))
+    canonical_source = ref.handle if ref.virtual else path
+    if not ref.virtual and callable(canonicalize):
+        try:
+            canonical_source = canonicalize(str(path or ""))
+        except Exception:  # noqa: BLE001 — lexical fallback still protects the ordinary relative spelling
+            pass
+    canonical = _norm_vpath(canonical_source)
+    # `.sliceagent/` is a physical host-private store, not a virtual archive kind. Keep the existing
+    # default-deny for both its relative spelling and the absolute spelling canonicalized by the host.
+    private = canonical == ".sliceagent" or canonical.startswith(".sliceagent/")
+    return ref, canonical, private
+
+
+def allowed_for(spec, inner) -> tuple[str, ...]:
+    """A child's tool allowlist: the kind's own list, or (tools=None → 'general') the inner host's
+    full surface. Child-barred tools are excluded either way — depth 1 and parent-privacy by
+    construction, not by schema courtesy."""
+    if spec.tools is not None:
+        names = spec.tools
+    else:
+        names = tuple(s.get("function", {}).get("name", "") for s in inner.schemas())
+    return tuple(n for n in names if n and n not in CHILD_STEERED_TOOLS)
+
+
+def _private_child_read(name: str, args, inner) -> bool:
+    """True when a child read ROUTES to a parent-private resource (any spelling). Routing-aware, not
+    lexical: a real project ``artifacts/`` path that shadows the mount stays readable."""
+    if name not in _READ_TOOLS or not isinstance(args, dict):
+        return False
+    ref, _, private_path = _classified_read_target(
+        args, getattr(inner, "resource_ref", None),
+        canonicalize=getattr(inner, "_archive_handle", None),
+    )
+    return ref.kind in _CHILD_PRIVATE_RESOURCE_KINDS or private_path
+
+# Spec §5 acceptance vocabulary. Evidence is an informational label, never a gate.
+# ``indeterminate`` stays DISTINCT from ``failed``: an unconfirmed-close/timeout child has an unknown
+# physical state — collapsing it into "failed" would erase truth the UI and parent can act on.
+_STOP_TO_STATUS = {
+    "aborted": "cancelled",
+    "max_steps": "partial", "token_budget": "partial", "overflow": "partial",
+    "indeterminate": "indeterminate",
+}
+
+
+class ScopedSurface:
+    """A tool host restricted to ``allowed`` tool names for one scoped turn.
+
+    Three gate tiers, carried from the proven child-surface taxonomy:
+      * child-barred tools (spawn/ask_user/update_work/…) → quiet steer (↷ CANCELLED — a hallucinated
+        call is a request-shape correction, not a failure);
+      * a tool OUTSIDE the allowlist but real on the inner host → LOUD failure. Schema hiding is not a
+        security boundary: a read-only child emitting a write call is a capability-escalation attempt;
+      * parent-private mounts (artifacts/, history/, subagents/, @sliceagent/) → quiet steer on reads —
+        a child works from the WORKSPACE, never the parent's archives.
+    Every dispatch protocol run_tool_batch may use is gated (run + preflight_run/run_preflighted; the
+    plan-mode review proved that filtering only run() is bypassed). All other attributes delegate
+    unchanged, so permitted reads behave exactly as a normal turn.
+    """
+
+    def __init__(self, inner, allowed):
+        self._inner = inner
+        self._allowed = frozenset(allowed)
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    def _gate(self, name, args=None):
+        if name in CHILD_STEERED_TOOLS:
+            if name == "ask_user":
+                return ToolText(
+                    "a subagent cannot ask the user. Decide on a reasonable assumption, proceed, and "
+                    "state the assumption in your summary; the parent will handle any real ambiguity.",
+                    status=ToolStatus.CANCELLED)
+            return ToolText(
+                f"a subagent cannot call {name!r}; keep working within the delegated task and report "
+                "any needed parent action in the final summary.", status=ToolStatus.CANCELLED)
+        if name not in self._allowed:
+            return ToolText(f"Error: tool {name!r} is not available to this agent",
+                            status=ToolStatus.FAILED)
+        if _private_child_read(name, args, self._inner):
+            return ToolText(
+                "artifacts/, history/, subagents/, roster/ and @sliceagent/ are the parent's private "
+                "namespace; work from the workspace files in your task scope and report what you need "
+                "in your summary.", status=ToolStatus.CANCELLED)
+        return None
+
+    def schemas(self):
+        return [s for s in self._inner.schemas()
+                if s.get("function", {}).get("name") in self._allowed]
+
+    def run(self, name, args):
+        return self._gate(name, args) or self._inner.run(name, args)
+
+    def preflight_run(self, name, args):
+        steer = self._gate(name, args)
+        if steer is not None:
+            return None, steer
+        preflight = getattr(self._inner, "preflight_run", None)
+        run_preflighted = getattr(self._inner, "run_preflighted", None)
+        if callable(preflight) != callable(run_preflighted):
+            # Preserve the kernel's incomplete-protocol rejection — never paper over half a protocol.
+            return None, ToolText(
+                "Error: wrapped tool host exposes an incomplete one-shot preflight protocol",
+                status=ToolStatus.FAILED)
+        return preflight(name, args) if callable(preflight) else (None, None)
+
+    def run_preflighted(self, name, args, admission):
+        steer = self._gate(name, args)
+        if steer is not None:
+            return steer
+        inner = getattr(self._inner, "run_preflighted", None)
+        return inner(name, args, admission) if callable(inner) else self._inner.run(name, args)
+
+
+def scoped_llm_view(llm, reasoning: str = ""):
+    """The llm VIEW for a scoped child: a SHALLOW COPY (shares the thread-safe transport + gate),
+    never the parent object. The parent's streaming delta/activity sinks are DISCONNECTED so
+    concurrent children never write into the parent's renderer, and a child's model/_fellback
+    mutation on overflow stays child-local (the S7 lesson, carried from the nested stack)."""
+    view = copy.copy(llm)
+    if reasoning:
+        view.reasoning = reasoning
+    if hasattr(view, "set_delta_sink"):
+        view.set_delta_sink(None)
+    else:
+        view._on_delta = None
+    if hasattr(view, "set_transport_activity"):
+        view.set_transport_activity(None)
+    else:
+        view._transport_activity = None
+    return view
+
+
+@dataclass
+class ScopedResult:
+    """One scoped turn's outcome: the redacted report plus honest accounting for the parent."""
+
+    report: str = ""
+    status: str = "failed"          # ok | partial | failed | cancelled | indeterminate  (spec §5)
+    stop_reason: str = ""
+    steps: int = 0
+    elapsed: float = 0.0
+    usage: dict = field(default_factory=dict)   # summed over StepEnd: prompt/completion/cache splits
+
+
+def run_scoped_agent(task: str, *, tools, llm, retriever, memory, allowed_tools=READ_ONLY_TOOLS,
+                     model_id: str = "", max_steps: int = 40, signal=None,
+                     reasoning: str = "", system_extra: str = "", on_event=None) -> ScopedResult:
+    """Run one scoped turn and return a ScopedResult.
+
+    The report is the child's last assistant text (mirrors the explorer's summary-is-deliverable). A
+    ToolResult resets it, so a preamble before a tool call cannot masquerade as the final report; the
+    park-closeout's best-effort summary therefore survives as the report on partial stops. ``on_event``
+    (optional) receives the child's raw loop events — enough for a caller to project progress phases.
+    """
+    state = Slice()
+    state.reset(task)
+    record_user(state, task, source_event_id="scoped-1", logical_id="scoped-1")
+    surface = ScopedSurface(tools, allowed_tools)
+    child_llm = scoped_llm_view(llm, reasoning)
+    build = make_build_slice(state, surface, retriever, memory, task, system_extra=system_extra,
+                             model_id=model_id or getattr(child_llm, "model", ""))
+
+    report = {"text": ""}
+    usage = {"prompt_tokens": 0, "completion_tokens": 0, "input_cache_read": 0,
+             "input_cache_creation": 0, "input_other": 0}
+
+    def dispatch(event):
+        if isinstance(event, ToolResult):
+            report["text"] = ""
+        elif isinstance(event, AssistantText) and event.content:
+            report["text"] = event.content
+        elif isinstance(event, StepEnd):
+            for key in usage:
+                usage[key] += int((event.usage or {}).get(key) or 0)
+        if on_event is not None:
+            try:
+                on_event(event)
+            except Exception:  # noqa: BLE001 — a presentation observer must never kill the child
+                pass
+
+    started = time.monotonic()
+    result = run_turn(build_slice=build, llm=child_llm, tools=surface, dispatch=dispatch,
+                      hooks=Hooks(), max_steps=max_steps, signal=signal)
+    text = redact_text((report["text"] or "").strip())
+    status = _STOP_TO_STATUS.get(result.stop_reason,
+                                 ("ok" if text else "failed") if result.stop_reason == "end_turn"
+                                 else "failed")
+    return ScopedResult(report=text, status=status, stop_reason=result.stop_reason,
+                        steps=result.steps, elapsed=time.monotonic() - started, usage=usage)

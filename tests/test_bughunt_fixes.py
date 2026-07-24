@@ -156,11 +156,10 @@ def observe_is_bounded_for_small_n():
     assert len(observe("abcdefghijklmnop", 4)) <= 4, "observe must bound to n even when small"
 
 
-# ── LOW: render_plan / render_requirements tolerate a malformed persisted item ────────────────
+# ── LOW: render_requirements tolerates a malformed persisted item ─────────────────────────────
 @check
 def renderers_tolerate_missing_keys():
-    from sliceagent.regions import render_plan, render_requirements
-    render_plan([{"status": "doing"}])            # missing 'step' → must not KeyError
+    from sliceagent.regions import render_requirements
     render_requirements([{"done": False}])        # missing 'text' → must not KeyError
 
 
@@ -813,9 +812,12 @@ def slash_catalog_help_docs_and_discovery_are_consistent():
         description = "Read the workspace"
         read_only = True
 
+    class WritableSpec:
+        description = "Read and edit the workspace"
+        read_only = False
+
     class Tools:
-        core_mode = True
-        agents = {"explorer": Spec(), "general": Spec()}
+        agents = {"explorer": Spec(), "general": WritableSpec()}
 
         def schemas(self):
             return [{"function": {"name": "read_file"}}, {"function": {"name": "spawn_agent"}}]
@@ -826,7 +828,7 @@ def slash_catalog_help_docs_and_discovery_are_consistent():
     assert any("subagent: spawn_agent" in line for line in tool_lines)
     agent_lines = _discovery_agent_lines(Tools())
     assert any("explorer [read-only]" in line for line in agent_lines)
-    assert not any("general" in line for line in agent_lines), agent_lines
+    assert any("general [writable]" in line for line in agent_lines), agent_lines
 
 
 # ── FEATURE: two-tier selector menus (model→reasoning, mode) ───────────────────────────────────────────

@@ -998,7 +998,6 @@ _WORKSPACE_TARGET = re.compile(
 )
 
 _WORKSPACE_EDIT_TOOLS = ("edit_file", "append_to_file", "str_replace")
-_TASK_MAINTENANCE_TOOLS = ("update_plan",)
 
 # Linkage ignores grammatical/modal scaffolding, but deliberately does not stem words or compare embeddings.
 # The fallback below therefore remains deterministic and conservative: an explicit correction must retain at
@@ -1838,10 +1837,6 @@ def _explicit_effect_grants(source: str, spans: Iterable[SourceSpan]) -> tuple[E
             tools = (("new_topic",) if verb == "new" else ("switch_topic",))
             grants.append(EffectGrant("task.route", tools, source_span=span))
             continue
-        if verb in {"update", "change", "revise", "replace"} and not code_object \
-                and re.search(r"\bplan\b(?:\s+now)?\s*[.!?]*$", low):
-            grants.append(EffectGrant("task.plan", ("update_plan",), source_span=span))
-            continue
         if verb in {"add", "remove", "drop", "delete", "supersede", "replace", "mark", "complete", "finish"} \
                 and re.search(r"\b(?:requirement|constraint)\b", low):
             # Constraint verbs are not interchangeable. A request to add a requirement must never be
@@ -1989,12 +1984,10 @@ def _explicit_effect_grants(source: str, spans: Iterable[SourceSpan]) -> tuple[E
                 # syntax-aware cue instead of implying arbitrary Python/subprocess intent.
                 "workspace.batch_edit", ("execute_code",), source_span=span,
             ))
-        # Verification and plan/requirement bookkeeping are related implementation cues, not execution gates.
+        # Verification is a related implementation cue, not an execution gate. (The legacy task.maintain
+        # grant died with the update_plan channel — plans live in Active Work now.)
         grants.append(EffectGrant(
             "workspace.verify", ("run_command",), source_span=span,
-        ))
-        grants.append(EffectGrant(
-            "task.maintain", _TASK_MAINTENANCE_TOOLS, source_span=span,
         ))
     # Preserve order for explanation/rendering while removing duplicate projections of overlapping spans.
     unique = []

@@ -7,7 +7,7 @@ PUBLIC_SLASH_COMMANDS = {
     "/model": "switch model + reasoning — menu lists YOUR configured providers (switches endpoint too)",
     "/cwd": "show the workspace; /cwd <path> switches with a clean runtime handoff",
     "/learn": "turn what you just did into a reusable SKILL (/learn [name])",
-    "/plan": "show the agent's current PLAN",
+    "/plan": "show open work items; /plan <objective> = read-only planning turn",
     "/cost": "show session token totals + $ saved vs full-history",
     "/update": "show how to update safely at the process boundary",
     "/threads": "list open/parked topics",

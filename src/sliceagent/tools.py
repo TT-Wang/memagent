@@ -19,6 +19,8 @@ from dataclasses import replace
 
 from .active_work import (
     ActiveWorkError,
+    EvidenceRef as WorkEvidenceRef,
+    OutputRef as WorkOutputRef,
     ResourceRef as WorkResourceRef,
     UNRESOLVED_STATUSES,
     WorkDelta,
@@ -215,7 +217,7 @@ NOTE_PROP = {
 
 _LEGACY_SEMANTIC_STATE_TOOLS = frozenset({
     "world_set", "world_clear", "require", "requirement_done", "supersede_requirement",
-    "drop_requirement", "update_plan",
+    "drop_requirement",
 })
 
 
@@ -428,17 +430,6 @@ TOOL_SCHEMAS = [
         "Defer an agent-maintained STANDING REQUIREMENT that no longer applies. This cannot retract a "
         "user-authored clause; use supersede_requirement only for an explicit correction in the current request.",
         {"text": {"type": "string"}}, ["text"]),
-    _fn("update_plan",
-        "Maintain an ordered PLAN (a TODO list) for a multi-step task. Pass the COMPLETE list of steps "
-        "every time — it REPLACES the previous plan. Keep exactly ONE step 'in_progress'; mark each 'done' "
-        "as you finish it. The plan shows in your PLAN section across turns so progress survives and the "
-        "user can follow along. Use it for non-trivial multi-step work; skip it for a single action.",
-        {"steps": {"type": "array", "description": "the full ordered step list (replaces the prior plan)",
-                   "items": {"type": "object", "properties": {
-                       "step": {"type": "string", "description": "one concrete step, imperative"},
-                       "status": {"type": "string", "enum": ["pending", "in_progress", "done"]}},
-                       "required": ["step", "status"]}}},
-        ["steps"]),
     _fn("update_work",
         "Maintain ACTIVE WORK for a multi-step or cross-boundary request. Add or update only concrete child "
         "work items; the host owns the exact request root and sealed delivery (and any legacy verified record). Changes are "
@@ -456,6 +447,9 @@ TOOL_SCHEMAS = [
                  "open", "in_progress", "waiting_user", "ready", "cancelled", "superseded",
              ]},
              "add_dependencies": {"type": "array", "items": {"type": "string"}},
+             "verify": {"type": "array", "items": {"type": "string"},
+                 "description": "commands whose exit status proves this item (host-run; fix at plan time)"},
+             "done_when": {"type": "string", "description": "acceptance criterion, fixed at plan time"},
              "add_resources": {"type": "array", "items": {"type": "object", "properties": {
                  "kind": {"type": "string"}, "ref": {"type": "string"},
                  "revision": {"type": "string"}}, "required": ["kind", "ref"]}},
@@ -469,14 +463,68 @@ _MODEL_WORK_STATUSES = frozenset({
 })
 
 
+_VERIFY_OSCILLATION_WINDOW = 4     # identical failure signatures within this window => stop retrying
+
+
+def _verify_failure_signature(command: str, output: str) -> str:
+    """Stable signature of one failed check: the command + the normalized tail of its output."""
+    tail = " ".join(str(output or "").split())[-240:]
+    return f"{command}::{tail}"
+
+
+def run_item_verification(candidates, runner, attempts: dict) -> tuple[frozenset, str]:
+    """Host-run the acceptance checks for items landing on 'ready' (P2 of PLAN-MODE-DESIGN).
+
+    ``candidates`` = iterable of (item_id, verify_commands). ``runner(cmd) -> (ok, output)`` is injectable
+    (production: CommandOracle; tests: a stub). ``attempts`` is the per-item failure-signature history used
+    for OSCILLATION detection (the forge algorithm: the same failure signature recurring within the last
+    ``_VERIFY_OSCILLATION_WINDOW`` attempts means retrying is not progress — escalate to the debugger).
+
+    Returns (green_item_ids, "") on success or (frozenset(), rejection_message) on the first failure —
+    update_work is an atomic batch, so one red check rejects the whole delta LOUDLY (block-render rule:
+    a failed acceptance check is a real ✗, never a quiet steer).
+    """
+    green = set()
+    for item_id, commands in candidates:
+        for command in commands:
+            ok, output = runner(command)
+            if ok:
+                continue
+            history = attempts.setdefault(item_id, [])
+            signature = _verify_failure_signature(command, output)
+            oscillating = signature in history[-_VERIFY_OSCILLATION_WINDOW:]
+            history.append(signature)
+            del history[:-8]
+            tail = " ".join(str(output or "").split())[-400:]
+            message = (
+                f"verify failed for {item_id!r}: `{command}` -> {tail or '(no output)'}. "
+                "The item stays unresolved (Applied is not Verified); fix the work and set it ready again."
+            )
+            if oscillating:
+                message += (
+                    " SAME failure signature has now recurred within the last "
+                    f"{_VERIFY_OSCILLATION_WINDOW} attempts - retrying this path is not progress: "
+                    "spawn the 'debugger' agent with this exact output for root-cause analysis, "
+                    "or report BLOCKED to the user."
+                )
+            return frozenset(), message
+        green.add(item_id)
+    return frozenset(green), ""
+
+
 def build_work_delta(
     graph: WorkGraph,
     args: dict,
     *,
     logical_id: str,
     workspace_epoch: int,
+    verified_ok: frozenset = frozenset(),
 ) -> WorkDelta:
-    """Normalize the small public update_work shape into the strict immutable graph contract."""
+    """Normalize the small public update_work shape into the strict immutable graph contract.
+
+    ``verified_ok`` is HOST-ONLY: item ids whose `verify` commands the host has just run green. A change
+    landing such an item on 'ready' is promoted to 'verified' — the model still cannot supply 'verified'
+    directly (that guard is unchanged); only a host-run check earns the promotion (Applied ≠ Verified)."""
     if not isinstance(graph, WorkGraph):
         raise ValueError("ACTIVE WORK is unavailable")
     expected = args.get("expected_revision", graph.revision)
@@ -526,16 +574,33 @@ def build_work_delta(
         ).strip()
         if status == "superseded" and not superseded_by:
             raise ValueError("superseded work must name superseded_by")
+        verify_rows = raw.get("verify")
+        if verify_rows is not None and (not isinstance(verify_rows, list) or any(
+                not isinstance(cmd, str) for cmd in verify_rows)):
+            raise ValueError("verify must be a list of shell command strings")
+        done_when = raw.get("done_when")
+        if done_when is not None and not isinstance(done_when, str):
+            raise ValueError("done_when must be a string")
         if previous is None:
             description = str(raw.get("description") or "").strip()
             if not description:
                 raise ValueError("new work items require a non-empty description")
+            host_verify_proof = ()
+            host_output_proof = ()
+            if status == "ready" and item_id in verified_ok:
+                status = "verified"
+                host_verify_proof = (WorkEvidenceRef("verify_receipt", f"host-verify:{item_id}"),)
+                host_output_proof = (WorkOutputRef("verified_checks", f"host-verify:{item_id}"),)
             creates.append(WorkItem(
                 id=item_id, root_id=root.id, source_refs=root.source_refs,
                 description=description, status=status, logical_id=root.logical_id,
                 workspace_epoch=int(workspace_epoch),
                 dependencies=tuple(dict.fromkeys(add_dependencies)),
                 resource_refs=tuple(dict.fromkeys(resources)), superseded_by=superseded_by,
+                verify=tuple(dict.fromkeys(cmd.strip() for cmd in (verify_rows or []) if cmd.strip())),
+                done_when=str(done_when or "").strip(),
+                evidence_refs=host_verify_proof,
+                output_refs=host_output_proof,
             ))
             continue
         if previous.kind == "request":
@@ -566,13 +631,24 @@ def build_work_delta(
             continue
         if previous.root_id != root.id:
             raise ValueError("update_work may update only child items of the current request")
+        extra_evidence = ()
+        extra_outputs = ()
+        if status == "ready" and item_id in verified_ok:
+            status = "verified"
+            extra_evidence = (WorkEvidenceRef("verify_receipt", f"host-verify:{item_id}"),)
+            extra_outputs = (WorkOutputRef("verified_checks", f"host-verify:{item_id}"),)
         updates.append(replace(
             previous,
             description=str(raw.get("description", previous.description)).strip(),
             status=status,
             dependencies=tuple(dict.fromkeys((*previous.dependencies, *add_dependencies))),
             resource_refs=tuple(dict.fromkeys((*previous.resource_refs, *resources))),
+            evidence_refs=tuple(dict.fromkeys((*previous.evidence_refs, *extra_evidence))),
+            output_refs=tuple(dict.fromkeys((*previous.output_refs, *extra_outputs))),
             superseded_by=superseded_by,
+            verify=(tuple(dict.fromkeys(cmd.strip() for cmd in verify_rows if cmd.strip()))
+                    if verify_rows is not None else previous.verify),
+            done_when=(str(done_when).strip() if done_when is not None else previous.done_when),
         ))
     return WorkDelta(expected_revision=expected, creates=tuple(creates), updates=tuple(updates))
 
@@ -644,7 +720,6 @@ class LocalToolHost:
         self._history = None
         self._artifacts = None  # authoritative local turn/subagent artifacts (always-on in the CLI)
         self._subagents = None   # a SubagentFS (subagents/ virtual namespace) — the parent's view of child seals
-        self._roster = None      # a RosterFS (roster/ virtual namespace) — the durable standing workforce
         # ask_user (the "come back and ask" capability): a host callback that prompts the real user and
         # returns their answer. Defaults to a non-interactive fallback so headless/eval never hangs; the
         # CLI overrides it with a TUI/plain prompt. Injected (not a core dependency) — task/LLM-agnostic.
@@ -655,6 +730,12 @@ class LocalToolHost:
         # Read-only provider used to validate update_work against the active graph before an effect is emitted.
         # It returns (WorkGraph, logical_turn_id, workspace_epoch); the reducer remains the sole mutator.
         self._active_work_provider = None
+        # P2 item verification: injectable runner (tests), one-shot green memo consumed by the effect
+        # factory, and the per-item failure-signature history for oscillation detection.
+        self._verify_runner = None
+        self._verify_notify = None      # optional presentation callback: announces each verify command
+        self._item_verify_green: dict = {}
+        self._verify_attempts: dict = {}
         self._edit_journal: list = []   # (rel, full, prev_bytes|None) per write — powers /undo
         self.pending_images: list = []  # images @-attached for the NEXT seed build (vision models only)
         # The registry is the single source of tools; MCP/plugin/skill tools register
@@ -703,7 +784,7 @@ class LocalToolHost:
             "reconcile_execution": self._t_reconcile_execution,
             "require": self._t_require, "requirement_done": self._t_requirement_done,
             "supersede_requirement": self._t_supersede_requirement,
-            "drop_requirement": self._t_drop_requirement, "update_plan": self._t_update_plan,
+            "drop_requirement": self._t_drop_requirement,
             "update_work": self._t_update_work,
             "code_review": self._t_code_review,
         }
@@ -739,6 +820,7 @@ class LocalToolHost:
         graph, logical_id, workspace_epoch = self._active_work_snapshot()
         delta = build_work_delta(
             graph, dict(invocation.args), logical_id=logical_id, workspace_epoch=workspace_epoch,
+            verified_ok=frozenset(self._item_verify_green),
         )
         return (ToolEffect(
             id=f"work-delta:{invocation.provider_index}:{invocation.id}:0",
@@ -783,7 +865,7 @@ class LocalToolHost:
         """The active focus (most-recently-worked EXTERNAL dir) + every extra root the file tools reach
         beyond the workspace. Surfaced in the slice so the model KNOWS its file tools reach there: the
         auto-granted reach was invisible, so the agent defaulted to the workspace frame and lost the
-        thread across turns (the hunter 'index.ts' miss). Delegated by SubagentHost via __getattr__."""
+        thread across turns (the hunter 'index.ts' miss). Delegated by ScopedSpawnHost via __getattr__."""
         return self._reach.active_focus, list(self._reach.focus_roots)
 
     def resolution_base(self) -> str:
@@ -920,8 +1002,7 @@ class LocalToolHost:
             return self._contextfs
         p = self._archive_handle(path)
         for mount, fs in (("artifacts", self._artifacts), ("history", self._history),
-                          ("subagents", self._subagents),
-                          ("roster", self._roster)):
+                          ("subagents", self._subagents)):
             if fs is None or not (p == mount or p.startswith(mount + "/")):
                 continue
             try:
@@ -995,8 +1076,6 @@ class LocalToolHost:
                 if fs is self._artifacts else
                 "subagents/ is a read-only view of your subagents' sealed reports"
                 if fs is self._subagents else
-                "roster/ is a read-only view of your standing specialists (hire/wake them via spawn tools)"
-                if fs is self._roster else
                 "history/ is a read-only view of this session's past turns (the episodic archive)")
         return ToolText(
             f"{what} — you can read_file/list_files/grep it, but it can't be written. Save work elsewhere.",
@@ -1725,24 +1804,54 @@ class LocalToolHost:
             return ToolText("Error: supersede_requirement needs non-empty old_text and new_text.", ok=False)
         return f"REQUIREMENT supersession requested: {old} → {new}."
 
-    def _t_update_plan(self, args: dict) -> str:
-        # The STATE lives in the slice's PLAN tier (folded by slice_sink from this event); the handler
-        # only validates + confirms (the world_set/require pattern).
-        steps = args.get("steps")
-        if not isinstance(steps, list) or not steps:
-            return ToolText("Error: update_plan requires a non-empty 'steps' list "
-                            "(each {step, status: pending|in_progress|done}).", ok=False)
-        n = len(steps)
-        done = sum(1 for s in steps if isinstance(s, dict) and s.get("status") == "done")
-        doing = sum(1 for s in steps if isinstance(s, dict) and s.get("status") == "in_progress")
-        return f"PLAN updated: {n} steps ({done} done, {doing} in progress) — shown in your PLAN section."
+    def _run_verify_command(self, command: str):
+        # Announce the live command so a long verify (a real pytest run) is visible on the status
+        # line instead of a generic `update_work` — presentation only, never a gate.
+        notify = self._verify_notify
+        if callable(notify):
+            try:
+                notify(f"verify · {command}")
+            except Exception:  # noqa: BLE001
+                pass
+        runner = self._verify_runner
+        if callable(runner):
+            return runner(command)
+        from .oracle import CommandOracle
+        result = CommandOracle(command, root=self.root()).verify()
+        return result.ok, result.output
 
     def _t_update_work(self, args: dict) -> str:
+        self._item_verify_green = {}
         try:
             graph, logical_id, workspace_epoch = self._active_work_snapshot()
             delta = build_work_delta(
                 graph, args, logical_id=logical_id, workspace_epoch=workspace_epoch,
             )
+            # Host acceptance gate (P2): an item landing on 'ready' with a verify contract must prove it
+            # NOW — the host runs the commands once, here; green promotes ready->verified via the memo the
+            # effect factory replays; red rejects the atomic batch loudly with the failing output.
+            # Verification gates the TRANSITION INTO 'ready', never the resulting state. Keying on
+            # state re-ran a proven item's commands whenever an unrelated field was touched, and left
+            # a hole with teeth: a change that only INHERITS 'ready' (no status field) passed the
+            # planning surface's status gate and then executed real shell from inside a read-only
+            # planning turn. Gate and host now agree on the same trigger, so that class is closed.
+            def _enters_ready(item) -> bool:
+                previous = graph.get(item.id)
+                return previous is None or previous.status != "ready"
+
+            candidates = [(item.id, item.verify) for item in (*delta.creates, *delta.updates)
+                          if item.status == "ready" and item.verify and _enters_ready(item)]
+            if candidates:
+                green, failure = run_item_verification(
+                    candidates, self._run_verify_command, self._verify_attempts,
+                )
+                if failure:
+                    return ToolText(f"Error: ACTIVE WORK update rejected: {failure}", ok=False)
+                self._item_verify_green = {item_id: True for item_id in green}
+                delta = build_work_delta(
+                    graph, args, logical_id=logical_id, workspace_epoch=workspace_epoch,
+                    verified_ok=frozenset(self._item_verify_green),
+                )
             # Validate the full proposed graph now; effect construction repeats this against the same snapshot
             # and the reducer performs the one authoritative apply.
             proposed = graph.apply_delta(delta)
@@ -1764,6 +1873,9 @@ class LocalToolHost:
             f"ACTIVE WORK update accepted: {len(delta.creates)} created, "
             f"{len(delta.updates)} updated (base revision {delta.expected_revision})."
         )
+        if self._item_verify_green:
+            result += ("\nHost-verified (checks ran green, promoted ready->verified): "
+                       + ", ".join(sorted(self._item_verify_green)))
         if frontier:
             shown = frontier[:12]
             result += "\nUnfinished current-request frontier: " + "; ".join(

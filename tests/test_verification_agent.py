@@ -30,7 +30,7 @@ def can_run_checks_but_not_edit():
     for edit in ("edit_file", "str_replace", "append_to_file"):
         assert edit not in spec.tools, f"verifier must NOT carry {edit} (runtime allowlist blocks it)"
     assert spec.reasoning == "full", "careful verification uses full reasoning"
-    # shell is in WRITE_TOOLS → classified writable → serializes vs other writers (correct for a test-runner)
+    # shell is not read-only → classified writable → serializes vs other writers (correct for a test-runner)
     assert spec.read_only is False
 
 

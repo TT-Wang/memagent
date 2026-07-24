@@ -1350,24 +1350,8 @@ class CoreArtifactFS:
         coverage = str(body.get("coverage") or "")
         if coverage:
             lines += ["", "## Child coverage statement", coverage]
-        claims = body.get("claims")
-        if isinstance(claims, (list, tuple)) and claims:
-            by_hash = {
-                str(row.get("view_sha256") or ""): index
-                for index, row in enumerate(observations, start=1)
-            }
-            lines += ["", "## Legacy/explicit child claims (testimony; verify before promotion)"]
-            for claim in claims:
-                if not isinstance(claim, Mapping):
-                    continue
-                exact = str(claim.get("report_exact") or claim.get("text") or "")
-                refs = [by_hash.get(str(ref)) for ref in (claim.get("observation_refs") or ())]
-                refs = [ref for ref in refs if ref is not None]
-                locator = (" · candidate observations: " + ", ".join(f"#{ref}" for ref in refs)) if refs else ""
-                lines.append(f"- {exact or '(empty indexed claim)'}{locator}")
         for heading, key in (
-            ("Coverage gaps", "gaps"), ("Source gaps", "source_gaps"),
-            ("Projection gaps", "projection_gaps"),
+            ("Coverage gaps", "gaps"),
             ("Uncertainty", "uncertainty"), ("Files touched by tools", "files"),
         ):
             values = body.get(key)
@@ -1404,13 +1388,12 @@ class CoreArtifactFS:
                 flags.append("legacy-archive-partial")
             elif bool(row.get("truncated")):
                 flags.append("source-partial")
-            flags.append(f"{int(row.get('view_bytes') or len(str(row.get('view') or '').encode('utf-8')))} bytes")
+            flags.append(f"{len(str(row.get('view') or '').encode('utf-8'))} bytes")
             flags.append(f"{len(chunks)} page(s)")
             lines += [
                 "", f"## Observation {index} · {tool} · {status}",
                 f"- args (bounded display): {args}",
                 f"- retention: {', '.join(flags)}",
-                f"- retained sha256: {str(row.get('view_sha256') or '(unknown)')}",
             ]
             lines.extend(
                 f'- page {page}/{len(chunks)}: read_file("artifacts/{artifact.id}/evidence/'
@@ -1444,7 +1427,6 @@ class CoreArtifactFS:
             f"- tool: {str(row.get('tool') or 'unknown')}",
             f"- status: {str(row.get('status') or 'unknown')}",
             f"- args (bounded display): {args}",
-            f"- retained sha256: {str(row.get('view_sha256') or '(unknown)')}",
             f"- flags: {', '.join(flags) if flags else 'complete returned view'}",
             "", "## Exact retained tool output", chunks[page_number - 1],
         ])

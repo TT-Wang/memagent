@@ -1008,13 +1008,13 @@ def provider_lease_retirement_is_retry_safe_on_both_sides_of_interrupt():
 def provider_gate_rolls_back_interrupt_after_active_set_insert():
     from sliceagent.llm import _PhysicalCallGate
 
-    class InterruptingSet(set):
-        def add(self, value):
-            super().add(value)
+    class InterruptingDict(dict):
+        def __setitem__(self, key, value):
+            super().__setitem__(key, value)
             raise KeyboardInterrupt("interrupted immediately after active-set insertion")
 
     gate = _PhysicalCallGate(1)
-    gate._leases = InterruptingSet()
+    gate._leases = InterruptingDict()
     lease = gate.new_lease()
     try:
         gate.acquire_lease(lease, timeout=1)
@@ -1022,6 +1022,150 @@ def provider_gate_rolls_back_interrupt_after_active_set_insert():
     except KeyboardInterrupt:
         pass
     assert gate.active == 0
+
+
+@check
+def expired_lease_is_reaped_so_a_bricked_gate_self_heals():
+    import time as _time
+
+    import sliceagent.llm as llm_module
+    from sliceagent.llm import _PhysicalCallGate
+
+    original_horizon = llm_module._gate_lease_max_age
+    llm_module._gate_lease_max_age = lambda: 0.05
+    try:
+        gate = _PhysicalCallGate(1)
+        bricked = gate.acquire(timeout=1)          # close never confirmed → lease never released
+        assert gate.active == 1
+        _time.sleep(0.08)                          # past the (test-shrunk) horizon
+        lease = gate.acquire(timeout=1)            # admission reaps the stale lease and succeeds
+        assert gate.active == 1 and gate.reaped == 1
+        lease.release()
+        assert gate.active == 0
+    finally:
+        llm_module._gate_lease_max_age = original_horizon
+
+
+@check
+def fresh_lease_is_never_reaped_prematurely():
+    import time as _time
+
+    import sliceagent.llm as llm_module
+    from sliceagent.llm import _PhysicalCallGate, _ProviderCapacityTimeout
+
+    original_horizon = llm_module._gate_lease_max_age
+    llm_module._gate_lease_max_age = lambda: 30.0
+    try:
+        gate = _PhysicalCallGate(1)
+        live = gate.acquire(timeout=1)
+        _time.sleep(0.05)                          # well inside the horizon
+        try:
+            gate.acquire(timeout=0.05)
+            assert False, "a live lease within its horizon must keep the slot occupied"
+        except _ProviderCapacityTimeout:
+            pass
+        assert gate.active == 1 and gate.reaped == 0
+        live.release()
+        assert gate.active == 0
+    finally:
+        llm_module._gate_lease_max_age = original_horizon
+
+
+@check
+def already_active_misuse_never_retires_the_live_lease():
+    """The 'already active' guard must OBSERVE misuse, not punish the live call for it: re-admitting an
+    active lease raises, but the live call's capacity slot survives (releasing it would breach the
+    concurrency ceiling the gate exists to enforce)."""
+    from sliceagent.llm import _PhysicalCallGate
+
+    gate = _PhysicalCallGate(2)
+    live = gate.acquire(timeout=1)
+    assert gate.active == 1
+    try:
+        gate.acquire_lease(live, timeout=0.1)
+        assert False, "re-admitting an active lease must raise"
+    except RuntimeError as e:
+        assert "already active" in str(e)
+    assert gate.active == 1, "the guard retired the live lease it detected — ceiling breached"
+    live.release()
+    assert gate.active == 0
+
+
+@check
+def long_call_lease_outlives_a_smaller_default_horizon():
+    """A call that DECLARES its own deadline (large completion budget / raised transport timeout) must
+    never be reaped by the smaller module-level default while legitimately live."""
+    import time as _time
+
+    import sliceagent.llm as llm_module
+    from sliceagent.llm import _PhysicalCallGate, _ProviderCapacityTimeout
+
+    original_horizon = llm_module._gate_lease_max_age
+    llm_module._gate_lease_max_age = lambda: 0.05          # default horizon far below the call's life
+    prior_g = os.environ.pop("LLM_STREAM_CLOSE_GRACE_SEC", None)
+    prior_m = os.environ.pop("LLM_GATE_LEASE_MARGIN_SEC", None)
+    try:
+        gate = _PhysicalCallGate(1)
+        live = gate.acquire(timeout=1, call_deadline=_time.monotonic() + 30.0)
+        _time.sleep(0.08)                                  # past the DEFAULT horizon, inside its OWN
+        try:
+            gate.acquire(timeout=0.05)
+            assert False, "the long call's slot must remain occupied"
+        except _ProviderCapacityTimeout:
+            pass
+        assert gate.active == 1 and gate.reaped == 0, "a live declared-deadline lease was reaped"
+        live.release()
+    finally:
+        llm_module._gate_lease_max_age = original_horizon
+        if prior_g is not None:
+            os.environ["LLM_STREAM_CLOSE_GRACE_SEC"] = prior_g
+        if prior_m is not None:
+            os.environ["LLM_GATE_LEASE_MARGIN_SEC"] = prior_m
+
+
+@check
+def declared_deadline_lease_reaps_at_its_own_horizon():
+    """Symmetric: a declared short call whose close was never confirmed is reclaimed at ITS horizon,
+    even when the module default is huge."""
+    import time as _time
+
+    import sliceagent.llm as llm_module
+    from sliceagent.llm import _PhysicalCallGate
+
+    original_horizon = llm_module._gate_lease_max_age
+    llm_module._gate_lease_max_age = lambda: 3600.0
+    os.environ["LLM_STREAM_CLOSE_GRACE_SEC"] = "0.01"
+    os.environ["LLM_GATE_LEASE_MARGIN_SEC"] = "0.01"
+    try:
+        gate = _PhysicalCallGate(1)
+        gate.acquire(timeout=1, call_deadline=_time.monotonic() + 0.02)   # bricked short call
+        _time.sleep(0.1)
+        healed = gate.acquire(timeout=1)                   # admission reaps at the per-lease horizon
+        assert gate.active == 1 and gate.reaped == 1
+        healed.release()
+    finally:
+        llm_module._gate_lease_max_age = original_horizon
+        os.environ.pop("LLM_STREAM_CLOSE_GRACE_SEC", None)
+        os.environ.pop("LLM_GATE_LEASE_MARGIN_SEC", None)
+
+
+@check
+def garbage_grace_and_margin_never_poison_the_horizon():
+    """NaN must not silently disable the reaper; a negative value must not shrink the horizon below
+    the hard timeout (reap-all)."""
+    import math
+
+    import sliceagent.llm as llm_module
+
+    for garbage in ("nan", "-1e12", "inf", "bogus"):
+        os.environ["LLM_STREAM_CLOSE_GRACE_SEC"] = garbage
+        os.environ["LLM_GATE_LEASE_MARGIN_SEC"] = garbage
+        try:
+            horizon = llm_module._gate_lease_max_age()
+            assert math.isfinite(horizon) and horizon > 60.0, (garbage, horizon)
+        finally:
+            os.environ.pop("LLM_STREAM_CLOSE_GRACE_SEC", None)
+            os.environ.pop("LLM_GATE_LEASE_MARGIN_SEC", None)
 
 
 @check

@@ -323,11 +323,11 @@ def vision_capability_is_gated_by_model_name():
 @check
 def subagent_activity_is_compact_counting_not_json_spam():
     from sliceagent.events import SubagentProgress, ToolStarted
-    from sliceagent.subagent import _nested_sink
+    from sliceagent.scoped_spawn import _ProgressEmitter
     updates = []
-    sink = _nested_sink(
-        updates.append, depth=1, agent_id="child-7", parent_turn_id="turn-4",
-        launch_ordinal=2, kind="explorer", name="ui-audit",
+    sink = _ProgressEmitter(
+        updates.append, agent_id="child-7", parent_turn_id="turn-4",
+        launch_ordinal=2, kind="explorer", name="ui-audit", depth=1,
     )
     for i in range(5):
         sink(ToolStarted("read_file", {"path": f"f{i}.py"}))
@@ -341,11 +341,11 @@ def subagent_activity_is_compact_counting_not_json_spam():
 @check
 def subagent_activity_does_not_leave_the_last_tool_pinned_during_report_synthesis():
     from sliceagent.events import AssistantText, StepBegin, ToolStarted
-    from sliceagent.subagent import _nested_sink
+    from sliceagent.scoped_spawn import _ProgressEmitter
     updates = []
-    sink = _nested_sink(
-        updates.append, depth=1, agent_id="child-8", parent_turn_id="turn-4",
-        launch_ordinal=3, kind="explorer",
+    sink = _ProgressEmitter(
+        updates.append, agent_id="child-8", parent_turn_id="turn-4",
+        launch_ordinal=3, kind="explorer", depth=1,
     )
     sink(StepBegin(2))
     sink(ToolStarted("grep", {"pattern": "receipt"}))

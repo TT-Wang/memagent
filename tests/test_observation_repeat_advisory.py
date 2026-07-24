@@ -114,7 +114,7 @@ def empty_observations_do_not_trigger():
 
 @check
 def effectful_and_control_calls_do_not_trigger():
-    excluded = ("edit_file", "change_workspace", "ask_user", "spawn_agent", "spawn_explore")
+    excluded = ("edit_file", "change_workspace", "ask_user", "spawn_agent")
     calls = [
         _call(excluded[index % len(excluded)], f"c{index}", path=f"target-{index}", task=f"task-{index}")
         for index in range(10)

@@ -150,7 +150,7 @@ def test_crash_recovery_exposes_journaled_child_report_to_real_resumed_seed(tmp_
     recovered.close()
 
 
-def test_latest_seed_keeps_operational_success_and_source_coverage_separate_without_gap_prose():
+def test_latest_seed_renders_operational_agent_success_without_source_coverage_prose():
     state = Slice(); state.reset("task")
     record_user(
         state, "continue", source_event_id="event", source_text="continue", logical_id="logical",
@@ -160,11 +160,6 @@ def test_latest_seed_keeps_operational_success_and_source_coverage_separate_with
         "counts": {"requested": 1, "execution_started": 1, "settled": 1, "succeeded": 1},
         "agents": {
             "requested": 1, "execution_started": 1, "settled": 1, "succeeded": 1,
-            "source_coverage": {
-                "source_complete": 0, "source_partial": 1, "source_unsupported": 0,
-                "not_assessed": 0, "required_refs": 2, "covered_refs": 1,
-                "source_gaps": 1,
-            },
         },
         "warning_count": 0,
     }
@@ -175,9 +170,8 @@ def test_latest_seed_keeps_operational_success_and_source_coverage_separate_with
     )
     receipt = next(item for item in compiled if item.item_id == "active-receipt")
     assert "agents · 1/1 succeeded" in receipt.content
-    assert "agents · 1 source partial · 1/2 granted reports covered" in receipt.content
+    assert "source" not in receipt.content and "granted" not in receipt.content
     assert "grounded" not in receipt.content and "verified" not in receipt.content
-    assert "source_gaps" not in receipt.content, "only the bounded gap count belongs in compact state"
 
 
 def test_restart_restores_the_epoch_that_selects_current_workspace_resources(tmp_path):

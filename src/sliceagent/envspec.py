@@ -41,21 +41,16 @@ REGISTRY: list[EnvVar] = [
     EnvVar("AGENT_SUBAGENT_DEPTH", "agent", "Max delegation depth for spawn_agent (0=off).", "1"),
     EnvVar("AGENT_TOPIC_TOOLS", "agent", "Expose model-callable topic switching (off by default; host "
            "routing and slash commands remain available).", ""),
-    EnvVar("AGENT_ADVANCED_AGENTS", "agent", "Enable writable/nested/named specialist delegation; default "
-           "core mode exposes one-shot read-only explorers only.", ""),
     EnvVar("AGENT_ADVANCED_TOOLS", "agent", "Expose persistent process and interactive terminal tools; "
            "off by default in the demo kernel.", ""),
-    EnvVar("AGENT_EXPLORER_REASONING", "agent", "Explorer profile: staged uses fast evidence navigation plus "
-           "one full tool-free synthesis; fast/full/high/max keep a single-stage override.", "staged",
-           choices=("staged", "fast", "full", "high", "max"), validate=True),
-    EnvVar("AGENT_EXPLORER_NAV_STEPS", "agent", "Fast-navigation model-step ceiling for staged explorers. "
-           "Values are clamped to 1..(the child max minus the reserved synthesis step).", "6"),
     EnvVar("AGENT_VERIFY_CMD", "agent", "Oracle verify command run after a turn (e.g. 'pytest -q').", ""),
     EnvVar("AGENT_MAX_TOKENS", "agent", "Per-turn task token budget, including delegated child usage (parks when exhausted).", ""),
-    EnvVar("AGENT_COMPLETION_TOKENS", "agent", "Per-REQUEST completion cap (max output tokens); distinct from the AGENT_MAX_TOKENS turn budget.", "8192"),
+    EnvVar("AGENT_COMPLETION_TOKENS", "agent", "Per-REQUEST completion cap (max output tokens); distinct from "
+           "the AGENT_MAX_TOKENS turn budget. Unset = model-aware default (8192; 32768 for reasoning-output "
+           "models, whose chain-of-thought spends this same budget). 0 = provider default.", "model-aware"),
     EnvVar("AGENT_CONTEXT_WINDOW", "agent", "Provider context window used for strict per-call capacity "
            "preflight when the model catalog cannot supply one (0/unset = explicit compatibility mode).", ""),
-    EnvVar("AGENT_MAX_STEPS", "agent", "Per-turn step ceiling (runaway backstop); raise for deep analysis.", "60"),
+    EnvVar("AGENT_MAX_STEPS", "agent", "Per-turn step ceiling (runaway backstop, NOT a work meter — the budget and the user are); raise for deep analysis.", "120"),
     EnvVar("AGENT_TOOL_TIMEOUT", "agent",
            "Outer deadline for declared pure-read tools in seconds (0/unset = off).", ""),
     EnvVar("AGENT_DELEGATION_TIMEOUT", "agent",
@@ -76,6 +71,9 @@ REGISTRY: list[EnvVar] = [
            "a provider-agnostic ceiling from the completion-token budget (minimum 180 seconds).", ""),
     EnvVar("LLM_STREAM_CLOSE_GRACE_SEC", "provider", "Seconds to confirm SSE connection closure after "
            "cancellation/deadline before reporting an indeterminate call.", "2"),
+    EnvVar("LLM_GATE_LEASE_MARGIN_SEC", "provider", "Teardown margin added to the provider call hard "
+           "timeout to bound a physical gate lease's lifetime; leases older than that horizon are "
+           "reclaimed at admission (self-heals unconfirmed-close capacity bricks).", "60"),
     EnvVar("LLM_STREAM_HEARTBEAT_SEC", "provider", "Low-rate child-stream activity heartbeat interval in "
            "seconds; presentation and metrics only, never a timeout or retry policy.", "5"),
     EnvVar("LLM_PROVIDER_MAX_INFLIGHT", "provider", "Process-wide physical request ceiling per provider "
@@ -86,15 +84,16 @@ REGISTRY: list[EnvVar] = [
     EnvVar("MOONSHOT_API_KEY", "provider", "Legacy alias for LLM_API_KEY (Moonshot).", "", secret=True),
     EnvVar("OPENAI_BASE_URL", "provider", "Legacy alias for LLM_BASE_URL.", ""),
     # ── UI ────────────────────────────────────────────────────────────────────────────────────
-    EnvVar("AGENT_TUI", "ui", "UI mode: rich (default inline), live (pinned box), off (plain).",
-           "rich", choices=("rich", "live", "off"),
-           aliases=("1", "on", "true", "yes", "0", "false", "no")),
+    EnvVar("AGENT_TUI", "ui", "UI mode: live (default — the pinned rich TUI) or off (plain stdout; "
+           "pipes/CI). The inline REPL tier is retired; legacy values rich/inline/repl mean live.",
+           "live", choices=("live", "off"),
+           aliases=("rich", "inline", "repl", "1", "on", "true", "yes", "0", "false", "no")),
     EnvVar("AGENT_SPINNER", "ui", "Animated in-place status spinner during a turn (a Rich live region). "
            "Set off to drop just the spinner; all other Rich formatting stays.",
            "on", choices=("on", "off"), aliases=("1", "true", "yes", "0", "false", "no")),
     EnvVar("SHOW_SLICE", "ui", "Set truthy to print the rebuilt slice each turn (debug view).", ""),
     # ── memory ────────────────────────────────────────────────────────────────────────────────
-    EnvVar("SLICEAGENT_VAULT", "memory", "Legacy episodic/task/roster compatibility vault.", ""),
+    EnvVar("SLICEAGENT_VAULT", "memory", "Legacy episodic/task compatibility vault.", ""),
     EnvVar("SLICEAGENT_KNOWLEDGE_DB", "memory", "Override the native typed-knowledge SQLite database path.", ""),
     EnvVar("SLICEAGENT_PROJECT_REGISTRY", "memory", "Override the private stable project-identity registry path.", ""),
     EnvVar("SLICEAGENT_USER_ID", "memory", "Stable local user scope key for typed USER knowledge.", "local-user"),

@@ -279,7 +279,6 @@ def _workspace_rebased_slice(source: Slice) -> Slice:
     state.task.world = {}
     state.task.progress_signals = []
     state.task.goal_source = ""
-    state.plan = []
     # Keep exact user-authored clauses, but detach store-local artifact/invocation handles. The next target
     # turn receives its own local source artifact before any new checkpoint can publish.
     state.intent.current_source = None
@@ -325,7 +324,6 @@ def rebase_session_for_workspace(current: Session, restored: Session) -> Session
             target.task.goal = carried.task.goal
             target.task.objective_status = carried.task.objective_status
             target.task.goal_source = ""
-            target.task.plan = carried.task.plan
             target.task.deliverable_requirement = carried.task.deliverable_requirement
             target.open_report = carried.open_report
             target.runtime.reset()

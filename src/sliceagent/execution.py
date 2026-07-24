@@ -17,12 +17,8 @@ from typing import Callable, Iterator
 from .context_overflow import ContextOverflow
 
 
-# Private scheduler→delegation metadata. It is never part of the provider invocation,
-# safeguard preflight, journal, or public tool schema; SubagentHost consumes it before
-# validating the child's public arguments.
-CHILD_TOKEN_BUDGET_ARG = "__sliceagent_token_budget"
 # Private scheduler→child cancellation lease. Unlike provider/audit arguments this is a live process object;
-# run_tool_batch injects it only into the sanitized handler view and SubagentHost consumes it at the edge.
+# run_tool_batch injects it only into the sanitized handler view and ScopedSpawnHost consumes it at the edge.
 CHILD_CANCEL_SIGNAL_ARG = "__sliceagent_cancel_signal"
 # Stable presentation correlation for concurrent delegation.  These values never enter the provider-visible
 # invocation or a child brief; they let the progress reducer bind one physical spawn call to exactly one row.
@@ -75,8 +71,7 @@ def reconciliation_targets(name: str, args: Mapping[str, object] | None) -> tupl
     """
     name = str(name or "")
     args = args if isinstance(args, Mapping) else {}
-    if name == "spawn_explore" or (
-            name == "spawn_agent" and str(args.get("agent") or "").casefold() == "explorer"):
+    if name == "spawn_agent" and str(args.get("agent") or "").casefold() == "explorer":
         return ()
     if name.startswith("mcp__"):
         # MCP methods have no trustworthy common effect schema. A nominal database/network method may also
@@ -409,7 +404,7 @@ def coerce_tool_status(value: object, *, legacy_text: str | None = None) -> Tool
 
 __all__ = [
     "CHILD_CANCEL_SIGNAL_ARG", "CHILD_INVOCATION_ID_ARG", "CHILD_REQUEST_ORDINAL_ARG",
-    "CHILD_TOKEN_BUDGET_ARG", "PreflightOverflow", "PreflightReport",
+    "PreflightOverflow", "PreflightReport",
     "ToolEffect", "ToolInvocation", "ToolOutcome",
     "ToolPurity", "ToolStatus", "TurnOutcome", "TurnStatus", "UnknownContextWindow", "Usage",
     "available_content_capacity", "coerce_tool_status", "estimate_model_call", "model_context_window",

@@ -256,6 +256,9 @@ def live_failure_restores_inline_bridges_and_streaming_sink():
         def subagent_notify(self, *_args):
             pass
 
+        def host_notify(self, _detail):
+            pass
+
     llm, rich = LLM(), Rich()
     live_runtime = {"active": True}
     workspace_setter = {"fn": lambda _root: None}

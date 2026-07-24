@@ -91,7 +91,6 @@ def normal_shell_work_runs_without_a_permission_or_reconciliation_gate():
 
 @check
 def interrupted_readonly_explorer_has_no_workspace_effect_target():
-    assert reconciliation_targets("spawn_explore", {"task": "inspect"}) == ()
     assert reconciliation_targets("spawn_agent", {"agent": "explorer", "task": "inspect"}) == ()
     assert reconciliation_targets("spawn_agent", {"agent": "reviewer", "task": "edit"}) == (
         "workspace:*", "opaque:spawn_agent",

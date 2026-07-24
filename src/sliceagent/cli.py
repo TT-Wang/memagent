@@ -206,9 +206,6 @@ def _discovery_agent_lines(tools) -> list[str]:
     if "spawn_agent" not in schema_names:
         return ["  subagents are disabled at the current depth"]
     available = dict(getattr(tools, "agents", {}) or {})
-    if getattr(tools, "core_mode", False):
-        available = ({"explorer": available["explorer"]}
-                     if "explorer" in available else {})
     if not available:
         return ["  no subagent profiles configured"]
     lines = [f"  available agents ({len(available)}):"]
@@ -651,6 +648,7 @@ def _prepare_workspace_resources(
     ask_user=None,
     session_id: str | None = None,
     on_log: Callable[[str], None] = lambda _message: None,
+    notify_host=None,
 ) -> WorkspaceResources:
     """Stage one complete workspace runtime before publishing it.
 
@@ -670,7 +668,7 @@ def _prepare_workspace_resources(
     from .sandbox import make_sandbox
     from .session import Session, SessionBinding, make_topic_tools
     from .skills import make_skill_manager, make_skill_tool
-    from .subagent import SubagentHost
+    from .scoped_spawn import ScopedSpawnHost
     from .text_utils import one_line
     from .tools import LocalToolHost
 
@@ -697,6 +695,7 @@ def _prepare_workspace_resources(
             cfg.sandbox_backend, image=cfg.sandbox_image, network=cfg.sandbox_network,
         )
         base_tools = LocalToolHost(root, sandbox=sandbox)
+        base_tools._verify_notify = notify_host   # live "verify · <cmd>" on the status line
         cleanup.base_tools = base_tools
         base_tools.on_workspace_switch = schedule_workspace
         if ask_user is not None:
@@ -755,35 +754,28 @@ def _prepare_workspace_resources(
         tools = base_tools
         sub_depth = cfg.subagent_depth
         if sub_depth > 0:
-            from .agents import BUILTIN_AGENTS, load_agents
-            advanced_agents = os.environ.get("AGENT_ADVANCED_AGENTS", "").strip().lower() in (
-                "1", "on", "true", "yes",
-            )
+            from .agents import load_agents
             agent_roots = skill_roots + [root, os.path.join(root, ".sliceagent")]
-            agents = (load_agents(agent_roots) if advanced_agents
-                      else {"explorer": BUILTIN_AGENTS["explorer"]})
-            tools = SubagentHost(
+            # ONE mode: every builtin kind + the user's agents/*.md files are always available.
+            tools = ScopedSpawnHost(
                 base_tools, llm=llm, retriever=retriever, memory=memory,
-                max_depth=sub_depth if advanced_agents else 1, notify=notify_subagent,
-                agents=agents, session_id=session.session_id,
+                max_steps=cfg.max_steps, notify=notify_subagent,
+                agents=load_agents(agent_roots), session_id=session.session_id,
                 intent_provider=lambda _task, s=session: s.active().intent,
-                task_id_fn=lambda s=session: s.active_id or "t-none",
-                parent_id_fn=lambda st=store: (
+                # Presentation identity: MUST match TurnStarted.turn_id (the store's active
+                # artifact id) or the TUI matrix rejects every live child update as stale.
+                turn_id_fn=lambda st=store: (
                     st.active.artifact_id if st.active is not None else ""
                 ),
-                workspace_id=store.workspace_id,
-                artifact_store=store.coordinator.artifacts,
-                artifact_ref_sink=store.record_artifact_ref,
-                core_mode=not advanced_agents,
+                work_provider=lambda s=session: s.active().active_work,
             )
         if os.environ.get("AGENT_TOPIC_TOOLS", "").strip().lower() in ("1", "on", "true", "yes"):
             for topic_tool in make_topic_tools(session):
                 base_tools.registry.register(topic_tool)
         if getattr(memory, "is_durable", False):
-            from .hippocampus import HistoryFS, RosterFS, SubagentFS, make_search_history_tool
+            from .hippocampus import HistoryFS, SubagentFS, make_search_history_tool
             base_tools._history = HistoryFS(memory, session.session_id)
             base_tools._subagents = SubagentFS(memory, session.session_id)
-            base_tools._roster = RosterFS(memory)
             base_tools.registry.register(make_search_history_tool(memory, session.session_id))
 
         from .workspace_context import configure_workspace_contextfs
@@ -1127,6 +1119,12 @@ def main() -> None:
         fn = _sub_render["fn"]
         if fn is not None:
             fn(update)
+
+    _host_render: dict = {"fn": None}
+    def _notify_host(detail):
+        fn = _host_render["fn"]
+        if fn is not None:
+            fn(detail)
     _ask_user_bridge: dict = {"fn": None}
 
     def _workspace_ask_user(question, options):
@@ -1154,7 +1152,7 @@ def main() -> None:
                 target, cfg=initial_cfg, llm=llm, memory=memory,
                 schedule_workspace=_schedule_workspace, notify_subagent=_notify_subagent,
                 ask_user=_workspace_ask_user, on_log=_workspace_log,
-                session_id=_app_session_id or None,
+                session_id=_app_session_id or None, notify_host=_notify_host,
             )
         # Repository .env is a launch overlay, not process identity. Stage the target with A's injected values
         # temporarily absent, then restore A until atomic publication. We intentionally do not auto-load B's
@@ -1169,7 +1167,7 @@ def main() -> None:
                 target, cfg=target_cfg, llm=llm, memory=memory,
                 schedule_workspace=_schedule_workspace, notify_subagent=_notify_subagent,
                 ask_user=_workspace_ask_user, on_log=_workspace_log,
-                session_id=_app_session_id or None,
+                session_id=_app_session_id or None, notify_host=_notify_host,
             )
         finally:
             os.environ.update(saved_overlay)
@@ -1619,24 +1617,47 @@ def main() -> None:
     # separate from the synchronous run_turn, so no patch_stdout/threading. Off when piped (eval).
     _tui = None
     _stats = {"model": llm.model, "topic": "", "workspace": _ws_name(root), "tokens": 0}
+
+    # ── PLAN MODE: a STICKY host-enforced read-only mode. `/plan <objective>` — or plain
+    # `plan <objective>` — arms it; it PERSISTS across turns so a plan can be iterated without
+    # re-typing the command, and the approval the planning prompt itself asks for ("go"), or
+    # `/plan off`, disarms it. A sticky mode must never be invisible: the armed state shows as a
+    # toolbar chip, and while armed every mutating call is steered with a message naming the mode,
+    # so it explains itself exactly when it matters.
+    _planning = {"active": False}
+
+    def _set_planning(active: bool) -> None:
+        _planning["active"] = bool(active)
+        _stats["planning"] = bool(active)
+
+    from .plan_mode import plan_switch as _plan_switch
     try:
         from . import tui as _tuimod
         if _tuimod.tui_enabled():
             _tui = _tuimod
+    except ImportError as _tui_err:
+        # A missing [tui] extra must NOT degrade silently: a tool reinstall without the extra kept
+        # presenting as "the rich TUI is gone" with no cause. Name the cause and the recovery once.
+        _tui = None
+        try:
+            if sys.stdout.isatty():
+                _missing = getattr(_tui_err, "name", None) or _tui_err
+                print(f"  · plain UI — TUI dependencies not installed ({_missing}). "
+                      f"Reinstall with the extra: uv tool install --force \"sliceagent[tui] @ file://<repo>\" "
+                      f"or pip install \"sliceagent[tui]\"")
+        except Exception:  # noqa: BLE001 — the hint must never break startup
+            pass
     except Exception:
         _tui = None
     _console = _tui.make_console() if _tui else None   # themed: no black-bg highlight on inline `code`/paths
 
-    # DEFAULT UI = the inline rich+prompt_toolkit REPL: it stays in the NORMAL terminal buffer, so native
-    # copy / paste / scrollback work on ANY terminal (incl. macOS Terminal.app), with a pinned composer
-    # (patch_stdout, which provides a pinned static region above a live-updating composer) and
-    # streaming replies. AGENT_TUI=off → plain stdout (handled in tui_enabled). AGENT_TUI=live → the
-    # always-pinned live composer: the bordered box stays at the bottom while its worker publishes lifecycle/
-    # tool progress above it. Provider completion itself uses the off-main blocking watchdog, so response text
-    # arrives assembled there rather than pretending an unfenced background SSE is safe. Opt-in/experimental;
-    # the default REPL (box between turns) is the proven path, and live falls back to it if it can't start.
-    tui_env = os.environ.get("AGENT_TUI", "").strip().lower()
-    use_live = (_tui is not None and tui_env == "live")
+    # THE interactive UI = the LIVE composer (the rich TUI): the bordered box stays pinned at the bottom
+    # while its worker publishes lifecycle/tool progress above it; provider completion uses the off-main
+    # blocking watchdog, so response text arrives assembled rather than pretending an unfenced background
+    # SSE is safe. There is deliberately NO inline-REPL tier anymore (retired 0.3.x — it read as "the TUI
+    # is broken" and served no one): a TTY with the tui extra gets live; everything else (AGENT_TUI=off,
+    # pipes/CI, missing extra) gets the plain stdout loop, which is also the live-startup-failure fallback.
+    use_live = _tui is not None
     _live_runtime = {"active": use_live}
 
     def _ask_user(question, options):
@@ -1784,6 +1805,7 @@ def main() -> None:
         # fight the pinned prompt_toolkit Application for the screen (garbled output) — let the spawn tool's
         # result line carry the child summary instead, as the plain/headless path does.
         _sub_render["fn"] = None if use_live else _rich.subagent_notify
+        _host_render["fn"] = None if use_live else _rich.host_notify
     else:
         _presentation_sink = cli_sink(cfg.show_slice)
     # optional: feed the live web monitor (AGENT_MONITOR=1) — eval path untouched. Writes per-step
@@ -1862,15 +1884,30 @@ def main() -> None:
                     _console.print("  switch with [bold]/model[/] — it lists your configured providers' models.")
             else:
                 _console.print("  /config needs an interactive terminal — run `sliceagent init` instead.")
+        elif cmd == "/plan" and arg.strip().lower() in ("on", "off", "stop", "end", "exit",
+                                                       "cancel", "done"):
+            _set_planning(arg.strip().lower() == "on")
+            _console.print("  planning mode ON — read-only; reply \"go\" when the plan is right."
+                           if _planning["active"] else "  planning mode OFF — full tools restored.")
         elif cmd == "/plan":
+            # The plan IS Active Work (no separate plan channel): show the unresolved item frontier.
+            if _planning["active"]:
+                _console.print("  planning mode is ON (read-only) — reply \"go\" to execute, "
+                               "or /plan off.")
             s = session.active() if session.active_id else None
-            plan = getattr(s, "plan", None) if s else None
-            if not plan:
-                _console.print("  (no active plan — the agent sets one with update_plan on multi-step tasks)")
+            graph = getattr(s, "active_work", None) if s else None
+            items = [it for it in getattr(graph, "items", ()) if getattr(it, "kind", "") != "request"
+                     and getattr(it, "status", "") not in ("done", "cancelled", "superseded", "delivered")]
+            if not items:
+                _console.print("  (no open work items — plan a task with /plan <objective>, or the agent "
+                               "creates items via update_work on multi-step tasks)")
             else:
-                mark = {"done": "✓", "in_progress": "▶", "pending": "○"}
-                for it in plan:
-                    _console.print(f"  {mark.get(it.get('status'), '○')} {it.get('step', '')}", markup=False)
+                for it in items:
+                    mark = "▶" if getattr(it, "status", "") == "in_progress" else "○"
+                    line = f"  {mark} {getattr(it, 'description', '')}"
+                    if getattr(it, "done_when", ""):
+                        line += f"  — done when: {it.done_when}"
+                    _console.print(line, markup=False)
         elif cmd == "/cost":
             for cost_line in _cost_lines(_stats, metrics):
                 _console.print(cost_line, markup=False)
@@ -2071,8 +2108,9 @@ def main() -> None:
         )
 
     info = _workspace_info()
-    # ── choose UI: the always-pinned live composer (AGENT_TUI=live), else the rich+prompt_toolkit REPL ──
-    _input = _tui.TuiInput(_stats, root=root) if _tui else None
+    # ── UI: the always-pinned live composer; the loop below is the PLAIN fallback (off/pipes/startup failure).
+    # The inline-REPL composer (TuiInput.prompt between turns) is retired; TuiInput lives on only inside
+    # run_live's pinned box.
     _live_workspace_setter: dict[str, Any] = {"fn": None}
     _retired_sessions: list[tuple[str, str, str, str]] = []
 
@@ -2173,11 +2211,6 @@ def main() -> None:
             _workspace_notice(f"cache key refresh failed ({type(exc).__name__}: {exc})")
         _stats["workspace"] = _ws_name(root)
         _stats["topic"] = one_line(session.active().goal, 40) if session.active_id else ""
-        if _input is not None:
-            try:
-                _input.set_workspace(root)
-            except Exception as exc:  # noqa: BLE001 — completion refresh is cosmetic
-                _workspace_notice(f"file completion refresh failed ({type(exc).__name__}: {exc})")
         live_setter = _live_workspace_setter.get("fn")
         if live_setter is not None:
             try:
@@ -2269,9 +2302,45 @@ def main() -> None:
         transition = _workspace_transitions.mark_activated(transition)
         return _begin_workspace_continuation(transition)
 
+    def _plan_mode_transform(text: str) -> str:
+        """Arm/disarm the sticky read-only planning surface and compose the planning request.
+
+        The plan lands as Active Work items (no plan document, no second store), so an approval turn
+        needs no rewriting: the frontier is already the plan.
+        """
+        from .plan_mode import build_plan_prompt, is_plan_approval, plan_objective, plan_switch
+        switch = plan_switch(text)
+        if switch:
+            _set_planning(switch == "on")
+            return text
+        objective = plan_objective(text, armed=_planning["active"])
+        if objective:
+            _set_planning(True)
+            return build_plan_prompt(objective)
+        if _planning["active"] and is_plan_approval(text):
+            _set_planning(False)   # the approved plan executes with the full tool surface
+        return text
+
+    def _turn_tools():
+        """The tool surface for the NEXT turn: the read-only planning projection while armed.
+
+        STICKY by design — the flag is NOT consumed here. Iterating on a plan takes several turns,
+        and the old one-shot consume silently restored write access on turn two. Every exit is
+        explicit: an approval ("go"), `/plan off`, or the palette toggle.
+        """
+        if _planning["active"]:
+            from .plan_mode import PlanningSurface
+            return PlanningSurface(tools)
+        return tools
+
     def _run_one_turn(text, sink, signal):
         """One turn for the LIVE composer: route (lexical) → build slice → run_turn with a per-turn dispatch
         that feeds the LiveSink. Runs in run_live's worker thread, so the pinned box stays responsive."""
+        text = _plan_mode_transform(text)
+        # Consume the one-shot planning flag NOW: any abort between here and run_turn (Ctrl-C during
+        # slice build, context-prep error, chitchat fast-path) must not leak read-only mode onto the
+        # user's NEXT unrelated turn (review finding: the lazy _turn_tools() call left the flag armed).
+        turn_tools = _turn_tools()
         active_state = session.active() if session.active_id is not None else None
         if _use_chitchat_fast_path(text, active_state):  # pure social message → cheap reply, no slice/tools
             _chitchat_reply(text, make_dispatcher(sink))
@@ -2303,7 +2372,6 @@ def main() -> None:
             )
             live_dispatch(TurnStarted(
                 request=text, task_title=_stats["topic"], task_id=session.active_id or "",
-                plan=list(session.active().plan or ()),
                 turn_id=local_store.active.artifact_id if local_store.active else "",
             ))
             try:
@@ -2334,7 +2402,7 @@ def main() -> None:
             llm.set_delta_sink(sink.on_delta)
             segment_artifact_id = local_store.active.artifact_id if local_store.active else ""
             result = run_turn(
-                build_slice=build, llm=llm, tools=tools, dispatch=live_dispatch,
+                build_slice=build, llm=llm, tools=turn_tools, dispatch=live_dispatch,
                 hooks=hooks, signal=signal, max_steps=cfg.max_steps,
                 consolidate=lambda: consolidate_checkpoint(session.active(), compact=False),
                 checkpoint=lambda m, s, _g=text: _rec.record(root, goal=_g, messages=m, step=s),
@@ -2378,7 +2446,9 @@ def main() -> None:
                 # The process-owned child bridge follows the one active LiveSink and is
                 # retired at the same boundary.  Child workers never write to the terminal.
                 previous = _sub_render.get("fn")
+                previous_host = _host_render.get("fn")
                 _sub_render["fn"] = sink.subagent_notify
+                _host_render["fn"] = sink.host_notify
                 # Bind before routing/context preparation.  An LLM router may stream;
                 # leaving the previous terminal sink installed lets a late delta clear
                 # the new turn's Preparing state.
@@ -2388,6 +2458,8 @@ def main() -> None:
                 finally:
                     if _sub_render.get("fn") == sink.subagent_notify:
                         _sub_render["fn"] = previous
+                    if _host_render.get("fn") == sink.host_notify:
+                        _host_render["fn"] = previous_host
 
             _tui.run_live(console=_console, stats=_stats, banner_info=info, root=root,
                           run_one_turn=_live_turn, handle_slash=_handle_slash,
@@ -2440,6 +2512,11 @@ def main() -> None:
     if _live_ran:
         pass                              # the live composer ran the whole session (until ctrl-d/exit)
     else:
+        if use_live:
+            # Live was intended (TTY + tui extra) but could not start: say so loudly — a silent downgrade
+            # here has repeatedly read as "the rich TUI is gone".
+            print("  ! live TUI could not start — plain input fallback. Please report this; "
+                  "AGENT_TUI=off silences the attempt.")
         if _tui:
             _tui.banner(_console, info)
         else:
@@ -2450,27 +2527,29 @@ def main() -> None:
             _hint = ("  · no project here — use /cwd <path>, or ask me to find and switch to one")
             (_console.print(f"[grey50]{_hint}[/]") if _console is not None else print(_hint))
         while True:
-            if _input is not None:
-                line = _input.prompt()
-                if line is None:                               # ctrl-d / EOF
-                    break
-                line = line.strip()
-            else:
-                try:
-                    line = input("You: ").strip()
-                except (EOFError, KeyboardInterrupt):
-                    print()
-                    break
+            try:
+                line = input("You: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                break
             if line in ("exit", "quit", "/exit"):
                 break
             if not line:
                 continue
+            if _plan_switch(line):              # `/plan on|off` — mode state, never a turn
+                _plan_mode_transform(line)
+                continue
+            # UNCONDITIONAL, exactly like the live path's _run_one_turn: the sticky mode's EXITS
+            # (an approval, a switch) arrive as ordinary input, so gating this behind a plan-shaped
+            # branch would leave the plain path with no way out of read-only mode.
+            line = _plan_mode_transform(line)
             if line == "/learn" or line.startswith("/learn "):  # transcript → reusable skill (runs as a turn)
                 from .neocortex import build_learn_prompt
                 line = build_learn_prompt(line[len("/learn"):].strip())
             elif _tui and line.startswith("/"):                # navigation palette (no turn)
                 _handle_slash(line)
                 continue
+            turn_tools = _turn_tools()          # eager one-shot consume — see the live-path comment
             # INVARIANT: echo the user's line BEFORE any blocking work (esp. route_topic's LLM round-trip),
             # so the message paints the instant Enter is pressed — not ~0.5-2s later.
             if _tui:                              # anchor the user turn with spacing (fixes cramped layout)
@@ -2501,8 +2580,7 @@ def main() -> None:
                 _stats["topic"] = one_line(session.active().goal, 40) if session.active_id else ""
                 dispatch(TurnStarted(
                     request=line, task_title=_stats["topic"], task_id=session.active_id or "",
-                    plan=list(session.active().plan or ()),
-                    turn_id=local_store.active.artifact_id if local_store.active else "",
+                        turn_id=local_store.active.artifact_id if local_store.active else "",
                 ))
                 try:
                     # Slice construction belongs to each workspace segment. The exact request is reused, but is
@@ -2553,7 +2631,7 @@ def main() -> None:
                 try:
                     segment_artifact_id = local_store.active.artifact_id if local_store.active else ""
                     result = run_turn(
-                        build_slice=build, llm=llm, tools=tools, dispatch=dispatch, hooks=hooks,
+                        build_slice=build, llm=llm, tools=turn_tools, dispatch=dispatch, hooks=hooks,
                         max_steps=cfg.max_steps,
                         consolidate=lambda: consolidate_checkpoint(session.active(), compact=False),
                         checkpoint=lambda m, s, _g=line: recovery.record(

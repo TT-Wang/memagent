@@ -65,12 +65,11 @@ def _host():
 
 
 @check
-def plan_flows_end_to_end():
-    s = Slice(); s.reset("a multi-step task")
-    user, _ = _run(s, _host(), _resp(calls=[_TC("update_plan", {"steps": [
-        {"step": "write the code", "status": "in_progress"},
-        {"step": "add tests", "status": "pending"}]})]))
-    assert "# PLAN" in user and "write the code" in user and "[~]" in user, user[:300]
+def legacy_plan_tool_is_gone():
+    # The PLAN channel was retired (the plan IS Active Work): update_plan must no longer exist as a tool.
+    host = _host()
+    names = {sch["function"]["name"] for sch in host.schemas()}
+    assert "update_plan" not in names, "legacy update_plan tool resurfaced"
 
 
 @check

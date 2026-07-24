@@ -1,5 +1,4 @@
 """Projection truth: virtual resources, live capability guidance, and prompt A/B seam."""
-import hashlib
 import json
 import os
 import sys
@@ -22,7 +21,8 @@ from sliceagent.regions import build_context_blocks  # noqa: E402
 from sliceagent.runtime_persistence import CoreArtifactFS  # noqa: E402
 from sliceagent.seed import (_slice_context, build_artifacts,
                              physical_active_files)  # noqa: E402
-from sliceagent.subagent import SubagentHost, _ObservationSink  # noqa: E402
+from sliceagent.scoped_agent import ScopedSurface, allowed_for  # noqa: E402
+from sliceagent.scoped_spawn import ScopedSpawnHost             # noqa: E402
 from sliceagent.tools import LocalToolHost  # noqa: E402
 
 CHECKS = []
@@ -128,7 +128,6 @@ def child_evidence_page_read_keeps_root_artifact_provenance_but_is_not_a_report_
 
     store = ArtifactStore(tempfile.mkdtemp(prefix="projection-child-evidence-"))
     view = "     1\treturn verified_value"
-    encoded = view.encode()
     store.put(Artifact(
         id="subagent-evidence-root", kind="subagent", workspace_id="workspace",
         session_id="session", task_id="task", status="ok",
@@ -137,9 +136,6 @@ def child_evidence_page_read_keeps_root_artifact_provenance_but_is_not_a_report_
             "observations": [{
                 "v": 1, "tool": "read_file", "args": {"path": "value.py"},
                 "status": "succeeded", "view": view,
-                "raw_sha256": hashlib.sha256(encoded).hexdigest(),
-                "view_sha256": hashlib.sha256(encoded).hexdigest(),
-                "raw_bytes": len(encoded), "view_bytes": len(encoded),
                 "redacted": False, "truncated": False,
             }],
         },
@@ -169,13 +165,9 @@ def quality_grounding_uses_only_the_bounded_preview_not_the_full_evidence_archiv
     preview = "bounded preview bytes"
 
     def row(text, *, truncated):
-        encoded = text.encode()
-        digest = hashlib.sha256(encoded).hexdigest()
         return {
             "v": 1, "tool": "read_file", "args": {"path": "large.py"},
             "status": "succeeded", "view": text,
-            "raw_sha256": digest, "view_sha256": digest,
-            "raw_bytes": len(encoded), "view_bytes": len(encoded),
             "redacted": False, "truncated": truncated,
         }
 
@@ -183,7 +175,7 @@ def quality_grounding_uses_only_the_bounded_preview_not_the_full_evidence_archiv
         "status": "ok",
         "structured_body": {
             "brief": {"objective": "inspect large.py", "scope": ["large.py"]},
-            "report": "child conclusion", "claims": [],
+            "report": "child conclusion",
             "observations": [row(full, truncated=False)],
             "observation_preview": [row(preview, truncated=True)],
         },
@@ -241,10 +233,7 @@ def child_isolation_and_observation_capsules_follow_canonical_host_routing():
     host._artifacts = CoreArtifactFS(_ArtifactStore())
     absolute_mount = os.path.join(root, "artifacts")
     absolute_file = os.path.join(absolute_mount, "turn-absolute.md")
-    child = SubagentHost(
-        host, llm=None, retriever=None, memory=None,
-        max_depth=1, depth=1, spec=BUILTIN_AGENTS["explorer"],
-    )
+    child = ScopedSurface(host, allowed_for(BUILTIN_AGENTS["explorer"], host))
 
     # Absolute and relative spellings route to the same virtual archive and are both parent-private.
     for path in ("artifacts/turn-absolute.md", absolute_file):
@@ -253,30 +242,13 @@ def child_isolation_and_observation_capsules_follow_canonical_host_routing():
     blocked_list = child.run("list_files", {"path": absolute_mount})
     assert "private namespace" in blocked_list, blocked_list
 
-    # A virtual read result is archive testimony, not a workspace observation capsule.
-    virtual = _invoke_read(host, absolute_file, "virtual-child-read")
-    sink = _ObservationSink(host.resource_ref, host._archive_handle)
-    sink(ToolResult(
-        "read_file", {"path": absolute_file}, virtual.text, virtual.failing,
-        status=virtual.status.value, invocation_id=virtual.invocation.id, outcome=virtual,
-    ))
-    assert sink.observations == ()
-
-    # Once real project bytes shadow the mount, canonical routing classifies them as physical. Child reads and
-    # sealed observations must both remain available; a lexical `artifacts/` deny would get this wrong.
+    # Once real project bytes shadow the mount, canonical routing classifies them as physical. Child
+    # reads must remain available; a lexical `artifacts/` deny would get this wrong.
     os.makedirs(absolute_mount, exist_ok=True)
     with open(absolute_file, "w", encoding="utf-8") as stream:
         stream.write("physical child-visible bytes")
     assert "physical child-visible bytes" in child.run("read_file", {"path": absolute_file})
     assert "turn-absolute.md" in child.run("list_files", {"path": absolute_mount})
-    physical = _invoke_read(host, absolute_file, "physical-child-read")
-    sink(ToolResult(
-        "read_file", {"path": absolute_file}, physical.text, physical.failing,
-        status=physical.status.value, invocation_id=physical.invocation.id, outcome=physical,
-    ))
-    assert len(sink.observations) == 1
-    assert sink.observations[0].args["path"] == absolute_file
-    assert "physical child-visible bytes" in sink.observations[0].view
 
     # The host-private physical store is not a project shadow and stays isolated under its absolute spelling.
     private_file = os.path.join(root, ".sliceagent", "blobs", "parent.txt")
@@ -325,32 +297,27 @@ class _Inner:
 
 
 @check
-def delegation_guidance_is_compiled_from_core_and_advanced_schemas():
-    core = SubagentHost(_Inner(), llm=None, retriever=None, memory=None,
-                        max_depth=1, core_mode=True)
-    core_schema = next(s for s in core.schemas() if s["function"]["name"] == "spawn_agent")
-    props = core_schema["function"]["parameters"]["properties"]
-    assert props["agent"]["enum"] == ["explorer"]
+def delegation_guidance_is_compiled_from_the_live_spawn_schema():
+    host = ScopedSpawnHost(_Inner(), llm=None, retriever=None, memory=None)
+    schema = next(s for s in host.schemas() if s["function"]["name"] == "spawn_agent")
+    props = schema["function"]["parameters"]["properties"]
+    assert set(props) == {"agent", "task", "work_item_id", "scope", "exclusions"}
+    kinds = props["agent"]["enum"]
+    assert "explorer" in kinds and "general" in kinds
     assert "name" not in props and "grants" not in props
-    core_text = render_delegation_guidance(core.schemas())
-    assert "Available agent kinds: explorer" in core_text
-    assert "standing specialist" not in core_text and "grants field" not in core_text
-    assert "complete normalized report directly as this tool result" in core_text
-    assert "archive and evidence locators" in core_text and "not required for delivery" in core_text
-    assert "ignore-aware source map" in core_text
-    assert "20-30k source tokens" in core_text and "80-120 KB" in core_text
-    assert "typed scope field" in core_text
-    assert "scheduler owns those physical waves" in core_text
-    assert "user explicitly requests a child count" in core_text
-    assert "blindly reading every file in full" in core_text
-    assert "coverage gaps" in core_text and "cite the sources" in core_text
-    assert "work_item_id" not in core_text and "DELEGATION FAN-IN" not in core_text
-
-    advanced = SubagentHost(_Inner(), llm=None, retriever=None, memory=None,
-                            max_depth=1, core_mode=False)
-    advanced_text = render_delegation_guidance(advanced.schemas())
-    assert "general" in advanced_text and "standing specialist" in advanced_text
-    assert "grants field" in advanced_text
+    text = render_delegation_guidance(host.schemas())
+    assert "Available agent kinds: " in text and "explorer" in text and "general" in text
+    assert "standing specialist" not in text and "grants field" not in text
+    assert "complete normalized report directly as this tool result" in text
+    assert "archive and evidence locators" in text and "not required for delivery" in text
+    assert "ignore-aware source map" in text
+    assert "20-30k source tokens" in text and "80-120 KB" in text
+    assert "typed scope field" in text
+    assert "scheduler owns those physical waves" in text
+    assert "user explicitly requests a child count" in text
+    assert "blindly reading every file in full" in text
+    assert "coverage gaps" in text and "cite the sources" in text
+    assert "work_item_id" not in text and "DELEGATION FAN-IN" not in text
 
 
 @check
@@ -512,7 +479,8 @@ def self_audit_projects_exact_paged_exchange_pairs_and_a_mandatory_quality_gate(
         in by_id["region:quality_evidence_result"][0].content
     assert "report prose alone proves only that the child said it" \
         in by_id["region:quality_evidence_result"][0].content
-    assert "legacy/explicit `claims`" in by_id["region:quality_evidence_result"][0].content
+    assert "separates `report` (what the child claimed) and `observations`" \
+        in by_id["region:quality_evidence_result"][0].content
     assert "redacted or truncated" in by_id["region:quality_evidence_result"][0].content
     assert "open the exact immutable turn" in locator.content
 
@@ -526,7 +494,6 @@ def quality_projection_carries_receipt_grounding_and_freezes_its_exact_bytes():
         "     2\t    stored = get_password(username)\n"
         "     3\t    return password == stored"
     )
-    auth_bytes = auth_view.encode("utf-8")
     child = SimpleNamespace(
         id="subagent-grounding", kind="subagent", schema_version=1,
         workspace_id="workspace", timestamp="2026-07-11T00:00:00Z",
@@ -535,27 +502,15 @@ def quality_projection_carries_receipt_grounding_and_freezes_its_exact_bytes():
         brief={"objective": "Inspect auth.py.", "scope": ["auth.py"]},
         summary="password finding", files=("auth.py",), refs=(), uncertainty=(), error="",
         structured_body={
-            "brief": {"objective": "Inspect auth.py.", "scope": ["auth.py"],
-                      "report_shape": "Report the top bug."},
+            "brief": {"objective": "Inspect auth.py.", "scope": ["auth.py"]},
             # Deliberately stronger than the observed bytes: the capsule must preserve this distinction.
             "report": "auth.py stores passwords in plaintext before comparing them.",
-            "claims": [{
-                "v": 1,
-                "text": "auth.py stores passwords in plaintext before comparing them.",
-                "report_exact": "auth.py stores passwords in plaintext before comparing them.",
-                "modality": "inference",
-                "observation_refs": [hashlib.sha256(auth_bytes).hexdigest()],
-                "prerequisites": [],
-            }],
             "findings": ["Passwords are stored in plaintext."],
             "coverage": "auth.py inspected", "files": ["auth.py"],
-            "gaps": [], "uncertainty": [], "conflicts": [],
+            "gaps": [], "uncertainty": [],
             "observations": [{
                 "v": 1, "tool": "read_file", "args": {"path": "auth.py"},
                 "status": "succeeded", "view": auth_view,
-                "raw_sha256": hashlib.sha256(auth_bytes).hexdigest(),
-                "view_sha256": hashlib.sha256(auth_bytes).hexdigest(),
-                "raw_bytes": len(auth_bytes), "view_bytes": len(auth_bytes),
                 "redacted": False, "truncated": False,
             }],
         },
@@ -596,8 +551,7 @@ def quality_projection_carries_receipt_grounding_and_freezes_its_exact_bytes():
     envelope = json.loads(grounding["source_text"])
     assert envelope["brief"]["scope"] == ["auth.py"]
     assert envelope["report"] == child.structured_body["report"]
-    assert envelope["claims"] == child.structured_body["claims"]
-    assert envelope["claims"][0]["report_exact"] in envelope["report"]
+    assert "claims" not in envelope, "typed claim projections are retired; the report is the testimony"
     assert envelope["observations"][0]["view"] == auth_view
     assert "plaintext" not in envelope["observations"][0]["view"].casefold(), \
         "the child report's plaintext-storage assertion is not supported by the returned auth.py bytes"

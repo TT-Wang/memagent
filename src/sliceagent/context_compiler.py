@@ -93,6 +93,10 @@ def _render_item(
         ))
     if item.dependencies:
         lines.append("  depends on: " + ", ".join(item.dependencies))
+    if getattr(item, "done_when", ""):
+        lines.append(f"  done when: {item.done_when}")
+    if getattr(item, "verify", ()):
+        lines.append("  verify: " + " && ".join(item.verify))
     if item.resource_refs:
         lines.append("  resources: " + ", ".join(
             f"{ref.kind}:{ref.ref}@workspace-{ref.workspace_epoch}"
@@ -243,7 +247,7 @@ def _receipt_block(s, *, order: int = 2) -> ContextBlock | None:
     artifact_id = str(getattr(s.continuity, "last_receipt_artifact_id", "") or "")
     parts = receipt_summary_parts(receipt)
     lines = [
-        "# LATEST SEALED EXECUTION RECEIPT (lifecycle + source-coverage arithmetic; not proof of claim "
+        "# LATEST SEALED EXECUTION RECEIPT (lifecycle arithmetic; not proof of "
         "correctness, world state, or task satisfaction)",
         f"disposition: {receipt.get('disposition') or 'unknown'}",
         *(f"- {part}" for part in parts),
