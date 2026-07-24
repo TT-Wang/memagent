@@ -2337,10 +2337,6 @@ def main() -> None:
         """One turn for the LIVE composer: route (lexical) → build slice → run_turn with a per-turn dispatch
         that feeds the LiveSink. Runs in run_live's worker thread, so the pinned box stays responsive."""
         text = _plan_mode_transform(text)
-        # Consume the one-shot planning flag NOW: any abort between here and run_turn (Ctrl-C during
-        # slice build, context-prep error, chitchat fast-path) must not leak read-only mode onto the
-        # user's NEXT unrelated turn (review finding: the lazy _turn_tools() call left the flag armed).
-        turn_tools = _turn_tools()
         active_state = session.active() if session.active_id is not None else None
         if _use_chitchat_fast_path(text, active_state):  # pure social message → cheap reply, no slice/tools
             _chitchat_reply(text, make_dispatcher(sink))
@@ -2376,9 +2372,15 @@ def main() -> None:
             ))
             try:
                 _expand_mentions(text)        # @path → pin the file into OPEN FILES
+                # Resolve the surface PER SEGMENT, not once per turn: a workspace handoff rebinds
+                # `tools` to the target's host mid-loop, so a hoisted capture left the continuation
+                # executing against the workspace the user just LEFT while its slice described the
+                # new one. The seed is built from the SAME object run_turn executes with, so a
+                # planning turn can never advertise a tool its surface will steer.
+                turn_tools = _turn_tools()
                 build = make_build_slice(
-                    session, tools, retriever, memory, text, session.session_id, model_id=llm.model,
-                    event_ledger=_event_ledger,
+                    session, turn_tools, retriever, memory, text, session.session_id,
+                    model_id=llm.model, event_ledger=_event_ledger,
                 )
             except KeyboardInterrupt:
                 live_dispatch(TurnInterrupted("aborted", "cancelled during context preparation"))
@@ -2549,7 +2551,6 @@ def main() -> None:
             elif _tui and line.startswith("/"):                # navigation palette (no turn)
                 _handle_slash(line)
                 continue
-            turn_tools = _turn_tools()          # eager one-shot consume — see the live-path comment
             # INVARIANT: echo the user's line BEFORE any blocking work (esp. route_topic's LLM round-trip),
             # so the message paints the instant Enter is pressed — not ~0.5-2s later.
             if _tui:                              # anchor the user turn with spacing (fixes cramped layout)
@@ -2586,9 +2587,10 @@ def main() -> None:
                     # Slice construction belongs to each workspace segment. The exact request is reused, but is
                     # neither echoed nor admitted again after a switch.
                     _expand_mentions(line)
+                    turn_tools = _turn_tools()   # per SEGMENT — see the live path's note
                     build = make_build_slice(
-                        session, tools, retriever, memory, line, session.session_id, model_id=llm.model,
-                        event_ledger=_event_ledger,
+                        session, turn_tools, retriever, memory, line, session.session_id,
+                        model_id=llm.model, event_ledger=_event_ledger,
                     )
                 except KeyboardInterrupt:
                     dispatch(TurnInterrupted("aborted", "cancelled during context preparation"))

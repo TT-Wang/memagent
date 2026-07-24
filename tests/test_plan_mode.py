@@ -337,6 +337,47 @@ def only_a_whole_message_approval_ends_planning():
 
 
 @check
+def the_turn_surface_follows_a_workspace_handoff():
+    """P1 (adversarial review, pre-existing): `turn_tools` was captured ONCE before the segment
+    loop, but a workspace handoff rebinds the host mid-loop. The continuation therefore executed
+    against the workspace the user had just LEFT while its slice described the new one — and the
+    seed was built from a different object than run_turn executed with, so a planning turn could
+    advertise tools its own surface would steer.
+
+    Models the loop's resolution order: the surface must be re-resolved per SEGMENT, and the seed
+    must be built from the same object the turn executes with.
+    """
+    hosts = {"A": _StubHost(), "B": _StubHost()}
+    live = {"tools": hosts["A"]}
+    planning = {"active": False}
+
+    def turn_tools():                       # cli._turn_tools — reads the CURRENT host every call
+        return PlanningSurface(live["tools"]) if planning["active"] else live["tools"]
+
+    def segment(handoff_to=None):
+        """One segment: resolve the surface, build the seed from it, then execute with it."""
+        surface = turn_tools()
+        seed_host, exec_host = surface, surface      # the invariant: one object, not two
+        if handoff_to:                                # change_workspace rebinds the live host
+            live["tools"] = hosts[handoff_to]
+        return seed_host, exec_host
+
+    seed1, exec1 = segment(handoff_to="B")
+    assert seed1 is exec1 is hosts["A"], "first segment must use workspace A"
+    seed2, exec2 = segment()
+    assert seed2 is exec2 is hosts["B"], (
+        "the continuation still holds the OLD workspace's host — it would edit the workspace the "
+        "user just left while claiming to work in the new one")
+
+    # and while planning is armed the seed sees exactly the surface that will execute
+    planning["active"] = True
+    seed3, exec3 = segment()
+    assert seed3 is exec3 and isinstance(seed3, PlanningSurface)
+    assert "spawn_agent" not in {s["function"]["name"] for s in seed3.schemas()}, (
+        "a planning turn must not advertise a tool its own surface steers")
+
+
+@check
 def a_planning_turn_can_never_execute_shell_through_status_inheritance():
     """ZERO-MUTATION LAW, second hole (adversarial review): the surface gate steers a REQUESTED
     ready/delivered/verified, but the host used to trigger verification on the RESULTING item state.
@@ -390,12 +431,18 @@ def a_planning_turn_can_never_execute_shell_through_status_inheritance():
 
 @check
 def slashless_plan_trigger_ignores_talk_about_a_plan():
-    """The slashless form must not fire on the likeliest phrasing while a plan is on screen."""
+    """The slashless form must not fire on talk ABOUT a plan — the likeliest phrasing at the exact
+    moment a plan is on screen and the agent has just asked for approval. Every rejected case below
+    was produced by adversarial review as a real false-arm."""
     from sliceagent.plan_mode import plan_objective
     for text in ("plan looks good", "plan is fine", "plan sounds great", "plan lgtm",
-                 "plan seems right", "plan was wrong"):
+                 "plan seems right", "plan was wrong", "plan looks good, go ahead", "plan approved",
+                 "plan accepted", "plan seems right, do it", "plan b is fine",
+                 "plan on refactoring later", "plan go ahead"):
         assert plan_objective(text) == "", f"{text!r} is commentary, not a planning request"
-    for text in ("plan the auth refactor", "plan for the migration", "plan to split the module"):
+    for text in ("plan the auth refactor", "plan for the migration", "plan to split the module",
+                 "plan a rewrite of the parser", "plan how the cache is keyed",
+                 "plan migrating v3 to v4"):
         assert plan_objective(text), f"{text!r} is a real planning request"
     # while armed, slashless input belongs to the planning turn; explicit /plan still re-plans
     assert plan_objective("plan another approach", armed=True) == ""

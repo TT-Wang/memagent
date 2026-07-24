@@ -28,7 +28,12 @@ _PLAN_SWITCHES = frozenset({"on", "off", "stop", "end", "exit", "cancel", "done"
 _PLAN_COMMENTARY_HEADS = frozenset({
     "is", "was", "isn't", "looks", "look", "looked", "seems", "seem", "seemed", "sounds", "sound",
     "sounded", "works", "worked", "reads", "makes", "lgtm", "good", "great", "fine", "ok", "okay",
+    "approved", "approve", "accepted", "on",   # "plan approved", "plan on refactoring later"
 })
+# A copula this early makes the remainder a PREDICATE about a plan ("plan b is fine"), not an
+# objective. Checked over the first few tokens only, so "plan how the cache is keyed" still arms.
+_PLAN_COPULAS = frozenset({"is", "isn't", "are", "was", "were", "looks", "seems", "sounds"})
+_PLAN_COPULA_WINDOW = 3
 
 # Whole-message approvals that END sticky planning. Matched against the ENTIRE message on purpose:
 # auto-exit is the direction that restores write access, so a longer message merely starting with
@@ -74,8 +79,12 @@ def plan_objective(text: str, *, armed: bool = False) -> str:
     if not raw.lower().startswith("/plan "):
         if armed:
             return ""
-        head = body.split(" ", 1)[0].lower().strip(",.:;!?")
-        if head in _PLAN_COMMENTARY_HEADS:
+        tokens = [token.lower().strip(",.:;!?") for token in body.split()]
+        if tokens[0] in _PLAN_COMMENTARY_HEADS:
+            return ""
+        if any(token in _PLAN_COPULAS for token in tokens[:_PLAN_COPULA_WINDOW]):
+            return ""
+        if is_plan_approval(body):        # "plan looks good" handled above; "plan go ahead" here
             return ""
     return body
 
