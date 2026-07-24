@@ -11,9 +11,7 @@ import threading
 import time
 from typing import Callable
 
-from .access import AllAccess, FileAccess, ReadAllAccess
-from .execution import (ToolEffect, ToolInvocation, ToolOutcome, ToolPurity, ToolStatus,
-                        coerce_tool_status)
+from .execution import (ToolEffect, ToolInvocation, ToolOutcome, ToolPurity, ToolStatus)
 
 
 @dataclass(frozen=True)
@@ -145,7 +143,6 @@ def _lifecycle_timeout_effects(task: ScheduledTool, settled: ToolOutcome) -> tup
                 "kind": str(task.invocation.args.get("agent") or ""),
                 "status": operational_status,
                 "operational_status": operational_status,
-                "source_coverage_status": "not_assessed",
                 "stop_reason": "indeterminate" if uncertain else "error",
                 "stop_cause": "delegation_timeout",
                 "partial": False,
@@ -727,7 +724,6 @@ def run_ordered(
     timeout: float | None = None,
     lifecycle_timeout: float | None = None,
     on_outcomes: Callable[[list[ToolOutcome]], None] | None = None,
-    on_wave_ready: Callable[[list[ScheduledTool]], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
 ) -> list[ToolOutcome]:
     """Run pure-read waves and ordered barriers, preserving provider result order.
@@ -773,10 +769,6 @@ def run_ordered(
                 ready.append(task)
             else:
                 prepared[id(task)] = outcome
-        # The admission callback also needs to observe an entirely preflight-cancelled wave so it can release
-        # reservations that were proved never started before allocating later barriers.
-        if on_wave_ready is not None:
-            on_wave_ready(ready)
         if should_cancel is not None and should_cancel():
             cancelled_ready = {id(task): _cancelled(task, "turn cancellation requested") for task in ready}
             wave_outcomes = [prepared.get(id(task), cancelled_ready.get(id(task))) for task in wave]
@@ -862,40 +854,4 @@ def run_ordered(
     return outcomes
 
 
-# Legacy surface -----------------------------------------------------------------
-
-Task = tuple[list, Callable[[], str]]
-
-
-def _purity_from_accesses(accesses: list) -> ToolPurity:
-    """Compatibility inference for callers that predate registry purity metadata."""
-    for access in accesses:
-        if isinstance(access, (AllAccess,)):
-            return ToolPurity.UNKNOWN
-        if isinstance(access, FileAccess) and access.operation in ("write", "readwrite"):
-            return ToolPurity.EFFECTFUL
-        if not isinstance(access, (FileAccess, ReadAllAccess)):
-            return ToolPurity.UNKNOWN
-    return ToolPurity.PURE_READ
-
-
-def run_scheduled(tasks: list[Task], max_workers: int = 8, timeout: float | None = None) -> list[str]:
-    """Backward-compatible string projection over the ordered typed scheduler."""
-    scheduled: list[ScheduledTool] = []
-    for index, (accesses, fn) in enumerate(tasks):
-        invocation = ToolInvocation(f"legacy_{index}", "legacy", {}, index)
-
-        def execute(call=fn, inv=invocation):
-            out = call()
-            text = "" if out is None else str(out)
-            explicit = getattr(out, "status", None)
-            if explicit is None:
-                explicit = getattr(out, "ok", None)
-            return ToolOutcome(inv, coerce_tool_status(explicit), text,
-                               tuple(getattr(out, "effects", ()) or ()))
-
-        scheduled.append(ScheduledTool(invocation, _purity_from_accesses(accesses), execute))
-    return [out.text for out in run_ordered(scheduled, max_workers=max_workers, timeout=timeout)]
-
-
-__all__ = ["ScheduledTool", "run_ordered", "run_scheduled"]
+__all__ = ["ScheduledTool", "run_ordered"]

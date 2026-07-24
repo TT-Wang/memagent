@@ -10,7 +10,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from sliceagent.agents import AgentSpec, BUILTIN_AGENTS, load_agents  # noqa: E402
 from sliceagent.execution import ToolStatus                           # noqa: E402
-from sliceagent.subagent import SubagentHost                          # noqa: E402
+from sliceagent.scoped_agent import ScopedSurface, allowed_for        # noqa: E402
+from sliceagent.scoped_spawn import ScopedSpawnHost                   # noqa: E402
 from sliceagent.access import AllAccess, ReadAllAccess                # noqa: E402
 
 CHECKS = []
@@ -35,7 +36,7 @@ def read_only_derivation():
 
 @check
 def load_agents_builtins_only_when_no_dirs():
-    assert set(load_agents([])) == {"explorer", "general", "verification", "synthesiser", "reviewer"}
+    assert set(load_agents([])) == {"explorer", "general", "verification", "reviewer", "debugger"}
 
 
 @check
@@ -66,48 +67,51 @@ class _Inner:
 
 
 @check
-def spawn_agent_schema_lists_the_roster():
-    host = SubagentHost(_Inner(), llm=None, retriever=None, memory=None, max_depth=1, depth=0)
+def spawn_agent_schema_lists_the_kinds():
+    host = ScopedSpawnHost(_Inner(), llm=None, retriever=None, memory=None)
     names = [s["function"]["name"] for s in host.schemas()]
     # ONE delegation tool now — spawn_agent subsumes the old spawn_explore/spawn_subagent (measured parity)
     assert "spawn_agent" in names
     assert "spawn_explore" not in names and "spawn_subagent" not in names, names
     sa = next(s for s in host.schemas() if s["function"]["name"] == "spawn_agent")
     d = sa["function"]["description"]
+    props = sa["function"]["parameters"]["properties"]
     assert "explorer" in d and "general" in d            # kinds still enumerated
-    assert "name" in d and "HIRE" in d                   # the identity/hire dial is taught in-schema
+    assert set(props) == {"agent", "task", "scope", "exclusions", "work_item_id"}   # P2: optional binding
+    assert "name" not in props and "HIRE" not in d       # the standing-specialist hire dial is gone
     assert "complete normalized report" in d and "directly in this tool result" in d
     assert "archive locator is optional" in d
     assert "20–30k source tokens" in d and "Waves of 2–3" in d
     assert "later-wave partitions must actually be launched" in d and "fixed future wave" in d
     assert "one child per directory" in d and "exact child count" in d
     assert "one per area/module/question" not in d, "schema must not contradict bounded-wave guidance"
-    assert "work_item_id" not in sa["function"]["parameters"]["properties"], \
-        "delegation must not couple scheduler lifecycle to Active Work"
-    scope = sa["function"]["parameters"]["properties"]["scope"]["description"]
+    # P2: the OPTIONAL work_item_id binding carries the acceptance contract into the brief; the child
+    # OUTCOME still never mutates Active Work (scheduler lifecycle stays decoupled — see
+    # test_subagent_work_binding.test_direct_child_outcome_does_not_mutate_active_work).
+    assert "OPTIONAL" in props["work_item_id"]["description"]
+    scope = props["scope"]["description"]
     assert "source-weight-bounded" in scope
 
 
 @check
 def spawn_agent_unknown_is_graceful():
-    host = SubagentHost(_Inner(), llm=None, retriever=None, memory=None, max_depth=1, depth=0)
+    host = ScopedSpawnHost(_Inner(), llm=None, retriever=None, memory=None)
     out = host.run("spawn_agent", {"agent": "nope", "task": "x"})
     assert out.status is ToolStatus.STEERED and "unknown agent" in out, out
 
 
 @check
 def spawn_agent_access_readonly_vs_writable():
-    host = SubagentHost(_Inner(), llm=None, retriever=None, memory=None, max_depth=1, depth=0)
+    host = ScopedSpawnHost(_Inner(), llm=None, retriever=None, memory=None)
     assert isinstance(host.accesses("spawn_agent", {"agent": "explorer"})[0], ReadAllAccess)
     assert isinstance(host.accesses("spawn_agent", {"agent": "general"})[0], AllAccess)
 
 
 @check
 def custom_agent_child_tools_restricted_to_allowlist():
-    # a child host built for a custom read-only spec exposes ONLY its allowlist.
+    # a child surface built for a custom read-only spec exposes ONLY its allowlist.
     spec = AgentSpec("reviewer", tools=("read_file", "grep"))
-    child = SubagentHost(_Inner(), llm=None, retriever=None, memory=None,
-                         max_depth=1, depth=1, spec=spec)
+    child = ScopedSurface(_Inner(), allowed_for(spec, _Inner()))
     names = [s["function"]["name"] for s in child.schemas()]
     assert names == ["read_file"], names   # _Inner only offers read_file; grep absent there but allowlisted
 
@@ -125,17 +129,16 @@ class _InnerWithAsk:
 @check
 def subagent_cannot_ask_user_but_parent_can():
     # CHILD (any spec) must not be offered ask_user; a general child keeps its other (writable) tools.
-    child = SubagentHost(_InnerWithAsk(), llm=None, retriever=None, memory=None,
-                         max_depth=1, depth=1, spec=BUILTIN_AGENTS["general"])
+    inner = _InnerWithAsk()
+    child = ScopedSurface(inner, allowed_for(BUILTIN_AGENTS["general"], inner))
     names = [s["function"]["name"] for s in child.schemas()]
     assert "ask_user" not in names, names
     assert "edit_file" in names, "a general child keeps its writable tools — only ask_user is barred"
     # defense-in-depth: even a hallucinated ask_user call is barred, not executed (no user prompt → no stall)
     out = child.run("ask_user", {"question": "?"})
-    assert out.status is ToolStatus.STEERED and "a subagent cannot ask the user" in out, out
-    # the top-level agent (parent host, spec=None) CAN still ask the user
-    parent = SubagentHost(_InnerWithAsk(), llm=None, retriever=None, memory=None,
-                          max_depth=1, depth=0)
+    assert out.status is ToolStatus.CANCELLED and "a subagent cannot ask the user" in out, out
+    # the top-level agent (parent host) CAN still ask the user
+    parent = ScopedSpawnHost(_InnerWithAsk(), llm=None, retriever=None, memory=None)
     assert "ask_user" in [s["function"]["name"] for s in parent.schemas()]
 
 

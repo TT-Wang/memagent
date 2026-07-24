@@ -29,8 +29,7 @@ from .events import (
     TurnInterrupted,
 )
 from .execution import ToolStatus, reconciliation_targets
-from .regions import MAX_PLAN_CHARS, MAX_PLAN_ITEMS, record_action, record_note
-from .subagent_contract import SubagentClaim
+from .regions import record_action, record_note
 from .text_utils import one_line
 
 
@@ -39,7 +38,6 @@ class _CompatibilityFamily(Enum):
 
     WORLD = auto()
     INTENT = auto()
-    PLAN = auto()
     WORK = auto()
 
 
@@ -51,7 +49,6 @@ _COMPATIBILITY_FAMILY: dict[str, _CompatibilityFamily] = {
     "requirement_done": _CompatibilityFamily.INTENT,
     "drop_requirement": _CompatibilityFamily.INTENT,
     "supersede_requirement": _CompatibilityFamily.INTENT,
-    "update_plan": _CompatibilityFamily.PLAN,
     "update_work": _CompatibilityFamily.WORK,
 }
 
@@ -60,7 +57,7 @@ _DIRECT_EDIT_TOOLS = frozenset({"edit_file", "append_to_file", "str_replace"})
 _DIRECTORY_SCOPE_TOOLS = frozenset({"list_files", "grep", "glob"})
 _NON_PROGRESS_TOOLS = frozenset({
     "require", "requirement_done", "drop_requirement", "supersede_requirement",
-    "update_plan", "update_work", "world_set", "world_clear",
+    "update_work", "world_set", "world_clear",
 })
 
 
@@ -179,13 +176,9 @@ class SliceReducer:
     @reduce.register
     def _(self, event: TurnEnd) -> None:
         s = self._slice()
-        open_plan = any(
-            not isinstance(item, dict) or item.get("status") != "done"
-            for item in (s.plan or ())
-        )
         unresolved = bool(
             s.last_error or s.open_report or s.reconciliation_required
-            or s.intent.open_entries() or open_plan
+            or s.intent.open_entries()
         )
         if event.stop_reason == "end_turn" and not unresolved:
             s.task.mark_objective_provisional()
@@ -317,7 +310,6 @@ class SliceReducer:
         from .fan_in import (
             normalize_evidence_account,
             normalize_evidence_status,
-            normalize_integration_policy,
         )
 
         if name not in _DELEGATION_TOOLS:
@@ -333,27 +325,8 @@ class SliceReducer:
             artifact_id = str(payload.get("artifact_id") or "")
             if artifact_id:
                 call["child_artifact_id"] = artifact_id[:200]
-            target = payload.get("delegation_target")
-            if isinstance(target, str) and target.strip() and len(target.encode("utf-8")) <= 300:
-                call["child_target"] = target.strip()
-            work_item_id = payload.get("work_item_id")
-            if (isinstance(work_item_id, str) and work_item_id.strip()
-                    and len(work_item_id.encode("utf-8")) <= 200):
-                call["child_work_item_id"] = work_item_id.strip()
-            source_status = str(
-                payload.get("source_coverage_status") or payload.get("epistemic_status") or ""
-            ).strip().casefold()
-            source_status = {
-                "grounded": "source_complete", "partial": "source_partial",
-                "unsupported": "source_unsupported",
-            }.get(source_status, source_status)
-            if source_status in {
-                "source_complete", "source_partial", "source_unsupported", "not_assessed",
-            }:
-                call["child_source_coverage_status"] = source_status
-            # Evidence retention and parent integration policy are deliberately independent from the
-            # synthesiser's source_coverage_status. Missing legacy fields degrade in the live projection, but
-            # are not persisted as if that producer explicitly declared a v1 evidence account or policy.
+            # Evidence retention degrades in the live projection when legacy fields are absent, but is not
+            # persisted as if that producer explicitly declared a v1 evidence account.
             evidence_account_declared = (
                 "explorer_evidence" in payload or "evidence_account" in payload
             )
@@ -375,38 +348,9 @@ class SliceReducer:
                 )
             if account:
                 call["child_evidence_account"] = account
-            policy_value = payload.get("integration_policy")
-            if not policy_value and (payload.get("report_required") is True
-                                     or account.get("report_required") is True):
-                policy_value = "report_required"
-            policy_declared = (
-                "integration_policy" in payload or isinstance(payload.get("report_required"), bool)
-                or isinstance(account.get("report_required"), bool)
-            )
-            if policy_declared:
-                call["child_integration_policy"] = normalize_integration_policy(policy_value)
             operational = str(payload.get("operational_status") or payload.get("status") or "").strip()
             if operational:
                 call["child_operational_status"] = operational[:40]
-            for target, source in (
-                ("child_required_ref_count", "required_ref_count"),
-                ("child_consumed_ref_count", "consumed_refs"),
-                ("child_cited_ref_count", "cited_refs"),
-                ("child_covered_ref_count", "covered_refs"),
-                ("child_source_gap_count", "source_gaps"),
-            ):
-                legacy_source = {
-                    "covered_refs": "grounding_refs", "source_gaps": "grounding_gaps",
-                }.get(source, "")
-                value = payload.get(source) or (payload.get(legacy_source) if legacy_source else ()) or ()
-                if source == "required_ref_count":
-                    try:
-                        count = max(0, min(int(value or 0), 10_000))
-                    except (TypeError, ValueError, OverflowError):
-                        count = 0
-                else:
-                    count = min(len(value), 10_000) if isinstance(value, (list, tuple)) else 0
-                call[target] = count
             raw_scope = payload.get("scope") or ()
             if (isinstance(raw_scope, (list, tuple)) and len(raw_scope) <= 16
                     and all(
@@ -417,23 +361,6 @@ class SliceReducer:
                 call["child_scope"] = list(dict.fromkeys(
                     item.strip() for item in raw_scope
                 ))
-            normalized_claims: list[dict] = []
-            raw_claims = payload.get("claims") or ()
-            valid_claims = isinstance(raw_claims, (list, tuple)) and len(raw_claims) <= 3
-            if valid_claims:
-                for row in raw_claims:
-                    if (not isinstance(row, Mapping)
-                            or not isinstance(row.get("text"), str)
-                            or not isinstance(row.get("report_exact"), str)):
-                        valid_claims = False
-                        break
-                    try:
-                        normalized_claims.append(SubagentClaim.from_dict(row).to_dict())
-                    except (TypeError, ValueError):
-                        valid_claims = False
-                        break
-            if valid_claims and normalized_claims:
-                call["child_claims"] = normalized_claims
 
     @staticmethod
     def _record_uncertainty(frame: _ToolFrame) -> None:
@@ -467,7 +394,6 @@ class SliceReducer:
         handlers = {
             _CompatibilityFamily.WORLD: self._reduce_world_effect,
             _CompatibilityFamily.INTENT: self._reduce_intent_effect,
-            _CompatibilityFamily.PLAN: self._reduce_plan_effect,
             _CompatibilityFamily.WORK: self._reduce_work_effect,
         }
         handlers[family](frame)
@@ -525,20 +451,6 @@ class SliceReducer:
                 )
         else:  # drop_requirement
             s.intent.defer_model_entry(text)
-
-    @staticmethod
-    def _reduce_plan_effect(frame: _ToolFrame) -> None:
-        new_plan = []
-        for item in (frame.args.get("steps") or [])[:MAX_PLAN_ITEMS]:
-            if not isinstance(item, dict):
-                continue
-            step = " ".join(str(item.get("step", "")).split())[:MAX_PLAN_CHARS]
-            status = str(item.get("status", "pending")).strip().lower()
-            if status not in ("pending", "in_progress", "done"):
-                status = "pending"
-            if step:
-                new_plan.append({"step": step, "status": status})
-        frame.slice.plan = new_plan
 
     @staticmethod
     def _reduce_work_effect(frame: _ToolFrame) -> None:

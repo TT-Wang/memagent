@@ -335,7 +335,7 @@ def closeout_tokens_are_accounted():
 
 
 @check
-def staged_owner_can_disable_only_the_generic_max_steps_closeout():
+def outer_lifecycle_owner_can_disable_the_generic_max_steps_closeout():
     llm = _CountLLM()
     events = []
     result = run_turn(
@@ -343,7 +343,7 @@ def staged_owner_can_disable_only_the_generic_max_steps_closeout():
         hooks=Hooks(), max_steps=2, allow_park_closeout=False,
     )
     assert result.stop_reason == "max_steps"
-    assert llm.calls == 2, "the staged owner reserved its own synthesis; no hidden fast closeout may run"
+    assert llm.calls == 2, "an outer owner reserving its own follow-up call gets no hidden closeout"
     assert result.usage["prompt_tokens"] == 20
     assert not any(
         isinstance(event, StepEnd) and event.stop_reason == "closeout" for event in events

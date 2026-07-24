@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from sliceagent.events import (ApiRetry, AssistantText, ToolResult, TurnEnd,
                                TurnInterrupted)  # noqa: E402
 from sliceagent.execution import (CHILD_INVOCATION_ID_ARG, CHILD_REQUEST_ORDINAL_ARG,
-                                  CHILD_TOKEN_BUDGET_ARG, PreflightOverflow, ToolEffect,
+                                  PreflightOverflow, ToolEffect,
                                   ToolInvocation, ToolOutcome, ToolPurity, ToolStatus, TurnOutcome,
                                   Usage, preflight_model_call, reconciliation_targets)  # noqa: E402
 from sliceagent.hooks import BudgetHook, Hooks  # noqa: E402
@@ -897,7 +897,7 @@ def registry_replacement_cannot_run_under_stale_scheduler_purity():
 @check
 def subagent_wrapper_preserves_incomplete_inner_preflight_rejection():
     from sliceagent.events import ToolExecutionStarted, ToolStarted
-    from sliceagent.subagent import SubagentHost
+    from sliceagent.scoped_spawn import ScopedSpawnHost
 
     preflighted, ran, events = [], [], []
 
@@ -913,7 +913,7 @@ def subagent_wrapper_preserves_incomplete_inner_preflight_rejection():
             ran.append(name)
             return "bad"
 
-    host = SubagentHost(Inner(), llm=None, retriever=None, memory=None)
+    host = ScopedSpawnHost(Inner(), llm=None, retriever=None, memory=None)
     _, rows = run_tool_batch(
         [_tc("partial", {}, "partial")], host, events.append, Hooks(),
     )
@@ -2210,7 +2210,7 @@ def typed_child_usage_is_aggregated_and_stops_before_another_parent_call():
 
 
 @check
-def parallel_children_split_only_the_remaining_parent_budget():
+def parallel_children_receive_lifecycle_metadata_but_no_budget_share():
     from sliceagent.access import ReadAllAccess
 
     seen = []
@@ -2232,74 +2232,21 @@ def parallel_children_split_only_the_remaining_parent_budget():
     ]
     _, results = run_tool_batch(calls, Host(), lambda _event: None, budget)
     assert len(seen) == 2
-    assert {args[CHILD_TOKEN_BUDGET_ARG] for args in seen} == {10}
+    # Children are bounded by their step cap and the delegation deadline only. A parent-level budget
+    # applies through usage accounting on the parent side; it is never split into per-child shares.
+    assert all("__sliceagent_token_budget" not in args for args in seen)
     by_task = {args["task"]: args for args in seen}
     assert by_task["one"][CHILD_INVOCATION_ID_ARG] == "one"
     assert by_task["two"][CHILD_INVOCATION_ID_ARG] == "two"
     assert by_task["one"][CHILD_REQUEST_ORDINAL_ARG] == 1
     assert by_task["two"][CHILD_REQUEST_ORDINAL_ARG] == 2
-    private = {CHILD_TOKEN_BUDGET_ARG, CHILD_INVOCATION_ID_ARG, CHILD_REQUEST_ORDINAL_ARG}
+    private = {CHILD_INVOCATION_ID_ARG, CHILD_REQUEST_ORDINAL_ARG}
     assert all(not private.intersection(result["args"]) for result in results), \
         "scheduler metadata must not leak into the canonical invocation"
 
 
 @check
-def child_budget_reservation_survives_an_effect_barrier_between_explorers():
-    from sliceagent.access import AllAccess, ReadAllAccess
-
-    seen = []
-
-    class Host:
-        def accesses(self, name, _args):
-            return [ReadAllAccess()] if name == "spawn_agent" else [AllAccess()]
-
-        def run(self, name, args):
-            seen.append((name, dict(args)))
-            return "done"
-
-    budget = BudgetHook(30)
-    budget.reset_for_turn()
-    budget.record_step_usage({"prompt_tokens": 8, "completion_tokens": 2})
-    calls = [
-        _tc("spawn_agent", {"agent": "explorer", "task": "one"}, "one"),
-        _tc("edit_file", {"path": "a.py", "content": "x"}, "barrier"),
-        _tc("spawn_agent", {"agent": "explorer", "task": "two"}, "two"),
-    ]
-    run_tool_batch(calls, Host(), lambda _event: None, budget)
-    caps = [args[CHILD_TOKEN_BUDGET_ARG] for name, args in seen if name == "spawn_agent"]
-    assert caps == [10, 10]
-    assert sum(caps) == budget.remaining_token_budget(), \
-        "separate child waves must share one fair parent reservation"
-
-
-@check
-def writable_child_barrier_waves_cannot_multiply_the_parent_budget():
-    from sliceagent.access import AllAccess
-
-    caps = []
-
-    class Host:
-        def accesses(self, _name, _args):
-            return [AllAccess()]
-
-        def run(self, _name, args):
-            caps.append(args[CHILD_TOKEN_BUDGET_ARG])
-            return "done"
-
-    budget = BudgetHook(24)
-    calls = [
-        _tc("spawn_agent", {"agent": "general", "task": "one"}, "one"),
-        _tc("spawn_agent", {"agent": "general", "task": "two"}, "two"),
-        _tc("spawn_agent", {"agent": "general", "task": "three"}, "three"),
-    ]
-    run_tool_batch(calls, Host(), lambda _event: None, budget)
-    assert caps == [8, 8, 8]
-    assert sum(caps) <= budget.remaining_token_budget(), \
-        "serialized child barriers must split, not multiply or starve, the remaining budget"
-
-
-@check
-def cancelled_child_does_not_consume_an_allowed_siblings_reservation():
+def cancelled_child_still_lets_the_allowed_sibling_run():
     from sliceagent.access import ReadAllAccess
     from sliceagent.hooks import ToolPreflight
 
@@ -2323,23 +2270,23 @@ def cancelled_child_does_not_consume_an_allowed_siblings_reservation():
         _tc("spawn_agent", {"agent": "explorer", "task": "allowed"}, "allowed"),
     ]
     _, results = run_tool_batch(calls, Host(), lambda _event: None, budget)
-    assert len(seen) == 1 and seen[0][CHILD_TOKEN_BUDGET_ARG] == 20
+    assert len(seen) == 1 and seen[0]["task"] == "allowed"
     assert results[0]["status"] == "cancelled" and results[1]["status"] == "succeeded"
 
 
 @check
-def registry_rejected_child_does_not_consume_valid_child_budget_same_or_later_wave():
+def registry_rejected_child_does_not_block_a_valid_sibling_same_or_later_wave():
     from sliceagent.access import AllAccess, ReadAllAccess
 
     for interleaved in (False, True):
-        caps = []
+        seen = []
         registry = ToolRegistry()
         registry.register(ToolEntry(
             "spawn_agent", {"type": "function", "function": {
                 "name": "spawn_agent", "parameters": {
                     "type": "object", "properties": {}, "required": ["task"],
                 },
-            }}, lambda args: caps.append(args[CHILD_TOKEN_BUDGET_ARG]) or "done",
+            }}, lambda args: seen.append(dict(args)) or "done",
             accesses=lambda _args: [ReadAllAccess()], purity=ToolPurity.PURE_READ,
         ))
         registry.register(ToolEntry(
@@ -2369,38 +2316,9 @@ def registry_rejected_child_does_not_consume_valid_child_budget_same_or_later_wa
             "spawn_agent", {"agent": "explorer", "task": "valid"}, "valid",
         ))
         _, rows = run_tool_batch(calls, Host(), lambda _event: None, BudgetHook(20))
-        assert caps == [20], (
-            "a child proven not started must not reserve budget from a valid sibling"
-        )
+        assert len(seen) == 1 and seen[0]["task"] == "valid"
+        assert "__sliceagent_token_budget" not in seen[0]
         assert rows[0]["status"] == "failed" and rows[-1]["status"] == "succeeded"
-
-
-@check
-def malformed_advisory_child_budget_never_crashes_or_blocks_delegation():
-    from sliceagent.access import ReadAllAccess
-
-    seen = []
-
-    class MalformedBudget(Hooks):
-        def remaining_token_budget(self):
-            return "unbounded-ish"
-
-    class Host:
-        def accesses(self, _name, _args):
-            return [ReadAllAccess()]
-
-        def run(self, _name, args):
-            seen.append(dict(args))
-            return "done"
-
-    _, rows = run_tool_batch([
-        _tc("spawn_agent", {"agent": "explorer", "task": "one"}, "one"),
-        _tc("spawn_agent", {"agent": "explorer", "task": "two"}, "two"),
-    ], Host(), lambda _event: None, MalformedBudget())
-    assert [row["status"] for row in rows] == ["succeeded", "succeeded"]
-    assert len(seen) == 2
-    assert all(CHILD_TOKEN_BUDGET_ARG not in args for args in seen), \
-        "malformed advisory budget means no cap opinion, not a batch crash"
 
 
 @check

@@ -222,7 +222,6 @@ class AgentResultView:
     recovered_from: tuple[str, ...]
     artifact_id: str
     detail: str
-    source_coverage_status: str = "not_assessed"
     evidence_status: str = "not_assessed"
     evidence_account: tuple[tuple[str, int], ...] = ()
     duration_s: float | None = None
@@ -261,16 +260,6 @@ def project_agent_result(event: object, *, duration_s: float | None = None) -> A
         ordinal = max(0, int(payload.get("launch_ordinal") or 0))
     except (TypeError, ValueError):
         ordinal = 0
-    source_coverage = str(
-        payload.get("source_coverage_status") or payload.get("epistemic_status") or "not_assessed"
-    ).strip().casefold()
-    source_coverage = {
-        "grounded": "source_complete", "partial": "source_partial", "unsupported": "source_unsupported",
-    }.get(source_coverage, source_coverage)
-    if source_coverage not in {
-        "source_complete", "source_partial", "source_unsupported", "not_assessed",
-    }:
-        source_coverage = "not_assessed"
     tool_name = str(getattr(event, "name", "") or "")
     kind = str(payload.get("kind") or args.get("agent") or (
         "explorer" if tool_name == "spawn_explore" else "general"
@@ -282,6 +271,13 @@ def project_agent_result(event: object, *, duration_s: float | None = None) -> A
     except (TypeError, ValueError):
         request_ordinal = 0
     status = normalized_tool_status(event)
+    child_operational = str(
+        payload.get("operational_status") or payload.get("status") or ""
+    ).strip().casefold()
+    if status == "succeeded" and child_operational == "partial":
+        # The spawn operation succeeded (a deliverable returned); the typed child outcome carries
+        # the partial label for the ceiling-stopped report.
+        status = "partial"
     stop_cause = safe_terminal_text(payload.get("stop_cause") or "", multiline=False)
     stop_reason = safe_terminal_text(payload.get("stop_reason") or "", multiline=False)
     explicit_partial = payload.get("partial")
@@ -307,7 +303,6 @@ def project_agent_result(event: object, *, duration_s: float | None = None) -> A
         recovered_from=tuple(safe_terminal_text(item, multiline=False) for item in recovered),
         artifact_id=safe_terminal_text(payload.get("artifact_id") or "", multiline=False),
         detail=preview.lines[0] if preview.lines else "",
-        source_coverage_status=source_coverage,
         evidence_status=normalized_evidence_status(evidence_status_value),
         evidence_account=evidence_account_counts(evidence_account_value),
         duration_s=duration_s,

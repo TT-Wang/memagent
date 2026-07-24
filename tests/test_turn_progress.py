@@ -32,7 +32,6 @@ from sliceagent.events import (  # noqa: E402
 )
 from sliceagent.execution import ToolEffect, ToolInvocation, ToolOutcome, ToolStatus  # noqa: E402
 from sliceagent.progress import ProgressPhase, TurnProgress  # noqa: E402
-from sliceagent.regions import MAX_PLAN_CHARS, MAX_PLAN_ITEMS  # noqa: E402
 
 
 CHECKS = []
@@ -189,46 +188,6 @@ def terminal_open_and_wait_use_truthful_command_progress():
         "terminal_wait", {"session": "server", "until": "ready"}, "ready", False,
     ))
     assert settled.counts.get("cmd") == 2, settled.counts
-
-
-@check
-def plan_updates_replace_all_and_failed_updates_do_not_mutate():
-    machine, _ = _machine()
-    carried = machine.reduce(TurnStarted("continue", task_title="Parser fix", plan=[
-        {"step": "inspect existing behavior", "status": "done"},
-        {"step": "fix the parser", "status": "in_progress"},
-    ]))
-    assert carried.plan.total == 2 and carried.plan.current == "fix the parser", \
-        "a persisted task plan must be visible before the model calls update_plan again"
-    first = machine.reduce(ToolResult("update_plan", {"steps": [
-        {"step": "inspect the parser", "status": "done"},
-        {"step": "fix error handling", "status": "in_progress"},
-        {"step": "run focused tests", "status": "pending"},
-    ]}, "PLAN updated", False))
-    assert first.plan.total == 3 and first.plan.done == 1
-    assert first.plan.current == "fix error handling" and first.plan.current_index == 2
-    assert "2/3" in _status(first) and "fix error handling" in _status(first), _status(first)
-
-    replacement = machine.reduce(ToolResult("update_plan", {"steps": [
-        {"step": "implement fix", "status": "done"},
-        {"step": "verify regression", "status": "in_progress"},
-    ]}, "PLAN updated", False))
-    assert replacement.plan.total == 2 and replacement.plan.done == 1
-    assert replacement.plan.current == "verify regression" and replacement.plan.current_index == 2
-
-    failed = machine.reduce(ToolResult("update_plan", {"steps": [
-        {"step": "corrupt replacement", "status": "in_progress"},
-    ]}, "Error: invalid plan", True))
-    assert failed.plan == replacement.plan, "a failed update_plan call must not alter displayed task progress"
-
-    malformed = machine.reduce(ToolResult("update_plan", {"steps": [
-        {"step": "   ", "status": "done"},
-        {"step": "  normalized   whitespace  ", "status": "INVALID"},
-        *({"step": "x" * (MAX_PLAN_CHARS + 20), "status": "pending"}
-          for _ in range(MAX_PLAN_ITEMS + 5)),
-    ]}, "PLAN updated", False))
-    assert malformed.plan.total == MAX_PLAN_ITEMS - 1, malformed.plan
-    assert malformed.plan.current == "normalized whitespace" and malformed.plan.current_index == 1
 
 
 @check

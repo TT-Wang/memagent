@@ -146,10 +146,12 @@ def unresolved_binding_state_keeps_objective_active_after_clean_reply():
     slice_sink(s)(TurnEnd("end_turn", 1, {}))
     assert s.task.objective_status == "active"
 
+    # P2 retired `.plan` (TodoWrite) as an objective-activity signal — Active Work is the frontier
+    # now — so a bare pending plan step no longer forces the objective active on a clean reply.
     planned = Slice(); planned.reset("Complete the migration")
     planned.plan = [{"step": "run compatibility tests", "status": "pending"}]
     slice_sink(planned)(TurnEnd("end_turn", 1, {}))
-    assert planned.task.objective_status == "active"
+    assert planned.task.objective_status == "provisionally_satisfied"
 
 
 @check

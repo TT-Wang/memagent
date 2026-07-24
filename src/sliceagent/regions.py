@@ -85,31 +85,6 @@ def render_cache_manifest(refs) -> str:
     return "\n".join(lines)
 
 
-ROSTER_MANIFEST_K = 12   # bounded preview; full list is read_file("@sliceagent/roster/index.md")
-
-
-def render_roster(profiles, total: int | None = None) -> str:
-    """STANDING SPECIALISTS body: the durable, cross-session roster made VISIBLE so the model reaches for
-    read_file("roster/index.md") / spawn_agent(name=…) instead of spelunking the raw vault when asked about
-    its specialists (the unadvertised-channel dead-cache trap — the whole roster was invisible without this,
-    so a fresh session could only find it by browsing ~/.sliceagent, where the virtual index.md isn't a real
-    file). ``profiles`` is already the top-K by recency (roster_recent); ``total`` is the full roster size
-    (defaults to len(profiles)) so the '+N more' overflow is correct even though we only parsed K. Locators
-    only (name/kind/jobs) — the full profile + career page in on demand via the .md virtual paths.
-    Self-suppresses when the roster is empty. Bound is on the VIEW (K shown), not the STORE (unbounded)."""
-    if not profiles:
-        return ""
-    shown = list(profiles)[:ROSTER_MANIFEST_K]
-    n_total = len(profiles) if total is None else total
-    lines = [f"- {p.get('name')} · {p.get('kind', '?')} · {p.get('jobs', 0)} job(s) · "
-             f"last active {(p.get('last_active') or '?')[:10]}" for p in shown]
-    if n_total > len(shown):
-        lines.append(
-            f'- (+{n_total - len(shown)} more — read_file("@sliceagent/roster/index.md") for all)'
-        )
-    return "\n".join(lines)
-
-
 def render_focus(focus, extra_roots, *, home: str = "", workspace: str = "") -> str:
     """CURRENT PROJECT body: the dir the agent is actively working in, when it has moved beyond the primary
     root. Surfaces the grounded ReachSet + the moved relative-path base (otherwise INVISIBLE →
@@ -780,9 +755,9 @@ def render_quality_evidence_result(s) -> str:
         "grounding rule: each pair also carries the exact sealed artifacts referenced by that turn receipt. "
         "For an unsupported-factual-claim judgment, compare the produced claim with the attached grounding "
         "source text; do not ignore a supporting child report or invent support absent from those bytes. A "
-        "subagent grounding envelope deliberately separates `report` (what the child claimed), optional "
-        "legacy/explicit `claims` (child testimony with candidate observation locators), and `observations` (bounded "
-        "successful read-only tool views). Neither a claim entry nor its locator certifies entailment. A "
+        "subagent grounding envelope deliberately separates `report` (what the child claimed) and "
+        "`observations` (bounded "
+        "successful read-only tool views). Neither a report line nor an observation locator certifies entailment. A "
         "workspace-fact claim requires support in "
         "an observation view; report prose alone proves only that the child said it. A redacted or truncated "
         "observation supports only its visible retained bytes and cannot prove an absence or anything in omitted "
@@ -957,17 +932,6 @@ def render_reconciliation(s) -> str:
         + (f"possibly affected targets: {scope}\n" if scope else "")
         + f"{marker}\n\n"
     )
-
-
-def render_plan(plan: list[dict]) -> str:
-    """The PLAN tier body: the model's ordered execution steps with live status (todo list).
-    Numbered + status-marked ('[~]' in-progress, '[x]' done, '[ ]' pending). Self-suppresses when empty.
-    Bounded by MAX_PLAN_ITEMS (folded in slice_sink). Volatile WORKING state — distinct from STANDING
-    REQUIREMENTS (acceptance criteria): this is the step sequence and the agent's live progress through it."""
-    if not plan:
-        return ""
-    return "\n".join(f"{i}. [{_PLAN_MARK.get(it.get('status'), ' ')}] {it.get('step', '')}"
-                     for i, it in enumerate(plan, 1))
 
 
 def render_progress_signals(signals) -> str:
@@ -1280,38 +1244,6 @@ def capture_user_report(s, message: str) -> bool:
     return True
 
 
-def render_delegation_fan_in(s, report_loader=None) -> str:
-    """Render the automatic immutable parent-synthesis bundle.
-
-    ``report_loader`` is supplied by the reconstruction seam because the semantic Slice intentionally does not
-    own filesystem/provider objects. Without it, the same projection remains truthful and locator-complete.
-    """
-    from .fan_in import build_fan_in_bundle
-
-    runtime = getattr(s, "runtime", None)
-    calls = getattr(runtime, "recent_calls", ()) or ()
-    graph = getattr(s, "active_work", None)
-    roots = tuple(getattr(graph, "unresolved_roots", ()) or ())
-    root_id = str(getattr(roots[-1], "id", "") or "") if roots else ""
-    return build_fan_in_bundle(
-        calls, graph=graph, root_id=root_id, report_loader=report_loader,
-    ).render()
-
-
-def _render_delegation_fan_in_region(ctx: dict) -> str:
-    """Load/render once even though region suppression and body formerly called the renderer separately."""
-    cache_key = "_delegation_fan_in_rendered"
-    if cache_key not in ctx:
-        ctx[cache_key] = render_delegation_fan_in(
-            ctx["s"], report_loader=ctx.get("fan_in_report_loader"),
-        )
-    rendered = str(ctx.get(cache_key) or "")
-    return (
-        "# DELEGATION FAN-IN (host-derived terminal-child synthesis material; bounded)\n"
-        f"{rendered}\n\n" if rendered else ""
-    )
-
-
 # ── REGION_ORDER — the slice layout, region-by-region ─────────────────────────
 # The slice is an address space of TYPED REGIONS. REGION_ORDER encodes their EXACT render order and
 # the stable/volatile split that governs prompt-cache locality. A prefix cache matches only up to the
@@ -1386,7 +1318,6 @@ REGION_ORDER = (
     # ──────────── TIER 3 · MY STATE — what the agent has established / is doing. ────────────
     ("conversation",   STABLE,   lambda c: (f"# RECENT CONVERSATION (the last few exchanges this session — for continuity; older turns are paged out — see PAGED-OUT HISTORY below for the read_file(\"@sliceagent/history/turn-N.md\") call to fetch each)\n{render_conversation(c['s'])}\n\n" if render_conversation(c["s"]) else ""), 2),
     ("findings",       VOLATILE, lambda c: (f"# YOUR NOTES FROM PRIOR TOOL CALLS (task-scoped observations and claims to REUSE as leads; OPEN FILES stays ground truth for current contents. Per-note tags mark trust: no tag = observed, '(your note)' = summary, '(UNVERIFIED claim)' = not confirmed)\n{render_findings(c['s'].findings[-c['max_findings']:], c['s'].finding_source)}\n\n" if render_findings(c["s"].findings[-c["max_findings"]:], c["s"].finding_source) else ""), 3),
-    ("plan",           VOLATILE, lambda c: (f"# PLAN (your ordered steps & live progress — keep exactly ONE step in_progress; '[~]'=in progress, '[x]'=done, '[ ]'=pending; update with update_plan)\n{render_plan(c['s'].plan)}\n\n" if getattr(c['s'], 'plan', None) else ""), 3),
     ("progress",       VOLATILE, lambda c: (f"# PROGRESS SIGNALS (small task-scoped observations carried across turns; exact detail remains in @sliceagent/history/)\n{render_progress_signals(c['s'].task.progress_signals)}\n\n" if render_progress_signals(c['s'].task.progress_signals) else ""), 3),
     ("world",          VOLATILE, lambda c: (f"# WORLD MODEL (durable task state YOU maintain — your map / inventory / progress; update with world_set, it persists across turns until the task changes)\n{render_world(c['s'].world)}\n\n" if c['s'].world else ""), 3),
     # ──────────── TIER 4 · RECALL — paged out of the slice; fetched on demand. ────────────
@@ -1396,11 +1327,6 @@ REGION_ORDER = (
     # (same "it's paged out, here's the one call to get it"
     # idiom) so the model has a SEEN target to read; an unseen cache is the dead channel. Locators only.
     ("cache_manifest", VOLATILE, lambda c: (f"\n# PAGED-OUT HISTORY (canonical exact evidence from earlier turns, not current-world truth; read a turn with the shown @sliceagent/history/ locator, read_file(\"@sliceagent/history/index.md\") for the full list, or search_history(\"keywords\") across sessions)\n{c['cache_manifest']}\n" if c.get("cache_manifest") else ""), 3),
-    # STANDING SPECIALISTS — the durable, cross-session roster made VISIBLE (same "advertise the paged-out
-    # channel" idiom as PAGED-OUT HISTORY). Without this the roster is a DEAD channel: a fresh session can't
-    # discover it except by browsing the raw vault, where the virtual index.md isn't a real file. Locators
-    # only; the full profile/career pages in on demand via read_file("roster/<name>/profile.md").
-    ("roster",         VOLATILE, lambda c: (f"\n# STANDING SPECIALISTS (named subagents you've hired — in THIS or a PAST session — each a durable specialist with its own sealed career; WAKE one with spawn_agent(agent=<kind>, name=<name>, task=…), browse read_file(\"@sliceagent/roster/<name>/profile.md\"), or read_file(\"@sliceagent/roster/index.md\") for all)\n{c['roster']}\n" if c.get("roster") else ""), 3),
     # ──────────── TIER 5 · STEERING & LIVE STATE — what's wrong / where things stand (VOLATILE, high-authority tail). ────────────
     # # REPEATED/FAILING ACTIONS header (always present; body says "(nothing…)" when empty) closes slot 3.
     ("action_header",  VOLATILE, lambda c: "# REPEATED/FAILING ACTIONS", 3),
@@ -1478,7 +1404,6 @@ _REGION_META = {
     "world": (85, InstructionClass.TASK_STATE, FreshnessClass.REVISION_BOUND, False),
     "threads": (25, InstructionClass.TASK_STATE, FreshnessClass.DERIVED, False),
     "cache_manifest": (30, InstructionClass.DATA, FreshnessClass.HISTORICAL, False),
-    "roster": (10, InstructionClass.DATA, FreshnessClass.HISTORICAL, False),
     "action_header": (18, InstructionClass.TASK_STATE, FreshnessClass.DERIVED, False),
     "action_history": (18, InstructionClass.TASK_STATE, FreshnessClass.DERIVED, False),
     "focus": (78, InstructionClass.DATA, FreshnessClass.LIVE, False),
@@ -1612,9 +1537,6 @@ def _locator_region(name: str, ctx: dict) -> tuple[str, tuple[str, ...], bool] |
     if name == "cache_manifest":
         return ('# PAGED-OUT HISTORY\n- read_file("@sliceagent/history/index.md") for the full manifest',
                 ("@sliceagent/history/index.md",), False)
-    if name == "roster":
-        return ('# STANDING SPECIALISTS\n- read_file("@sliceagent/roster/index.md") for the roster',
-                ("@sliceagent/roster/index.md",), False)
     if name == "focus":
         return ("# CURRENT PROJECT (live locator)\n" + str(ctx.get("focus") or ""),
                 ("workspace",), True)
@@ -1648,7 +1570,6 @@ _REGION_ROLES = {
     "user_report": EpistemicRole.CLAIM,
     "error": EpistemicRole.OBSERVATION,
     "cache_manifest": EpistemicRole.LOCATOR,
-    "roster": EpistemicRole.LOCATOR,
     "threads": EpistemicRole.LOCATOR,
 }
 
@@ -1767,10 +1688,6 @@ def _region_provenance(name: str, ctx: dict) -> tuple[EpistemicRole, tuple[str, 
     elif name == "cache_manifest":
         scope = ("session",)
         ref = reserved_resource_ref("history/index.md")
-        resources.append(ref); sources.append(SourceRef("historical_view", ref.handle))
-    elif name == "roster":
-        scope = ("workspace", "cross_session")
-        ref = reserved_resource_ref("roster/index.md")
         resources.append(ref); sources.append(SourceRef("historical_view", ref.handle))
     elif name == "skills":
         for item in getattr(s, "active_skills", ()) or ():

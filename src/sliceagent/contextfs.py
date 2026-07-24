@@ -1,7 +1,7 @@
 """Permanent, read-only virtual address space for SliceAgent's internal context.
 
 ``ContextFS`` deliberately knows nothing about the physical stores behind evidence,
-history, active work, knowledge, or the roster.  Hosts inject small providers at
+history, active work, or knowledge.  Hosts inject small providers at
 canonical mount points and route the ordinary read/list/grep tools here whenever a
 path starts with ``@sliceagent``.  This keeps the model-facing floor plan stable while
 the storage implementations evolve independently.
@@ -25,12 +25,12 @@ from typing import Any, Pattern, Protocol, runtime_checkable
 
 CONTEXT_ROOT = "@sliceagent"
 CONTEXTFS_SCHEMA_MARKER = "@sliceagent/index.md"
-CONTEXT_REGIONS = ("evidence", "history", "work", "memory", "roster")
+CONTEXT_REGIONS = ("evidence", "history", "work", "memory")
 
 # The canonical floor plan remains visible even before a backend is mounted.  A
 # trailing slash marks a directory in list_files output.
 _CANONICAL_CHILDREN: dict[str, tuple[str, ...]] = {
-    "": ("index.md", "evidence/", "history/", "work/", "memory/", "roster/"),
+    "": ("index.md", "evidence/", "history/", "work/", "memory/"),
     "evidence": ("index.md", "events/", "turns/", "children/", "receipts/"),
     "evidence/events": (),
     "evidence/turns": (),
@@ -46,7 +46,6 @@ _CANONICAL_CHILDREN: dict[str, tuple[str, ...]] = {
     "memory/project": ("index.md",),
     "memory/craft": ("index.md",),
     "memory/records": (),
-    "roster": ("index.md",),
 }
 _CANONICAL_DIRS = frozenset(_CANONICAL_CHILDREN)
 _CANONICAL_FILES = frozenset(
@@ -58,7 +57,7 @@ _CANONICAL_FILES = frozenset(
 _CONTEXTFS_OWNED_FILES = frozenset({"memory/status.md", "memory/diagnostics.md"})
 _DYNAMIC_DIRS = (
     "evidence/events", "evidence/turns", "evidence/children", "evidence/receipts",
-    "history/sessions", "memory/records", "roster",
+    "history/sessions", "memory/records",
 )
 _STATUS_STATES = frozenset({
     "available", "healthy", "empty", "degraded", "unavailable", "disabled", "unknown",
@@ -1034,7 +1033,7 @@ class ContextFS:
             rel = _normalize_provider_path(str(mount))
         if not rel or rel.split("/", 1)[0] not in CONTEXT_REGIONS:
             raise ContextPathError(
-                "provider mounts must be under evidence, history, work, memory, or roster",
+                "provider mounts must be under evidence, history, work, or memory",
             )
         if rel in _CANONICAL_FILES:
             raise ContextPathError("providers must mount at a context directory, not a canonical file")
@@ -1126,11 +1125,10 @@ class ContextFS:
         history = self._status_text(self._region_status("history", snapshot))
         work = self._status_text(self._region_status("work", snapshot))
         memory = self._status_text(self._region_status("memory", snapshot))
-        roster = self._status_text(self._region_status("roster", snapshot))
         open_count = snapshot.open_active_work_count
         lines += [
             "", "## Memory model — exactly three layers",
-            "Indexes, retrieval backends, roster, skills, and subagents are not additional memory layers.",
+            "Indexes, retrieval backends, skills, and subagents are not additional memory layers.",
             f"- L0 · HISTORY AND EVIDENCE: history: {history}; evidence: {evidence}",
             f"- L1 · ACTIVE WORK: work: {work}",
             f"- L2 · TYPED KNOWLEDGE: memory: {memory}",
@@ -1149,8 +1147,6 @@ class ContextFS:
             lines.append(f"- {scope.upper()} scope: {count if count is not None else '(unknown)'}")
         lines.append("- scope counts may overlap; never add them to infer a record total")
         lines += [
-            "", "## Adjacent capabilities (not memory layers)",
-            f"- roster: {roster}",
             "", "## Retrieval backends",
             f"- native index: {self._status_text(_coerce_capability(snapshot.native_index))}",
             f"- Memem: {self._status_text(_coerce_capability(snapshot.memem))}",
@@ -1166,7 +1162,6 @@ class ContextFS:
             f'- exact history: read_file("{CONTEXT_ROOT}/history/index.md")',
             f'- active work: read_file("{CONTEXT_ROOT}/work/active.md")',
             f'- knowledge: read_file("{CONTEXT_ROOT}/memory/index.md")',
-            f'- roster: read_file("{CONTEXT_ROOT}/roster/index.md")',
         ]
         return "\n".join(lines)
 

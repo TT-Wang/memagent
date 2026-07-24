@@ -319,7 +319,7 @@ Prefix an unrelated request with `New task:` to start it with fresh task state w
 for `/resume`. Ambiguous follow-ups deliberately continue the active task so context is never discarded on a
 guess.
 
-It can edit code in the primary workspace and grounded focus roots (reversible with `/undo`), run regular shell commands through a sandbox (`local` by default, `docker` for container isolation on POSIX/WSL2), search the tree and the web, and delegate decomposable research to a fresh one-shot read-only explorer (each child gets its own history-bounded, task-elastic slice). Native Windows uses the local backend; run SliceAgent inside WSL2 if you want the Docker backend. That narrow surface is the demo default. Set `AGENT_ADVANCED_AGENTS=1` to expose writable and named specialist delegation (and nested delegation when `AGENT_SUBAGENT_DEPTH` is raised above its default of `1`), or `AGENT_ADVANCED_TOOLS=1` to expose persistent process and interactive terminal tools. The flags are independent. Ordinary work runs directly from the user's request; the host retains only a narrow safeguard against high-confidence catastrophic shell commands. Secrets are scrubbed from anything persisted or logged.
+It can edit code in the primary workspace and grounded focus roots (reversible with `/undo`), run regular shell commands through a sandbox (`local` by default, `docker` for container isolation on POSIX/WSL2), search the tree and the web, and delegate self-contained sub-tasks with `spawn_agent(agent=<kind>, task=…)` to a fresh one-shot child that runs its own history-bounded, task-elastic slice and returns one trusted report. Built-in kinds are the read-only `explorer`, the writable `general` worker, `reviewer`, and `verification`; your own `agents/*.md` definitions are always loaded alongside them. Native Windows uses the local backend; run SliceAgent inside WSL2 if you want the Docker backend. Delegation depth defaults to `1` (children cannot spawn children); raise `AGENT_SUBAGENT_DEPTH` only if you intentionally want nesting. `AGENT_ADVANCED_TOOLS=1` opts in persistent process and interactive terminal tools. Ordinary work runs directly from the user's request; the host retains only a narrow safeguard against high-confidence catastrophic shell commands. Secrets are scrubbed from anything persisted or logged.
 
 Every clean or interrupted agent task turn is sealed into the always-on local artifact/checkpoint path.
 Subagent reports return directly to the parent in launch order; when optional artifact persistence succeeds,
@@ -348,17 +348,14 @@ protects the integrity of the durable local store rather than interpreting user 
 | `AGENT_SANDBOX` | `local` | `local`, or `docker` on POSIX/WSL2 (native Windows: use `local` or run under WSL2) |
 | `AGENT_MAX_STEPS` | `60` | per-turn step ceiling |
 | `AGENT_CONTEXT_WINDOW` | *(catalog or unset)* | explicit provider window for strict per-call preflight; unknown models otherwise use compatibility mode |
-| `AGENT_ADVANCED_AGENTS` | *(off)* | enable writable and named specialists; unlock the nested surface subject to the depth ceiling |
-| `AGENT_SUBAGENT_DEPTH` | `1` | delegation depth ceiling; raise it to permit nested advanced agents |
-| `AGENT_DELEGATION_TIMEOUT` | `900` | hard ceiling in seconds for one child-agent wave; raise for unusually slow providers |
-| `AGENT_EXPLORER_REASONING` | `staged` | fast evidence navigation followed by one full, tool-free final synthesis (`fast`/`full` are single-stage overrides) |
-| `AGENT_EXPLORER_NAV_STEPS` | `6` | fast-navigation model-step ceiling for staged explorers; one separate synthesis step stays reserved |
+| `AGENT_SUBAGENT_DEPTH` | `1` | delegation depth ceiling for `spawn_agent`; `0` disables delegation, raise to let children spawn children |
+| `AGENT_DELEGATION_TIMEOUT` | `900` | hard ceiling in seconds for one child agent; raise for unusually slow providers |
 | `LLM_HARD_TIMEOUT_SEC` | *(completion-budget derived)* | absolute per-call watchdog; provider-agnostic default allows the configured completion cap at a conservative generation rate (minimum 180s) |
 | `LLM_STREAM_CLOSE_GRACE_SEC` | `2` | bounded wait to prove a cancelled/timed-out SSE request physically closed before any retry |
 | `LLM_PROVIDER_MAX_INFLIGHT` | `4` | process-wide physical request cap per provider account; indeterminate calls hold their slot until the transport closes |
 | `AGENT_ADVANCED_TOOLS` | *(off)* | enable persistent process and interactive terminal tools |
 | `SLICEAGENT_CACHE_DIR` | `~/.sliceagent` | always-on local checkpoints, immutable artifacts, and recovery journals |
-| `SLICEAGENT_VAULT` | `~/.sliceagent/vault` | legacy episodic/task/roster compatibility records (not canonical typed L2) |
+| `SLICEAGENT_VAULT` | `~/.sliceagent/vault` | legacy episodic/task compatibility records (not canonical typed L2) |
 | `AGENT_VERIFY_CMD` | *(unset)* | test command used as the verification oracle |
 
 DeepSeek official-API configurations should move from the retiring `deepseek-chat` / `deepseek-reasoner`

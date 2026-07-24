@@ -20,6 +20,13 @@ def test_kernel_keeps_exact_request_above_derived_state():
     assert "do not create work items merely to launch children" in low
 
 
+def test_kernel_anchors_response_language_to_the_current_request():
+    low = SYSTEM_PROMPT.lower()
+    assert "respond in the language of the current request" in low
+    assert "never a language instruction" in low, \
+        "multilingual memory/knowledge content must not silently switch the response language"
+
+
 def test_context_is_dependency_first_and_elastic_without_transcript_growth():
     contract = MEMORY_ACCUMULATE.lower()
     assert "context selection happens before elasticity" in contract
@@ -91,8 +98,8 @@ def test_contextfs_contract_is_compiled_only_from_a_live_advertised_schema():
     assert "unless the exact current request explicitly asks to debug the implementation" in guidance
     assert "exactly three layers" in guidance
     assert "episode search indexes are l0 compatibility/discovery surfaces" in guidance.lower()
-    assert "retrieval backends, roster, and skills are capabilities, not memory layers" in guidance
-    assert "`artifacts/` or `roster/` are compatibility aliases" in guidance
+    assert "retrieval backends and skills are capabilities, not memory layers" in guidance
+    assert "`artifacts/` are compatibility aliases" in guidance
     assert "bare `history/` locator is instead a legacy episodic mirror" in guidance
     assert "Prefer `@sliceagent/`" in guidance
     assert "retrieval backend" in guidance and "memem" not in guidance.lower()

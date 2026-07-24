@@ -1,7 +1,6 @@
 """Execution lifecycle and immutable receipt regressions. No model or network."""
 from __future__ import annotations
 
-import json
 import os
 import sys
 import tempfile
@@ -231,16 +230,10 @@ def test_child_artifact_effect_links_exact_spawn_operation_and_compacts_for_term
     effect = {
         "id": "child-1:artifact", "kind": "child_artifact",
         "payload": {
-            "artifact_id": "child-1", "kind": "synthesiser", "status": "ok",
+            "artifact_id": "child-1", "kind": "explorer", "status": "ok",
             "work_item_id": "review-parser",
             "stop_reason": "end_turn", "stop_cause": "complete",
             "recovered_from": ["provider_timeout"],
-            "source_coverage_status": "source_partial",
-            "required_ref_count": 2,
-            "consumed_refs": ["subagents/sub-1.md"],
-            "cited_refs": ["subagents/sub-1.md"],
-            "covered_refs": ["subagents/sub-1.md"],
-            "source_gaps": ["secret raw gap detail must stay outside compact state"],
         },
     }
     events = (
@@ -267,25 +260,14 @@ def test_child_artifact_effect_links_exact_spawn_operation_and_compacts_for_term
     assert receipt.operations[0].child_stop_reason == "end_turn"
     assert receipt.operations[0].child_stop_cause == "complete"
     assert receipt.operations[0].child_recovered_from == ("provider_timeout",)
-    assert receipt.operations[0].child_source_coverage_status == "source_partial"
-    assert receipt.operations[0].child_required_ref_count == 2
-    assert receipt.operations[0].child_covered_ref_count == 1
-    assert receipt.operations[0].child_source_gap_count == 1
     operation_record = receipt.operations[0].to_dict()
     assert operation_record["work_item_id"] == "review-parser"
     assert operation_record["child_recovered_from"] == ["provider_timeout"]
     assert receipt.counts["child_artifacts"] == 1
     compact = compact_receipt_projection(receipt.to_dict())
     assert compact is not None and compact["agents"]["child_artifacts"] == 1
-    assert compact["agents"]["source_coverage"] == {
-        "source_complete": 0, "source_partial": 1, "source_unsupported": 0, "not_assessed": 0,
-        "required_refs": 2, "consumed_refs": 1, "cited_refs": 1, "covered_refs": 1,
-        "source_gaps": 1,
-    }
-    assert "secret raw gap detail" not in json.dumps(compact)
     assert receipt_summary_parts(compact) == (
         "agents · 1/1 succeeded",
-        "agents · 1 source partial · 1/2 granted reports covered",
     )
 
 

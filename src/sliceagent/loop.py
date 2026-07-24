@@ -49,7 +49,7 @@ from .hooks import Hooks, ToolPreflight
 from .errors import IndeterminateModelCallError, RetryCancelledError
 from .model_runner import complete_model_call
 from .execution import (CHILD_CANCEL_SIGNAL_ARG, CHILD_INVOCATION_ID_ARG,
-                        CHILD_REQUEST_ORDINAL_ARG, CHILD_TOKEN_BUDGET_ARG,
+                        CHILD_REQUEST_ORDINAL_ARG,
                         ToolInvocation, ToolOutcome, ToolPurity,
                         PreflightOverflow, ToolStatus, TurnOutcome, Usage,
                         available_content_capacity, estimate_model_call)
@@ -821,11 +821,11 @@ def run_tool_batch(tool_calls, tools, dispatch: Dispatcher, hooks: Hooks, *, ste
     started_ids: set[str] = set()
     handoff_index: int | None = None
 
-    # A provider batch may fan out several children concurrently. Reserve an equal slice of the
-    # owning turn's *remaining* budget for each child so parallel delegation cannot multiply the cap.
-    # The metadata is host-private: preflight, events, journals, and provider-visible args retain
-    # only the model's original call. Nested child loops apply the same rule recursively.
-    spawn_names = frozenset({"spawn_agent", "spawn_explore", "spawn_subagent"})
+    # A provider batch may fan out several children concurrently. Each child is bounded by its own step
+    # cap plus the scheduler-owned delegation deadline; a parent-level budget still applies through usage
+    # accounting on the parent side. The metadata below is host-private: preflight, events, journals, and
+    # provider-visible args retain only the model's original call.
+    spawn_names = frozenset({"spawn_agent"})
     invocations = []
     for provider_index, tc in enumerate(tool_calls):
         raw_args = tc.args if isinstance(getattr(tc, "args", None), dict) else {}
@@ -842,7 +842,7 @@ def run_tool_batch(tool_calls, tools, dispatch: Dispatcher, hooks: Hooks, *, ste
         raw_args = tc.args if isinstance(getattr(tc, "args", None), dict) else {}
         invocation = invocations[provider_index]
         call_args = {k: v for k, v in raw_args.items()
-                     if k not in ("note", CHILD_TOKEN_BUDGET_ARG, CHILD_CANCEL_SIGNAL_ARG,
+                     if k not in ("note", CHILD_CANCEL_SIGNAL_ARG,
                                   CHILD_INVOCATION_ID_ARG, CHILD_REQUEST_ORDINAL_ARG)}
         child_cancel = None
         if name in spawn_names:
@@ -1029,7 +1029,7 @@ def run_tool_batch(tool_calls, tools, dispatch: Dispatcher, hooks: Hooks, *, ste
             # Read-only children may overlap, but they finish by sealing artifacts and handing references to
             # the parent. A generic thread deadline must not abandon those lifecycle callbacks into a later
             # turn; the parent waits for settlement while still allowing sibling explorers to run in parallel.
-            timeout_safe=invocation.name not in ("spawn_agent", "spawn_explore", "spawn_subagent"),
+            timeout_safe=invocation.name != "spawn_agent",
             prepare=prepare,
             on_queued=(
                 (lambda reason, inv=invocation: dispatch(ToolQueued(
@@ -1040,57 +1040,6 @@ def run_tool_batch(tool_calls, tools, dispatch: Dispatcher, hooks: Hooks, *, ste
             request_cancel=(child_cancel.request if child_cancel is not None else None),
             cancel_grace=(_delegation_cancel_grace() if child_cancel is not None else 0.0),
         ))
-
-    child_budget_reserved = 0
-    outstanding_children = {
-        task.invocation.provider_index
-        for task in scheduled
-        if task.invocation.name in spawn_names
-    }
-
-    def allocate_child_budgets(ready: list[ScheduledTool]) -> None:
-        """Fairly reserve one batch-wide budget across current and future child waves."""
-        nonlocal child_budget_reserved
-        # Every task in the scheduler's current wave has completed preflight before this callback. Remove every
-        # child conclusively settled there (hook stop *or* host/registry validation failure): none receives
-        # ToolStarted, so retaining it would underallocate valid siblings against work proven not to start.
-        for index in tuple(outstanding_children):
-            if descriptors[index]["prepared_not_started"]:
-                outstanding_children.discard(index)
-        children = sorted(
-            (task for task in ready if task.invocation.name in spawn_names
-             and task.invocation.provider_index in outstanding_children),
-            key=lambda task: task.invocation.provider_index,
-        )
-        if not children:
-            return
-        remaining = _safe_advisory(
-            "remaining_token_budget", hooks.remaining_token_budget, default=None,
-        )
-        if remaining is None:
-            for task in children:
-                outstanding_children.discard(task.invocation.provider_index)
-            return
-        try:
-            remaining = max(0, int(remaining))
-        except (TypeError, ValueError, OverflowError):
-            # Budget reporting is advisory. A malformed custom hook must not crash or block an otherwise
-            # valid delegation batch; omit the child cap just as for a hook with no budget opinion.
-            for task in children:
-                outstanding_children.discard(task.invocation.provider_index)
-            return
-        # Divide against every still-outstanding child, not merely this wave. Otherwise a serialized writer or
-        # an effect barrier gives the first child the entire allowance and forces every later child to cap=0.
-        # Earlier shares get at most one remainder token; the running reservation still proves sum(caps) <= R.
-        for task in children:
-            available = max(0, remaining - child_budget_reserved)
-            slots = max(1, len(outstanding_children))
-            quotient, remainder = divmod(available, slots)
-            share = quotient + bool(remainder)
-            index = task.invocation.provider_index
-            descriptors[index]["call_args"][CHILD_TOKEN_BUDGET_ARG] = share
-            child_budget_reserved += share
-            outstanding_children.discard(index)
 
     outcomes: list[ToolOutcome | None] = [None] * len(descriptors)
     rejection_published_ids: set[str] = set()
@@ -1181,7 +1130,6 @@ def run_tool_batch(tool_calls, tools, dispatch: Dispatcher, hooks: Hooks, *, ste
         run_ordered(
             scheduled, timeout=_tool_timeout(), lifecycle_timeout=_delegation_timeout(),
             on_outcomes=publish,
-            on_wave_ready=allocate_child_budgets,
             should_cancel=(signal.is_set if signal is not None else None),
         )
     except KeyboardInterrupt:
@@ -1323,8 +1271,8 @@ def run_turn(*, build_slice, llm, tools, dispatch: Dispatcher, hooks: Hooks | No
     UNEXPECTED internal error (a non-retryable llm failure, a throwing build_slice) — routes through ONE
     helper, _park: honest reason + exactly one TurnInterrupted (+ an ACCOUNTED closeout where another model
     call is affordable). A budget/safety stop PARKS — never `end_turn` (the caller checkpoints end_turn⇒done).
-    ``allow_park_closeout=False`` delegates every such closeout to an outer lifecycle owner (used by the staged
-    explorer navigator, whose separately budgeted full synthesis is the sole allowed follow-up model call).
+    ``allow_park_closeout=False`` delegates every such closeout to an outer lifecycle owner (for callers that
+    reserve the sole allowed follow-up model call for a separately budgeted stage).
     Overflow compacts the oldest WHOLE exchange; a seed that alone overflows parks soft."""
     hooks = hooks or Hooks()
     total = Usage()

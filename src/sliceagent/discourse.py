@@ -96,7 +96,7 @@ _EXPLICIT_SELF_TARGET = re.compile(
     re.IGNORECASE,
 )
 _GENERIC_SUBJECTS = frozenset({"a", "active", "current", "my", "our", "that", "the", "this", "your"})
-_DELEGATION_TOOLS = frozenset({"spawn_agent", "spawn_explore", "spawn_subagent"})
+_DELEGATION_TOOLS = frozenset({"spawn_agent"})
 _COMMAND_TOOLS = frozenset({
     "run_command", "execute_code",
     "proc_start", "proc_poll", "proc_tail", "proc_wait", "proc_kill",
@@ -987,7 +987,7 @@ def _quality_grounding_artifact_ids(turns: Iterable) -> tuple[str, ...]:
 
 
 def _subagent_grounding_envelope(record: Mapping) -> dict:
-    """Project child claims and the explicitly bounded observation preview as distinct evidence layers.
+    """Project the explicitly bounded observation preview as the workspace-evidence layer.
 
     Current child artifacts may retain a much larger page-backed observation archive. That archive is never
     copied wholesale into a quality-audit prompt; the exact artifact/evidence locators remain the refinement
@@ -1012,10 +1012,6 @@ def _subagent_grounding_envelope(record: Mapping) -> dict:
             "args": _json_value(item.get("args") or {}),
             "status": str(item.get("status") or "unknown"),
             "view": str(item.get("view") or ""),
-            "raw_sha256": str(item.get("raw_sha256") or ""),
-            "view_sha256": str(item.get("view_sha256") or ""),
-            "raw_bytes": int(item.get("raw_bytes") or 0),
-            "view_bytes": int(item.get("view_bytes") or 0),
             "redacted": bool(item.get("redacted")),
             "truncated": bool(item.get("truncated")),
         }
@@ -1023,28 +1019,6 @@ def _subagent_grounding_envelope(record: Mapping) -> dict:
         if isinstance(item, Mapping)
     ]
     report = str(body.get("report") or "")
-    # Claims bind to the full archived views. Only claims whose references resolve there are well-formed; the
-    # bounded preview may omit the supporting bytes, in which case it remains a locator rather than support.
-    observation_hashes = {
-        str(item.get("view_sha256") or "")
-        for item in archived_observations
-        if isinstance(item, Mapping) and str(item.get("status") or "") == "succeeded"
-    }
-    claims = []
-    from .subagent_contract import SubagentClaim
-    raw_claims = body.get("claims") or ()
-    if not isinstance(raw_claims, (list, tuple)):
-        raw_claims = ()
-    for item in raw_claims[:8]:
-        if not isinstance(item, Mapping):
-            continue
-        try:
-            claim = SubagentClaim.from_dict(item)
-        except (TypeError, ValueError):
-            continue
-        if claim.report_exact not in report or not set(claim.observation_refs).issubset(observation_hashes):
-            continue
-        claims.append(claim.to_dict())
     revision = body.get("workspace_revision")
     dependencies = (
         revision.get("dependencies") if isinstance(revision, Mapping)
@@ -1056,21 +1030,16 @@ def _subagent_grounding_envelope(record: Mapping) -> dict:
             "objective": str(brief.get("objective") or brief.get("task") or ""),
             "scope": _json_value(brief.get("scope") or ()),
             "exclusions": _json_value(brief.get("exclusions") or ()),
-            "report_shape": str(brief.get("report_shape") or ""),
         },
         "status": str(record.get("status") or body.get("status") or "unknown"),
         "coverage": str(body.get("coverage") or ""),
         # A report is the child's claim layer. Workspace-fact support lives only in observations below.
         "report": report,
-        # Each entry is exact child testimony indexed from `report`; observation_refs are candidate locators,
-        # not proof that the interpretation follows from those bytes.
-        "claims": claims,
         "findings": _json_value(body.get("findings") or ()),
         "files": _json_value(body.get("files") or record.get("files") or ()),
         "workspace_dependencies": _json_value(dependencies),
         "gaps": _json_value(body.get("gaps") or ()),
         "uncertainty": _json_value(body.get("uncertainty") or record.get("uncertainty") or ()),
-        "conflicts": _json_value(body.get("conflicts") or ()),
         "observations": observations,
     }
 

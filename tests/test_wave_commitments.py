@@ -14,7 +14,7 @@ from sliceagent.loop import run_turn
 from sliceagent.pfc import Slice, record_user, slice_sink
 from sliceagent.prompt import SYSTEM_PROMPT, render_delegation_guidance
 from sliceagent.registry import ToolText
-from sliceagent.subagent import SubagentHost
+from sliceagent.scoped_spawn import ScopedSpawnHost
 
 
 def _state(*statuses: tuple[str, str]):
@@ -59,7 +59,7 @@ class _Inner:
 
 
 def _spawn_schema():
-    host = SubagentHost(_Inner(), llm=None, retriever=None, memory=None)
+    host = ScopedSpawnHost(_Inner(), llm=None, retriever=None, memory=None)
     return next(
         row for row in host.schemas()
         if row["function"]["name"] == "spawn_agent"
@@ -71,13 +71,11 @@ def test_delegation_guidance_describes_direct_reports_without_bookkeeping():
     guidance = render_delegation_guidance([schema])
 
     properties = schema["function"]["parameters"]["properties"]
-    assert "work_item_id" not in properties
+    assert "work_item_id" in properties                       # P2: optional binding is advertised
     assert "returns one complete normalized report directly as this tool result" in guidance
     assert "parent owns the final synthesis" in guidance
     assert "use every returned report" in guidance
     assert "scheduler owns those physical waves" in guidance
-    assert "ACTIVE WORK" not in guidance
-    assert "work_item_id" not in guidance
     assert "FAN-IN" not in guidance.upper()
     assert "create the complete declared coverage frontier" not in guidance
 

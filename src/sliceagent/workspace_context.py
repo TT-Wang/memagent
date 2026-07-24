@@ -24,7 +24,7 @@ def configure_workspace_contextfs(
     # paths, and remains present when any optional provider is missing.
     from .context_compiler import render_active_work
     from .contextfs import (ArtifactContextProvider, ArtifactHistoryProvider, CapabilityStatus,
-                            LedgerContextProvider, LegacyMountProvider, MappingContextProvider)
+                            LedgerContextProvider, MappingContextProvider)
 
     base_tools._contextfs.mount("evidence", MappingContextProvider({
         "index.md": (
@@ -65,12 +65,6 @@ def configure_workspace_contextfs(
             base_tools._artifacts, current_session=session.session_id,
         ),
     )
-    if base_tools._roster is not None:
-        base_tools._contextfs.mount(
-            "roster", LegacyMountProvider(
-                base_tools._roster, "roster", canonical_mount="@sliceagent/roster",
-            ),
-        )
 
     def _active_state():
         try:
@@ -363,10 +357,6 @@ def configure_workspace_contextfs(
                         "typed native knowledge" if native_active else
                         "no knowledge repository"
                     ),
-                ),
-                "roster": CapabilityStatus(
-                    "available" if base_tools._roster is not None else "unavailable",
-                    "standing-agent view mounted" if base_tools._roster is not None else "no roster provider",
                 ),
             },
             "open_active_work_count": open_count,

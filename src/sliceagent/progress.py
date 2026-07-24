@@ -32,7 +32,6 @@ from .events import (
     TurnPhaseChanged,
     TurnStarted,
 )
-from .regions import MAX_PLAN_CHARS, MAX_PLAN_ITEMS
 from .tui_projection import child_incompleteness_label, normalized_report_completion
 
 
@@ -134,8 +133,6 @@ def tool_bucket(name: str) -> str:
         return "agent"
     if name == "ask_user":
         return "wait"
-    if name == "update_plan":
-        return "plan"
     return "tool"
 
 
@@ -198,7 +195,6 @@ class ActiveSubagent:
     updated_at: float
     queued_at: float | None = None
     finished_at: float | None = None
-    source_coverage_status: str = "not_assessed"
     evidence_status: str = "not_assessed"
     evidence_account: tuple[tuple[str, int], ...] = ()
     attempt: int = 0
@@ -216,7 +212,8 @@ _ACTIVE_AGENT_PHASES = frozenset({
     "running",  # compatibility for older structured callbacks
 })
 _TERMINAL_AGENT_PHASES = frozenset({
-    "report_ready", "completed", "steered", "failed", "timed_out", "cancelled", "indeterminate",
+    "report_ready", "completed", "steered", "partial", "failed", "timed_out", "cancelled",
+    "indeterminate",
 })
 _AGENT_PHASES = _ACTIVE_AGENT_PHASES | _TERMINAL_AGENT_PHASES
 # Within one physical model response these are refinements of the same fact, so a
@@ -347,11 +344,6 @@ class ProgressSnapshot:
         """One semantic status string shared by every renderer."""
         phase = _PHASE_LABEL[self.phase]
         activity = phase + (f" — {self.detail}" if self.detail else "")
-        if self.plan.total:
-            if self.plan.current:
-                pos = self.plan.current_index or min(self.plan.done + 1, self.plan.total)
-                return f"{pos}/{self.plan.total} · {self.plan.current} — {activity}"
-            return f"{self.plan.done}/{self.plan.total} · plan complete — {activity}"
         return activity
 
 
@@ -442,34 +434,6 @@ class TurnProgress:
             started_at=now,
             phase_started_at=now,
         )
-        if event.plan is not None:
-            self._update_plan(event.plan)
-            self._replace()
-
-    def _update_plan(self, steps: object) -> None:
-        if not isinstance(steps, list):
-            return
-        valid = []
-        for item in steps[:MAX_PLAN_ITEMS]:
-            if not isinstance(item, dict):
-                continue
-            step = " ".join(str(item.get("step", "")).split())[:MAX_PLAN_CHARS]
-            status = str(item.get("status", "pending")).strip().lower()
-            if status not in ("pending", "in_progress", "done"):
-                status = "pending"
-            if step:
-                valid.append({"step": step, "status": status})
-        done = sum(1 for item in valid if item.get("status") == "done")
-        current_index, current = 0, ""
-        for wanted in ("in_progress", "pending"):
-            for index, item in enumerate(valid, 1):
-                if item.get("status") == wanted:
-                    current_index = index
-                    current = _one_line(item.get("step", ""), 90)
-                    break
-            if current:
-                break
-        self._plan = PlanProgress(len(valid), done, current, current_index)
 
     def _remove_tool(self, event: ToolResult) -> None:
         invocation_id = str(event.invocation_id or "")
@@ -521,6 +485,7 @@ class TurnProgress:
 
         ready = settled_count("succeeded", "report_ready")
         completed = settled_count("completed", "completed")
+        partial = settled_count("partial", "partial")
         steered = settled_count("steered", "steered")
         failed = settled_count("failed", "failed")
         timed_out = settled_count("timed_out", "timed_out")
@@ -540,6 +505,8 @@ class TurnProgress:
             parts.append(f"{ready} report{'s' if ready != 1 else ''} ready")
         if completed:
             parts.append(f"{completed} completed without report")
+        if partial:
+            parts.append(f"{partial} partial")
         if steered:
             parts.append(f"{steered} steered")
         if failed:
@@ -551,7 +518,8 @@ class TurnProgress:
         if indeterminate:
             parts.append(f"{indeterminate} state unknown")
         adverse = max(
-            (item for item in values if item.phase in {"failed", "timed_out", "cancelled", "indeterminate"}),
+            (item for item in values
+             if item.phase in {"partial", "failed", "timed_out", "cancelled", "indeterminate"}),
             key=lambda item: item.updated_order, default=None,
         )
         latest = max((*running, *queued), key=lambda item: item.updated_order, default=None)
@@ -577,20 +545,6 @@ class TurnProgress:
     def _child_artifact_id(cls, event: ToolResult) -> str:
         return str(cls._child_payload(event).get("artifact_id") or "")
 
-    @classmethod
-    def _child_source_coverage(cls, event: ToolResult) -> str:
-        payload = cls._child_payload(event)
-        status = str(
-            payload.get("source_coverage_status") or payload.get("epistemic_status") or "not_assessed"
-        ).strip().casefold()
-        status = {
-            "grounded": "source_complete", "partial": "source_partial",
-            "unsupported": "source_unsupported",
-        }.get(status, status)
-        if status in {"source_complete", "source_partial", "source_unsupported", "not_assessed"}:
-            return status
-        return "not_assessed"
-
     def _settle_subagent(self, event: ToolResult, status: str, now: float) -> bool:
         """Bind an authoritative result to one matrix row and tombstone late callbacks.
 
@@ -605,7 +559,7 @@ class TurnProgress:
         terminal_phase = {
             "succeeded": (
                 "report_ready" if report_completion in {"complete", "partial"} else "completed"
-            ), "steered": "steered",
+            ), "steered": "steered", "partial": "partial",
             "failed": "failed", "cancelled": "cancelled",
             "indeterminate": "indeterminate",
         }.get(status, "indeterminate")
@@ -625,7 +579,6 @@ class TurnProgress:
                 report_completion=report_completion,
             )
         )
-        source_coverage_status = self._child_source_coverage(event)
         evidence_status = _evidence_status(
             payload.get("explorer_evidence_status")
             if "explorer_evidence_status" in payload else payload.get("evidence_status")
@@ -676,10 +629,6 @@ class TurnProgress:
                         sequence=max(item.sequence, 2_147_483_647),
                         updated_order=self._subagent_update_seq, updated_at=now,
                         finished_at=item.finished_at or now,
-                        source_coverage_status=(
-                            source_coverage_status if current == root_id
-                            else item.source_coverage_status
-                        ),
                         evidence_status=(
                             evidence_status if current == root_id else item.evidence_status
                         ),
@@ -734,9 +683,8 @@ class TurnProgress:
             return True
         # Legacy/non-persistent launches have no artifact handle.  The launch ordinal is
         # presentation-only, so settle the oldest matching task kind deterministically.
-        kind = "explorer" if event.name == "spawn_explore" else ""
         args = event.args if isinstance(event.args, Mapping) else {}
-        kind = str(args.get("agent") or kind or "general")
+        kind = str(args.get("agent") or "general")
         key = next((key for key, item in sorted(
             self._subagents.items(), key=lambda pair: (pair[1].launch_ordinal, pair[0]),
         ) if item.kind == kind), None)
@@ -799,9 +747,7 @@ class TurnProgress:
                 placeholder_id = f"invocation:{invocation_id}"
                 previous = self._subagents.get(placeholder_id)
                 if previous is None or previous.phase == "queued":
-                    kind = str(args.get("agent") or (
-                        "explorer" if name == "spawn_explore" else "general"
-                    ))
+                    kind = str(args.get("agent") or "general")
                     self._subagent_update_seq += 1
                     queued_at = previous.queued_at if previous is not None else now
                     self._subagents[placeholder_id] = ActiveSubagent(
@@ -833,9 +779,7 @@ class TurnProgress:
                     provider_index = getattr(invocation, "provider_index", -1)
                     request_ordinal = provider_index + 1 if isinstance(provider_index, int) else 0
                     placeholder_id = f"invocation:{invocation_id}"
-                    kind = str(args.get("agent") or (
-                        "explorer" if event.name == "spawn_explore" else "general"
-                    ))
+                    kind = str(args.get("agent") or "general")
                     objective = _one_line(args.get("task", ""), 100)
                     previous = self._subagents.get(placeholder_id)
                     self._subagent_update_seq += 1
@@ -886,9 +830,16 @@ class TurnProgress:
                 steered = status == "steered"
                 bucket = tool_bucket(event.name)
                 if bucket == "agent":
+                    payload = self._child_payload(event)
+                    child_operational = str(
+                        payload.get("operational_status") or payload.get("status") or ""
+                    ).strip().casefold()
+                    if status == "succeeded" and child_operational == "partial":
+                        # ok=True because the delegation returned a deliverable; the typed child
+                        # outcome owns the partial label (step-ceiling stop with an accepted report).
+                        status = "partial"
                     matched_row = self._settle_subagent(event, status, now)
                     outcome_status = status
-                    payload = self._child_payload(event)
                     report_completion = normalized_report_completion(payload.get("report_completion"))
                     if status == "succeeded" and report_completion not in {"complete", "partial"}:
                         outcome_status = "completed"
@@ -910,8 +861,6 @@ class TurnProgress:
                 if event.failing and not cancelled and not queued_unstarted:
                     self._counts["fail"] = self._counts.get("fail", 0) + 1
                 event_args = event.args if isinstance(event.args, dict) else {}
-                if event.name == "update_plan" and status == "succeeded":
-                    self._update_plan(event_args.get("steps"))
                 note = event_args.get("note")
                 if status == "succeeded" and isinstance(note, str) and note.strip():
                     self._replace(last_milestone=_one_line(note, 160))
@@ -1011,6 +960,17 @@ class TurnProgress:
                 self._transition(ProgressPhase.THINKING, "reasoning", now=now)
             elif kind == "content":
                 self._transition(ProgressPhase.WRITING, "drafting response", now=now)
+            return self._snapshot()
+
+    def host_activity(self, detail: str) -> ProgressSnapshot:
+        """A host-side long operation (e.g. a verify command during update_work) announcing itself on
+        the status line. Presentation only: shows as `running — <detail>`; the next tool/model event
+        transitions past it naturally."""
+        now = self._clock()
+        with self._lock:
+            if not self._snapshot().active or self._state.loop_finished:
+                return self._snapshot()
+            self._transition(ProgressPhase.RUNNING, _one_line(str(detail or ""), 110), now=now)
             return self._snapshot()
 
     def subagent_activity(self, update: SubagentProgress | str) -> ProgressSnapshot:
@@ -1147,9 +1107,6 @@ class TurnProgress:
                 queued_at=previous.queued_at if previous is not None else None,
                 finished_at=(previous.finished_at if previous is not None and previous.finished_at is not None
                              else finished_at),
-                source_coverage_status=(
-                    previous.source_coverage_status if previous is not None else "not_assessed"
-                ),
                 evidence_status=(
                     previous.evidence_status if previous is not None else "not_assessed"
                 ),

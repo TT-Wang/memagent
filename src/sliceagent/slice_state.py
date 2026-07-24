@@ -266,12 +266,6 @@ class TurnRuntime:
     # They are elastic slice material, not durable transcript state, and disappear at the turn seal.
     source_projections: tuple[dict, ...] = ()
 
-    @property
-    def fan_in_manifest(self):
-        """Bounded delegated-work consumption truth derived from the call ledger."""
-        from .fan_in import build_fan_in_manifest
-        return build_fan_in_manifest(self.recent_calls)
-
     def reset(self) -> None:
         self.step = 0
         self.usage = {}

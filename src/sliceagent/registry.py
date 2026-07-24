@@ -143,7 +143,7 @@ def finalize_tool_outcome(
 ) -> ToolOutcome:
     """Build the one canonical typed outcome from a completed or pre-execution-cancelled result.
 
-    Execution remains host-owned: wrappers such as ``SubagentHost`` must enforce their restrictions before
+    Execution remains host-owned: wrappers such as ``ScopedSpawnHost`` must enforce their restrictions before
     this boundary. This function exclusively owns status projection, effect construction, effect-factory
     failure semantics, and the default audit effect used when a tool declares no semantic effects.
     """

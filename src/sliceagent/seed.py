@@ -28,10 +28,8 @@ from .regions import (
     MANIFEST_TURNS,
     MAX_FINDINGS,
     REGION_LINES,
-    ROSTER_MANIFEST_K,
     build_context_blocks,
     render_cache_manifest,
-    render_roster,
     render_current_request,
     render_focus,
     render_now,
@@ -240,7 +238,7 @@ def render_subdir_hints(text: str) -> str:
 
 def render_slice(s: Slice, artifacts: str, discovery: str = "", memory: str = "", threads: str = "",
                  worktree: str = "", repo_map: str = "", cache_manifest: str = "",
-                 focus: str = "", roster: str = "", *, max_findings: int = MAX_FINDINGS) -> str:
+                 focus: str = "", *, max_findings: int = MAX_FINDINGS) -> str:
     """Assemble the ONE user string (the moat) by iterating REGION_ORDER — the typed-region layout
     in regions.py. Each region renders its own framed fragment and SUPPRESSES itself when empty;
     render_regions joins them (stable bulk leads for prompt-cache locality, volatile recency-salient
@@ -248,14 +246,14 @@ def render_slice(s: Slice, artifacts: str, discovery: str = "", memory: str = ""
     (artifacts / discovery / memory / threads) ride in via the ctx dict. SUBDIRECTORY CONTEXT is NOT a
     region here — it's framed by the caller into the NOW footer (make_build_slice → render_now)."""
     return render_regions(_slice_context(
-        s, artifacts, discovery, memory, threads, worktree, repo_map, cache_manifest, focus, roster,
+        s, artifacts, discovery, memory, threads, worktree, repo_map, cache_manifest, focus,
         max_findings=max_findings,
     ))
 
 
 def _slice_context(s: Slice, artifacts: str, discovery: str = "", memory: str = "", threads: str = "",
                    worktree: str = "", repo_map: str = "", cache_manifest: str = "",
-                   focus: str = "", roster: str = "", open_file_paths=None,
+                   focus: str = "", open_file_paths=None,
                    *, max_findings: int = MAX_FINDINGS) -> dict:
     """Build the single renderer context consumed by both legacy rendering and the elastic seed plan."""
     return {
@@ -268,7 +266,6 @@ def _slice_context(s: Slice, artifacts: str, discovery: str = "", memory: str = 
         "repo_map": repo_map,
         "cache_manifest": cache_manifest,
         "focus": focus,
-        "roster": roster,
         # Production passes the live host classification. Legacy/direct render callers have no host seam,
         # so preserving their supplied paths is the only truthful fallback.
         "open_file_paths": tuple(s.active_files if open_file_paths is None else open_file_paths),
@@ -279,7 +276,7 @@ def _slice_context(s: Slice, artifacts: str, discovery: str = "", memory: str = 
 def _attach_images(user_text: str, host):
     """Return the user message content. Text-only → the STRING unchanged (the moat path). If the host has
     images @-attached for this turn (host.pending_images, populated by a vision-capable model only), return
-    a multimodal parts list [text, image_url…] and consume them IN PLACE (so a forwarding SubagentHost sees
+    a multimodal parts list [text, image_url…] and consume them IN PLACE (so a forwarding spawn host sees
     the clear too)."""
     imgs = getattr(host, "pending_images", None)
     if not imgs:
@@ -428,10 +425,6 @@ def make_build_slice(state, tools, retriever, memory, task: str, session_id: str
     except Exception:
         _schemas = []
     delegation_block = render_delegation_guidance(_schemas)
-    _spawn = next((schema.get("function", {}) for schema in _schemas
-                   if schema.get("function", {}).get("name") == "spawn_agent"), {})
-    _spawn_properties = ((_spawn.get("parameters") or {}).get("properties") or {})
-    standing_agents_supported = "name" in _spawn_properties
     # Splice the memory-model explanation into the system prompt (computed once → byte-stable per session).
     mem_block = memory_model_for_eval(MEMORY_ACCUMULATE)
 
@@ -447,7 +440,7 @@ def make_build_slice(state, tools, retriever, memory, task: str, session_id: str
     repo_map_block = ("\n\n# REPO MAP (the project's file structure — your resident map; navigate from here, "
                       "do NOT re-list the tree)\n" + repo_map_text) if repo_map_text else ""
     # AGENT ROLE — a per-agent system-prompt layer for a named subagent.
-    # Empty for the top-level agent; set by run_subagent from the spawned AgentSpec.system_prompt.
+    # Empty for the top-level agent; set by run_scoped_agent from the spawned AgentSpec.system_prompt.
     agent_block = ("\n\n# AGENT ROLE (you are running as a named subagent for this sub-task)\n" + system_extra
                    ) if system_extra else ""
     system_prefix = (
@@ -482,7 +475,6 @@ def make_build_slice(state, tools, retriever, memory, task: str, session_id: str
         needs_files = bool(resource_kinds & {"file", "workspace_file", "path", "workspace", "git"})
         needs_memory = bool(resource_kinds & {"memory", "history"})
         needs_history = "history" in resource_kinds
-        needs_roster = "roster" in resource_kinds
         graph_paths = dependency_resource_paths(
             s.active_work, workspace_epoch=current_epoch,
         ) if graph_active else None
@@ -533,17 +525,6 @@ def make_build_slice(state, tools, retriever, memory, task: str, session_id: str
         manifest_refs = pages.lookup(session_id, kind="episode-thissession", k=MANIFEST_TURNS) \
             if (not graph_active or needs_history) else ()
         cache_manifest = render_cache_manifest(manifest_refs)
-        # STANDING SPECIALISTS manifest — advertise the durable, cross-session roster so the model uses
-        # read_file("roster/index.md") / spawn_agent(name=…) instead of spelunking the raw vault (an
-        # unadvertised channel is a dead one). roster_recent does BOUNDED WORK (rank by cheap stat, parse
-        # only the top-K) so the roster can be UNCAPPED without denting the history-bounded moat — a dormant
-        # specialist costs a stat, not a read. getattr-guarded like episode_manifest — a minimal memory
-        # without a roster just yields "". Cross-session by design: NOT gated on is_session.
-        roster_manifest = ""
-        _roster_recent = getattr(memory, "roster_recent", None)
-        if standing_agents_supported and callable(_roster_recent) and (not graph_active or needs_roster):
-            _profs, _total = _roster_recent(ROSTER_MANIFEST_K)
-            roster_manifest = render_roster(_profs, _total)
         # ACTIVE FOCUS — surface the file-tool reach beyond the workspace (auto-granted when the shell
         # works on an external dir, but otherwise INVISIBLE → the model defaulted to the workspace frame
         # and lost the thread across turns). Carries naturally: the host's extra roots persist per session.
@@ -554,7 +535,7 @@ def make_build_slice(state, tools, retriever, memory, task: str, session_id: str
         ctx = _slice_context(
             s, artifacts, discovery, lessons_memo[goal], threads,
             worktree, "", cache_manifest, focus_text,  # repo_map rides the cacheable SYSTEM prefix
-            roster=roster_manifest, open_file_paths=open_file_paths, max_findings=_NO_CAP,
+            open_file_paths=open_file_paths, max_findings=_NO_CAP,
         )
         # 2B + review fix: the <workspace_context> envelope wraps reference STATE only. The live request frames
         # it once from OUTSIDE at RECENCY (below the fence), and the intent-aware NOW footer is the OUTERMOST

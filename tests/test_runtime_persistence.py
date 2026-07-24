@@ -1018,9 +1018,6 @@ def child_evidence_is_losslessly_recoverable_through_fixed_size_virtual_pages():
                     "path": "src/large.py", "pattern": "```adversarial```" * 500,
                 },
                 "status": "succeeded", "view": view,
-                "raw_sha256": hashlib.sha256(body).hexdigest(),
-                "view_sha256": hashlib.sha256(body).hexdigest(),
-                "raw_bytes": len(body), "view_bytes": len(body),
                 "redacted": False, "truncated": False,
             }],
         },
@@ -1089,12 +1086,10 @@ def oversized_child_report_is_losslessly_recoverable_through_deterministic_pages
 
 @check
 def legacy_capsule_loss_is_never_relabelled_as_source_paging_or_full_retention():
-    import hashlib
     from sliceagent.persistence import Artifact, ArtifactStore
 
     store = ArtifactStore(tempfile.mkdtemp(prefix="legacy-child-capsule-"))
     view = "HEAD\n…[sealed observation view truncated by capsule budget]…\nTAIL"
-    encoded = view.encode()
     store.put(Artifact(
         id="subagent-legacy-capsule", kind="subagent", workspace_id="workspace",
         session_id="session", task_id="task", status="partial",
@@ -1103,9 +1098,6 @@ def legacy_capsule_loss_is_never_relabelled_as_source_paging_or_full_retention()
             "observations": [{
                 "v": 1, "tool": "read_file", "args": {"path": "old.py"},
                 "status": "succeeded", "view": view,
-                "raw_sha256": hashlib.sha256(encoded).hexdigest(),
-                "view_sha256": hashlib.sha256(encoded).hexdigest(),
-                "raw_bytes": len(encoded), "view_bytes": len(encoded),
                 "redacted": False, "truncated": True,
             }],
         },

@@ -78,11 +78,7 @@ def render_shows_activity_without_repeating_the_user_prompt():
 @check
 def responsive_progress_preserves_truth_at_60_80_and_120_columns():
     machine = TurnProgress(clock=lambda: 100.0, await_commit=True)
-    machine.reduce(TurnStarted("fix retry handling", task_title="Retry fix", plan=[
-        {"step": "inspect retry path", "status": "done"},
-        {"step": "add regression test", "status": "in_progress"},
-        {"step": "verify full suite", "status": "pending"},
-    ]))
+    machine.reduce(TurnStarted("fix retry handling", task_title="Retry fix"))
     machine.reduce(StepBegin(7))
     machine.reduce(ModelCallPrepared(7, 2, []))
     machine.reduce(ToolResult("read_file", {"path": "retry.py"}, "ok", False))
@@ -94,8 +90,6 @@ def responsive_progress_preserves_truth_at_60_80_and_120_columns():
         assert cell_len(row.plain) <= width, (width, row.plain)
         assert "Running" in row.plain and "00:42" in row.plain, row.plain
         assert row.no_wrap and row.overflow == "ellipsis"
-    assert "add regression test" not in rows[60].plain
-    assert "add regression" in rows[80].plain and "add regression" in rows[120].plain
     assert "pass 7" not in rows[60].plain and "pass 7" not in rows[80].plain
     assert "pass 7" in rows[120].plain and "attempt 2" in rows[120].plain
     assert "1 read" in rows[120].plain

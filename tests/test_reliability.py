@@ -13,7 +13,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from sliceagent.access import none                                   # noqa: E402
 from sliceagent.loop import _safe_advisory, _safe_preflight, run_tool_batch  # noqa: E402
-from sliceagent.scheduler import run_scheduled                       # noqa: E402
 
 CHECKS = []
 def check(fn):
@@ -191,13 +190,29 @@ def stream_reraises_when_nothing_assembled():
 
 
 # ---- E4: scheduler per-tool timeout -----------------------------------------
+def _read_task(call_id, index, fn):
+    from sliceagent.execution import ToolInvocation, ToolOutcome, ToolPurity, ToolStatus
+    from sliceagent.scheduler import ScheduledTool
+
+    invocation = ToolInvocation(call_id, "read", {}, index)
+    return ScheduledTool(
+        invocation, ToolPurity.PURE_READ,
+        lambda: ToolOutcome(invocation, ToolStatus.SUCCEEDED, str(fn())),
+    )
+
+
 @check
 def scheduler_no_timeout_is_unchanged():
-    assert run_scheduled([(none(), lambda: "a"), (none(), lambda: "b")]) == ["a", "b"]
+    from sliceagent.scheduler import run_ordered
+
+    tasks = [_read_task("a", 0, lambda: "a"), _read_task("b", 1, lambda: "b")]
+    assert [out.text for out in run_ordered(tasks)] == ["a", "b"]
 
 
 @check
 def scheduler_timeout_returns_after_bounded_grace():
+    from sliceagent.scheduler import run_ordered
+
     release = threading.Event()
     finished = threading.Event()
 
@@ -213,7 +228,8 @@ def scheduler_timeout_returns_after_bounded_grace():
 
     def schedule():
         try:
-            box["out"] = run_scheduled([(none(), lambda: "fast"), (none(), slow)], timeout=0.5)
+            tasks = [_read_task("fast", 0, lambda: "fast"), _read_task("slow", 1, slow)]
+            box["out"] = run_ordered(tasks, timeout=0.5)
         except BaseException as error:  # noqa: BLE001 - surfaced on the test thread below
             box["error"] = error
         finally:
@@ -225,8 +241,8 @@ def scheduler_timeout_returns_after_bounded_grace():
         assert returned.wait(3), "deadline + bounded grace did not return while the reader remained blocked"
         assert "error" not in box, box
         out = box["out"]
-        assert out[0] == "fast", "the fast task must still return its real result"
-        assert "still running" in out[1], f"the unresolved reader must be explicit: {out[1]!r}"
+        assert out[0].text == "fast", "the fast task must still return its real result"
+        assert "still running" in out[1].text, f"the unresolved reader must be explicit: {out[1].text!r}"
     finally:
         release.set()
         controller.join(1)

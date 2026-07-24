@@ -7,8 +7,10 @@ focused on budget closeout avoids reintroducing generic permission prose into du
 # Maps a budget kind to the concrete ceiling that was hit, so the message can name
 # the right limit. Unknown kinds fall back to a generic "work budget".
 _BUDGET_CEILINGS = {
-    "max_steps": "the maximum number of steps for this turn",
-    "token_budget": "the token budget for this turn",
+    # Every ceiling names its own knob: a cap that parks work without saying how to raise it is a
+    # silent-degrade (the block-render rule). These are runaway BACKSTOPS, not work meters.
+    "max_steps": "the maximum number of steps for this turn (backstop; raise via AGENT_MAX_STEPS)",
+    "token_budget": "the token budget for this turn (set via AGENT_MAX_TOKENS)",
 }
 
 

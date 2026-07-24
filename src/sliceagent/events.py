@@ -27,7 +27,6 @@ class TurnStarted(Event):
     request: str
     task_title: str = ""
     task_id: str = ""
-    plan: list | None = None
     # Physical turn/segment identity.  Presentation callbacks from concurrent child
     # workers use it to prove ownership; task_id alone is intentionally longer-lived.
     turn_id: str = ""

@@ -24,17 +24,6 @@ _READ_ONLY_SET = frozenset(READ_ONLY_TOOLS)   # mutability is decided against th
 # is a stall (and racy/meaningless when several run in parallel). It returns its summary instead.
 SUBAGENT_EXCLUDED_TOOLS = frozenset({"ask_user", "change_workspace", "update_work"})
 
-# Mutating tools — an agent whose allowlist includes ANY of these is "writable" (globally serialized vs
-# other writers); an allowlist with none of them is read-only (parallelizes as a swarm).
-WRITE_TOOLS = frozenset({
-    "edit_file", "append_to_file", "str_replace", "run_command", "execute_code",
-    "world_set", "world_clear", "require", "drop_requirement", "requirement_done",
-    "supersede_requirement", "update_plan", "update_work", "reconcile_execution",
-    "terminal_open", "terminal_send", "terminal_read", "terminal_wait", "terminal_close",
-    "proc_start", "proc_poll", "proc_tail", "proc_wait", "proc_kill",
-    "spawn_subagent", "spawn_explore", "spawn_agent",
-})
-
 
 @dataclass(frozen=True)
 class AgentSpec:
@@ -51,7 +40,7 @@ class AgentSpec:
     def read_only(self) -> bool:
         """A child is read-only iff EVERY tool in its allowlist is a KNOWN read-only tool. Pessimistic by
         design: an unknown / plugin / MCP tool is NOT assumed safe (the old check only excluded the static
-        WRITE_TOOLS names, so a side-effecting plugin tool was mis-classified read-only and could be
+        WRITE_TOOLS set, so a side-effecting plugin tool was mis-classified read-only and could be
         scheduled as a parallel non-writer). None (full surface) is writable."""
         return self.tools is not None and set(self.tools).issubset(_READ_ONLY_SET)
 
@@ -88,36 +77,32 @@ BUILTIN_AGENTS: dict[str, AgentSpec] = {
                       "work, then return a concise summary of what you changed and verified. Do NOT ask the "
                       "user; if the task is ambiguous, make the best reasonable choice and note it in the summary.",
     ),
-    # The REDUCE side of fan-out — and deliberately NOT special machinery: a synthesiser is just a
-    # read-only child whose brief GRANTS it the sibling reports to merge (spawn_agent with
-    # grants=[all N handles]). It pages them ONE AT A TIME through its own bounded slice (peak O(1) in N)
-    # and seals a synthesis whose refs are those handles — so the reduce is bounded AND lossless: any
-    # detail the synthesis dropped stays one read_file away.
-    "synthesiser": AgentSpec(
-        name="synthesiser",
-        description="REDUCE a fan-out: merges the sealed reports you grant it (grants=[...]) into ONE "
-                    "synthesis with per-claim citations, surfacing conflicts and coverage gaps. Spawn after "
-                    "several explorers finish, granting it their handles.",
-        tools=READ_ONLY_TOOLS, reasoning="full",
-        summary_is_deliverable=True,   # its summary IS the synthesis
+    # Root-cause debugging for a FAILED verify (P2 escalation target: the oscillation steer names this
+    # kind when the same failure signature recurs). Ported from forge agents/debugger.md (same author):
+    # the discipline is hypothesis-before-fix — guessing wastes attempts, and a stagnant retry must
+    # report BLOCKED rather than burn another identical attempt.
+    "debugger": AgentSpec(
+        name="debugger",
+        description="Diagnoses and FIXES a failing check via root-cause analysis (reproduce → hypothesize "
+                    "→ verify hypothesis → fix root cause → re-run the check). Spawn it with the exact "
+                    "failing command and its output when a verify keeps failing the same way.",
+        tools=None, reasoning="full",
         system_prompt=(
-            "You are a SYNTHESISER subagent: your job is to REDUCE several sealed sibling reports into one "
-            "coherent synthesis WITHOUT laundering away detail or disagreement.\n"
-            "Method: read the granted INPUT REPORTS one at a time (each is a read_file call from your task); "
-            "extract each report's claims/findings; then merge.\n"
-            "Rules:\n"
-            "- CITE every merged claim to its source handle, e.g. (subagents/sub-2.md) — a claim you cannot "
-            "cite does not go in the synthesis.\n"
-            "- The host's source-complete status means only that every granted report was completely read and "
-            "path-cited. It does NOT establish entailment, correctness, agreement, or independent verification; "
-            "retain each source's uncertainty and distinguish report testimony from observed fact.\n"
-            "- CONFLICTS between reports are FINDINGS, not noise: surface them explicitly ('sub-1 says X; "
-            "sub-3 says Y') rather than picking a side silently.\n"
-            "- COVERAGE GAPS are part of the synthesis: state what none of the inputs examined.\n"
-            "- Do NOT re-investigate the codebase yourself beyond spot-checking a citation; your input is "
-            "the reports. If they are insufficient, say exactly what is missing.\n"
-            "Deliver: a structured synthesis (merged findings with citations · conflicts · gaps · "
-            "recommendation if asked). Do NOT ask the user."
+            "You are a DEBUGGER subagent: one failing check, root-cause analysis, then the fix.\n"
+            "MANDATORY PROCESS (do not skip steps):\n"
+            "1. REPRODUCE: run the failing command yourself; confirm the failure is still present.\n"
+            "2. ROOT-CAUSE: read the failing code and test thoroughly; trace entry point -> failure; form a "
+            "SPECIFIC hypothesis ('X calls Y which expects Z but receives W').\n"
+            "3. VERIFY THE HYPOTHESIS before changing anything (targeted read/print/log). Guessing wastes "
+            "attempts.\n"
+            "4. FIX THE ROOT CAUSE, not the symptom. If the TEST is wrong rather than the code, fix the test "
+            "and say why.\n"
+            "5. RE-RUN the original failing command plus any sibling checks; confirm no new failures.\n"
+            "NEVER: retry with cosmetic changes; suppress errors with try/except; disable or skip failing "
+            "tests; change code unrelated to the failure.\n"
+            "STAGNATION: if your brief shows this failure already recurred across attempts and your only idea "
+            "repeats a prior attempt, report BLOCKED with what is needed instead of burning the attempt.\n"
+            "Report: root cause, the fix, files changed, and the verify command output proving green."
         ),
     ),
     # A CALIBRATED code reviewer. The failure mode of an LLM review is not missing bugs — it is CRYING WOLF:
@@ -166,7 +151,7 @@ BUILTIN_AGENTS: dict[str, AgentSpec] = {
     # giving the parent a skeptical second opinion without any context crossing the seal.
     # Read-only EXCEPT running checks: read/grep + run_command/execute_code (to build/test/probe), no edit
     # tools (the allowlist is enforced at runtime in subagent.py). It is "writable" by classification (shell
-    # is in WRITE_TOOLS) so it serializes vs other writers — correct for a verifier that runs tests.
+    # is not read-only) so it serializes vs other writers — correct for a verifier that runs tests.
     "verification": AgentSpec(
         name="verification",
         description="Independent adversarial VERIFIER — given a change/claim, TRY TO BREAK IT (reproduce, run "

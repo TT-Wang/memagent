@@ -5,6 +5,62 @@ this project aims for [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- **Subagents are now scoped turns (docs/SUBAGENT-SCOPED-TURN.md).** A delegation is one ordinary
+  `run_turn` over a fresh, scoped slice — not a nested agent object. `ScopedSpawnHost` replaces
+  `SubagentHost` behind an unchanged `spawn_agent` schema; children share the parent's cache prefix
+  (measured −56% fresh tokens single-child, ~92% cache share at 12-wide), isolation is by
+  construction (the child context is discarded; only the redacted report survives), and the seal is
+  one redacted JSON record through the existing `subagents/sub-N.md` archive — no seal contract, no
+  observation sinks, no admission preflight, no roster. The 12-child live acceptance stress passed
+  with zero gate leaks and instantaneous mid-flight cancellation, and is a permanent runnable eval
+  (`evals/fanout_stress.py`, the caller of `fanout.py`'s bounded parallel runner; read-only kinds
+  overlap, writable kinds serialize) — re-verified on `deepseek-v4-flash` after DeepSeek retired the
+  `deepseek-reasoner`/`deepseek-chat` aliases (2026-07-25). A child whose physical state is unknown
+  (unconfirmed close/timeout) reports a DISTINCT `indeterminate` status, never collapsed into
+  `failed`.
+- **Provider-gate lease reaper hardened.** Leases now carry per-call reap horizons derived from each
+  call's own deadline (`acquire_lease(call_deadline=…)`), so raising `AGENT_COMPLETION_TOKENS` or
+  `LLM_TIMEOUT_SEC` can never get a live long call reaped; the already-active misuse guard no longer
+  releases the live lease it detected; `LLM_STREAM_CLOSE_GRACE_SEC`/`LLM_GATE_LEASE_MARGIN_SEC` are
+  validated finite and non-negative (a NaN previously disabled the reaper silently).
+
+### Removed
+- **The nested-subagent stack.** `subagent.py` (1,997 lines), `subagent_contract.py` (698 lines),
+  their test files, and the roster/fan-in evals. The load-bearing guarantees (matrix truth, read-only
+  child, depth-1, work binding, parent-private namespaces, seal laws) were ported to
+  `tests/test_scoped_spawn.py` and re-derived seal laws in `tests/test_laws.py` first.
+
+### Changed (previous)
+- **Subagent simplification: trust the report.** Delegation is now one ordinary tool-enabled child loop per
+  spawn — the staged explorer navigation/synthesis profile is gone — and the parent's acceptance policy is
+  the same as every peer agent: a clean end-of-turn plus a non-empty report succeeds, an empty report fails,
+  and an interrupt yields a cancelled/partial outcome. Evidence (navigation vs content observations) is now
+  an informational label on the sealed artifact, never an acceptance gate; this fixes real explorer reports
+  being rejected merely because they rested on navigation-level evidence. The seal is a plain canonical
+  record (report, bounded observations, gaps, uncertainty, usage) — re-readable via `subagents/sub-N.md` as
+  a recovery/refinement surface — with no claims, observation checksums, or fan-in bundles. Children are
+  bounded by the step ceiling and the `AGENT_DELEGATION_TIMEOUT` wall-clock deadline only; token-budget
+  splitting across waves is removed.
+
+### Removed
+- **Grants, roster, and the advanced-agents gate.** Exact artifact grants, hire/wake standing specialists,
+  roster careers, and the `AGENT_ADVANCED_AGENTS` env gate are cut; built-in kinds (`explorer`, `general`,
+  `reviewer`, `verification`) and user `agents/*.md` definitions are always available. The
+  staged-explorer knobs `AGENT_EXPLORER_REASONING` and `AGENT_EXPLORER_NAV_STEPS` are gone with the staged
+  profile. The legacy `spawn_explore` / `spawn_subagent` tool aliases are removed; `spawn_agent` subsumes
+  both.
+- **`synthesiser` kind.** Its only input channel was grants — children cannot read the parent's
+  `subagents/` namespace, so with grants cut it could never read the reports it existed to merge. The
+  parent synthesizes fan-out results; a narrow same-session seal-read channel can be restored if wide
+  fan-outs ever return.
+
+### Breaking
+- `spawn_agent`'s parameter list is reduced to `agent`, `task`, `scope`, and `exclusions` (no `name`,
+  `grants`, `report_shape`, or `drift_policy`).
+- `AGENT_ADVANCED_AGENTS`, `AGENT_EXPLORER_REASONING`, and `AGENT_EXPLORER_NAV_STEPS` no longer exist.
+- `spawn_explore` and `spawn_subagent` are gone; use `spawn_agent(agent="explorer" | "general", …)`.
+
 ## [0.3.0] — 2026-07-17
 
 ### Added

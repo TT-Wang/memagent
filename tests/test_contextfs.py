@@ -56,10 +56,6 @@ def _providers():
             "craft/index.md": "# CRAFT KNOWLEDGE\n- verify boundaries",
             "records/k-1.md": "# lesson\nneedle knowledge",
         }),
-        "roster": MappingContextProvider({
-            "index.md": "# ROSTER\n- scout/",
-            "scout/profile.md": "# scout\nstanding explorer",
-        }),
     }
 
 
@@ -112,9 +108,7 @@ def manifest_names_exactly_three_layers_and_separates_adjacent_capabilities():
     assert "L0 · HISTORY AND EVIDENCE" in manifest
     assert "L1 · ACTIVE WORK" in manifest
     assert "L2 · TYPED KNOWLEDGE" in manifest
-    assert "## Adjacent capabilities (not memory layers)" in manifest
-    assert "roster: available" in manifest
-    assert "Indexes, retrieval backends, roster, skills, and subagents are not additional" in manifest
+    assert "Indexes, retrieval backends, skills, and subagents are not additional" in manifest
     assert "## Self-inspection status" in manifest
     assert "## Specific content drill-down" in manifest
     assert "this is not a traversal checklist" in manifest
@@ -190,14 +184,13 @@ def absent_consolidation_telemetry_stays_unknown():
 def canonical_tree_reads_and_lists_injected_provider_documents():
     fs = ContextFS(_providers(), status=_status())
     root = fs.list_files("@sliceagent/")
-    assert root.splitlines() == ["index.md", "evidence/", "history/", "work/", "memory/", "roster/"]
+    assert root.splitlines() == ["index.md", "evidence/", "history/", "work/", "memory/"]
     evidence = fs.listing("@sliceagent/evidence")
     assert "index.md" in evidence and "turns/" in evidence and "children/" in evidence
     assert "needle evidence" in fs.read_file("@sliceagent/evidence/turns/turn-1.md")
     assert "needle history" in fs.read_file("@sliceagent/history/sessions/current/turn-1.md")
     assert "implement ContextFS" in fs.read_file("@sliceagent/work/active.md")
     assert "needle knowledge" in fs.read_file("@sliceagent/memory/records/k-1.md")
-    assert "standing explorer" in fs.read_file("@sliceagent/roster/scout/profile.md")
 
 
 @check
@@ -296,7 +289,6 @@ def canonical_artifact_and_history_views_share_the_core_seals_not_the_legacy_mir
 
 @check
 def canonical_child_view_exposes_the_same_page_backed_evidence_as_artifacts_mount():
-    import hashlib
     import tempfile
 
     from sliceagent.persistence import Artifact, ArtifactStore
@@ -304,7 +296,6 @@ def canonical_child_view_exposes_the_same_page_backed_evidence_as_artifacts_moun
 
     store = ArtifactStore(tempfile.mkdtemp(prefix="contextfs-child-pages-"))
     view = "     1\tdef answer():\n     2\t    return 42"
-    encoded = view.encode()
     store.put(Artifact(
         id="subagent-context-pages", kind="subagent", workspace_id="workspace",
         session_id="session", task_id="task", status="ok",
@@ -313,9 +304,6 @@ def canonical_child_view_exposes_the_same_page_backed_evidence_as_artifacts_moun
             "observations": [{
                 "v": 1, "tool": "read_file", "args": {"path": "answer.py"},
                 "status": "succeeded", "view": view,
-                "raw_sha256": hashlib.sha256(encoded).hexdigest(),
-                "view_sha256": hashlib.sha256(encoded).hexdigest(),
-                "raw_bytes": len(encoded), "view_bytes": len(encoded),
                 "redacted": False, "truncated": False,
             }],
         },

@@ -19,8 +19,8 @@ sole authority for record identity, provenance, lifecycle, freshness, revision, 
 structured Memem protocol is installed, Memem is the primary live semantic retrieval backend for that model.
 Native lexical/FTS search is failover and migration support, never a co-ranked second authority. Removing or
 breaking Memem must not disable evidence, history, Active Work, typed knowledge, or recovery.
-The roster and skills are adjacent capabilities: the roster tracks standing workers, while skills package
-executable know-how. Their persistence does not make either one a fourth memory layer.
+Skills are an adjacent capability: they package executable know-how. Their persistence does not make them a
+fourth memory layer.
 
 The model never needs physical paths to understand this architecture. It reads the permanent read-only virtual
 namespace `@sliceagent/` through its ordinary file tools.
@@ -85,8 +85,6 @@ reports live availability and degradation rather than guessing from object prese
 │   ├── project/index.md
 │   ├── craft/index.md
 │   └── records/<knowledge-id>.md
-└── roster/
-    └── index.md
 ```
 
 The root stays readable when a provider is absent or failing. Missing means unavailable or unknown, never empty
@@ -99,17 +97,17 @@ Raw compatibility aggregates live separately at `@sliceagent/memory/diagnostics.
 explicit inventory/backend question. Those aggregates have heterogeneous units and may overlap: they are neither
 layer sizes nor a typed-knowledge backlog. Consolidation selectively derives provenance-linked L2 records while
 its source remains L0; it is not migration. The status page explicitly separates the three memory layers from
-indexes, retrieval backends, roster, subagents, and skills.
+indexes, retrieval backends, subagents, and skills.
 Implementation modules and raw private stores are debugging inputs only when the user explicitly asks to debug
 the implementation; they are not an alternate self-description.
 For a general “check your memory system” or “what can you see?” request, the root plus this status page is the
 complete answer. Other region indexes are content drill-down surfaces, not a traversal checklist.
 
-Compatibility aliases (`artifacts/`, `history/`, `subagents/`, `roster/`) remain during migration. Model-facing
+Compatibility aliases (`artifacts/`, `history/`, `subagents/`) remain during migration. Model-facing
 indexes prefer `@sliceagent/`, which cannot be shadowed by a same-named repository directory.
 
 Subagents do not inherit the parent ContextFS. Their schemas omit the ContextFS capability marker and runtime
-guards reject parent-private paths. A child receives a self-contained brief plus explicit sealed grants only.
+guards reject parent-private paths. A child receives a self-contained brief only.
 
 ## L0 — evidence and Hippocampus
 
@@ -321,5 +319,4 @@ prevents silent dual authority while allowing a versioned migration/equivalence 
 - Compatibility retirement remains blocked until the five reported proof gates pass.
 - A native query failure renders degraded, not zero.
 - Same-basename repositories and concurrent first startup cannot share or split identity incorrectly.
-- ContextFS is unreadable to isolated children unless an exact sealed artifact is granted through the child
-  capability channel.
+- ContextFS is unreadable to isolated children; a child works only from its own self-contained brief.

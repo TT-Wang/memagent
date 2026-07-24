@@ -86,7 +86,7 @@ Each provider seed is compiled in this order:
 
 This order is the core correction. The legacy design fetched and rendered roughly thirty global regions, then
 asked an elasticity controller what to trim. The new design does not eagerly fetch repo maps, code discovery,
-memory, history, roster, worktree, or open files unless the unresolved dependency closure names that class of
+memory, history, worktree, or open files unless the unresolved dependency closure names that class of
 resource. A file reference from workspace epoch 0 is never rendered as live world state in epoch 1. The checkpoint
 restores the epoch that authored the active workspace, so a process restart cannot reset stale resources to
 “current.”
@@ -144,13 +144,14 @@ force a second “response-only” model pass.
 
 Children receive a self-contained objective and scoped sources, not the parent transcript. Their private trajectory
 never enters the parent. The complete canonical, redacted report does. This preserves the recursive slice thesis:
-context grows with reports relevant to the live task, not with child reasoning history. A failed child may return an
-explicitly partial report; an evidence-free explorer returns no accepted testimony.
+context grows with reports relevant to the live task, not with child reasoning history. The parent trusts the
+child's final report: a clean end-of-turn with a non-empty report is accepted; a failed or interrupted child may
+return explicitly partial material, clearly labeled.
 
 `ChildOutcome` is the computational truth. It carries operational status, report completion/hash/size, stop cause,
-evidence account, source coverage, usage, and optional report/evidence locators. Its report body appears exactly once,
+evidence account, usage, and optional report/evidence locators. Its report body appears exactly once,
 in the tool result. A small `child_outcome` effect drives receipts and the TUI without duplicating prose. A
-`child_artifact` effect exists only when persistence commits. Artifact, index, roster, or memory-mirror failure after
+`child_artifact` effect exists only when persistence commits. Artifact, index, or memory-mirror failure after
 a safe report exists adds a persistence warning; it cannot turn completed computation into an indeterminate child.
 Actual unresolved provider or writable execution remains indeterminate.
 
@@ -180,7 +181,7 @@ communication. Tool mechanics stay in live schemas.
 
 The model-facing floor plan is now the read-only `@sliceagent/` ContextFS, available through ordinary
 read/list/grep tools in every primary workspace. It mounts canonical evidence events and seals, the Hippocampal
-history index, PFC Active Work, typed Neocortical knowledge, and the roster without exposing private physical
+history index, PFC Active Work, and typed Neocortical knowledge without exposing private physical
 state paths. Its manifest reports unavailable/degraded/unknown providers explicitly; absence never becomes a
 negative fact.
 
@@ -207,7 +208,7 @@ The memory floor plan preserves the brain model:
   never co-ranked. SQLite remains record/provenance/lifecycle authority until Memem can transactionally
   round-trip the full typed envelope. Memem is never a layer owner or L0/L1 durability switch.
 
-The roster and skills are adjacent capabilities, not additional memory layers. Physical co-location in a legacy
+Skills are an adjacent capability, not an additional memory layer. Physical co-location in a legacy
 vault does not change their architectural role.
 
 See `MEMORY-LAYERS-DESIGN.md` for scope, lifecycle, physical storage, and failure semantics.
@@ -246,3 +247,33 @@ immutable events → request + optional Active Work → dependency closure → s
 That is SliceAgent’s thesis in operational form: retain exactly what the live work depends on, preserve exact
 authority and provenance, let the slice expand when the problem demands it, and never confuse history volume with
 context relevance.
+
+## Laws (categorical invariants)
+
+SliceAgent is a lawful category plus exactly one axiom-free oracle morphism — the model call. Objects are
+cognitive states (WorkGraph revision · workspace epoch · sealed-archive prefix); morphisms are turns and the
+host operations around them; the ledger is a free structure and the WorkGraph its unique fold. Everything
+around the oracle must obey equations, and engineering effort means moving behavior out of the oracle into the
+lawful part. The equations are executable: `tests/test_laws.py` (standalone runner, like the reliability
+suite). Two shipped defects — redaction non-idempotence desyncing seal hashes, and the view-bytes freeze/thaw
+mismatch — were law violations found by expensive review; this catalog exists so that class is caught
+mechanically.
+
+| ID | Law | Status |
+|----|-----|--------|
+| L1a | a second redaction pass may only reduce information, never resurrect it; the sequence stabilizes | holds (tested) |
+| L1b | dependency closure is idempotent | holds (tested) |
+| L1c | canonical sealing is a fixed point on its own image — no hash-bearing byte moves on re-normalization | holds (tested · negative control proves the old bug is catchable) |
+| L2a | `from_record ∘ to_record = id` for every persisted type; the wire form is stable | holds (tested: artifact, WorkGraph) |
+| L2b | reload degrades per item, never per container | holds (regression-tested at the seal) |
+| L3 | dependency closure is monotone: adding work never shrinks it | holds (tested) |
+| L4 | identity law: identical state compiles to byte-identical context (every violation is a prompt-cache miss with a dollar cost) | holds at the compiler (tested); full-seed variant pending clock injection |
+| L5 | selection stability: an alternative group’s rendered content depends only on its own sources and the capacity verdict | unknown (planned) |
+| L6 | fold uniqueness: replaying the ledger reproduces the checkpointed WorkGraph | unknown (planned) |
+| L7 | epoch fibration: a resource observed in epoch *e* may appear in epoch *e′ > e* only re-observed or as a locator, never as current world state | stated above as prose invariant; law test planned |
+| L8 | observation gluing: overlapping observations of the same source at the same version must agree; disagreement is evidence of a stale read, surfaced not silently merged | unknown (exploratory) |
+
+Deliberately absent: laws over the oracle morphism itself (none exist — that is what “oracle” means), and any
+operation IR or planner that would demote the model to a workflow node. The adjunction contracts
+(seal ⊣ reconstruct, project ⊣ fault-in, compress ⊣ recover) each owe a unit/counit statement: what the round
+trip preserves, and that everything dropped carries an address.
