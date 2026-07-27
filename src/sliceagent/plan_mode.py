@@ -10,6 +10,8 @@ sliceagent's tool surface and Active-Work substrate.
 """
 from __future__ import annotations
 
+import re
+
 from .agents import READ_ONLY_TOOLS
 from .execution import ToolStatus
 from .registry import ToolText
@@ -48,6 +50,27 @@ PLAN_APPROVALS = frozenset({
 # turn transform sees it, so a slash approval would be a dead entry that silently does nothing.
 
 
+# "plan mode" / "planning mode" is a PRODUCT TERM — nobody writes it by accident, unlike the bare word
+# "plan". So it is recognised anywhere in the message and in the natural phrasings people actually use
+# ("use plan mode to review X", "review X in plan mode"). The narrow leading-`plan ` trigger silently
+# ignored all of these, and a request that looks like it armed the mode but did not is the worst
+# outcome available: the user believes writes are impossible while the full surface is live.
+_PLAN_MODE_RE = re.compile(
+    r"\b(?:please\s+)?(?:use|using|enter|entering|switch\s+to|go\s+into|start|activate|turn\s+on|in|with)?"
+    r"\s*plan(?:ning)?\s+mode\b(?:\s*[,:;-]*\s*(?:to|and|then|for|please)\b)?",
+    re.IGNORECASE,
+)
+
+
+def _strip_plan_mode_phrase(text: str) -> tuple[bool, str]:
+    """(matched, remaining objective) for the explicit "plan mode" phrasing."""
+    raw = " ".join(str(text or "").split())
+    if not _PLAN_MODE_RE.search(raw):
+        return False, ""
+    rest = _PLAN_MODE_RE.sub(" ", raw, count=1)
+    return True, " ".join(rest.split()).strip(" ,:;.-—")
+
+
 def _plan_body(text: str) -> str | None:
     """The text after a leading `/plan` or `plan` token, or None when this is not a plan request."""
     raw = " ".join(str(text or "").split())
@@ -73,6 +96,11 @@ def plan_objective(text: str, *, armed: bool = False) -> str:
         planning turn, not to a fresh re-plan. Explicit ``/plan <objective>`` still re-plans.
     """
     raw = " ".join(str(text or "").split())
+    matched, phrased = _strip_plan_mode_phrase(raw)
+    if matched:
+        # Unambiguous product term: honour it wherever it appears, armed or not. An empty remainder
+        # is a bare "enter plan mode" — a switch, handled by plan_switch, not an empty objective.
+        return phrased
     body = _plan_body(raw)
     if not body or body.lower() in _PLAN_SWITCHES:
         return ""
@@ -90,7 +118,14 @@ def plan_objective(text: str, *, armed: bool = False) -> str:
 
 
 def plan_switch(text: str) -> str:
-    """`"on"` / `"off"` for an explicit mode switch (`/plan off`), else `""`."""
+    """`"on"` / `"off"` for an explicit mode switch (`/plan off`, "enter plan mode"), else `""`."""
+    matched, phrased = _strip_plan_mode_phrase(text)
+    if matched:
+        # "enter plan mode" with nothing else to do = arm the surface, no turn. With an objective it
+        # is a planning REQUEST, so plan_objective owns it.
+        if not phrased:
+            return "on"
+        return "off" if phrased.lower() in ("off", "stop", "end", "exit", "cancel", "done") else ""
     body = _plan_body(text)
     if body is None or body.lower() not in _PLAN_SWITCHES:
         return ""

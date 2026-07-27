@@ -439,10 +439,12 @@ def make_build_slice(state, tools, retriever, memory, task: str, session_id: str
     # and its children share the identical prefix up to (and including) the map.
     repo_map_block = ("\n\n# REPO MAP (the project's file structure — your resident map; navigate from here, "
                       "do NOT re-list the tree)\n" + repo_map_text) if repo_map_text else ""
-    # AGENT ROLE — a per-agent system-prompt layer for a named subagent.
-    # Empty for the top-level agent; set by run_scoped_agent from the spawned AgentSpec.system_prompt.
-    agent_block = ("\n\n# AGENT ROLE (you are running as a named subagent for this sub-task)\n" + system_extra
-                   ) if system_extra else ""
+    # A host-owned system-prompt overlay for THIS turn: a named subagent's role
+    # (run_scoped_agent, from AgentSpec.system_prompt) or a host mode's discipline (plan mode).
+    # The heading must not assert a subagent identity the turn may not have — the top-level agent in
+    # plan mode carries an overlay too, and telling it that it is "a named subagent" is simply false.
+    agent_block = ("\n\n# HOST OVERLAY FOR THIS TURN (binding, from the host — not the user)\n"
+                   + system_extra) if system_extra else ""
     system_prefix = (
         SYSTEM_PROMPT.replace("{{MEMORY_MODEL}}", mem_block) + delegation_block
         + env_line + environment_block + workspace_block + conventions_block + repo_map_block + agent_block

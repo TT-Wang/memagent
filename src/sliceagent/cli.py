@@ -1640,7 +1640,7 @@ def main() -> None:
     # `/plan off`, disarms it. A sticky mode must never be invisible: the armed state shows as a
     # toolbar chip, and while armed every mutating call is steered with a message naming the mode,
     # so it explains itself exactly when it matters.
-    _planning = {"active": False}
+    _planning = {"active": False, "overlay": ""}
 
     def _set_planning(active: bool) -> None:
         _planning["active"] = bool(active)
@@ -2332,7 +2332,14 @@ def main() -> None:
         objective = plan_objective(text, armed=_planning["active"])
         if objective:
             _set_planning(True)
-            return build_plan_prompt(objective)
+            # The planning discipline is a HOST OVERLAY, not the user's words. Returning it as the
+            # request made it the archived CURRENT REQUEST — violating the kernel's "exact user text"
+            # rule and poisoning everything derived from history: consolidation learned a skill
+            # titled "PLANNING MODE (host-enforced read-only turn)" whose taught process was
+            # append_to_file/edit_file/run_command. It rides system_extra instead, consumed by the
+            # turn it armed (the discipline is stated once; the mode persists).
+            _planning["overlay"] = build_plan_prompt(objective)
+            return text
         if _planning["active"] and is_plan_approval(text):
             _set_planning(False)   # the approved plan executes with the full tool surface
             # Approval is the one moment the mode changes with NO visible artifact — the chip just
@@ -2409,6 +2416,7 @@ def main() -> None:
                 build = make_build_slice(
                     session, turn_tools, retriever, memory, text, session.session_id,
                     model_id=llm.model, event_ledger=_event_ledger,
+                    system_extra=_planning.pop("overlay", "") or "",
                 )
             except KeyboardInterrupt:
                 live_dispatch(TurnInterrupted("aborted", "cancelled during context preparation"))
@@ -2619,6 +2627,7 @@ def main() -> None:
                     build = make_build_slice(
                         session, turn_tools, retriever, memory, line, session.session_id,
                         model_id=llm.model, event_ledger=_event_ledger,
+                        system_extra=_planning.pop("overlay", "") or "",
                     )
                 except KeyboardInterrupt:
                     dispatch(TurnInterrupted("aborted", "cancelled during context preparation"))

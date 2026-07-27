@@ -430,6 +430,73 @@ def a_planning_turn_can_never_execute_shell_through_status_inheritance():
 
 
 @check
+def the_product_term_plan_mode_arms_from_natural_phrasing():
+    """FIELD REGRESSION: "use plan mode to review the code again" silently did NOTHING — the trigger
+    only matched a LEADING `plan `. The user saw no chip, no plan, no approval request, and the FULL
+    tool surface stayed live, so the agent ran commands and spawned 14 children. A request that looks
+    like it armed the mode but did not is the worst possible outcome: the user believes writes are
+    impossible while they are not.
+
+    "plan mode" is a product term nobody writes by accident, so it is honoured anywhere in the
+    message — unlike the bare word "plan", which still needs the leading position + guards.
+    """
+    from sliceagent.plan_mode import plan_objective, plan_switch
+    for text, expected in (
+        ("use plan mode to review the code again", "review the code again"),
+        ("use plan mode and review the code", "review the code"),
+        ("review the code in plan mode", "review the code"),
+        ("please use planning mode to audit auth", "audit auth"),
+        ("switch to plan mode then refactor the parser", "refactor the parser"),
+    ):
+        assert plan_objective(text) == expected, (text, plan_objective(text))
+
+    # the bare phrase is a SWITCH (arm the surface, no turn), not an empty-objective planning turn
+    for text in ("enter plan mode", "use plan mode", "plan mode", "turn on plan mode"):
+        assert plan_switch(text) == "on", text
+        assert plan_objective(text) == "", text
+
+    # and none of the guards regressed
+    for text in ("plan looks good", "plan approved", "the plan is fine", "planning the migration",
+                 "go"):
+        assert plan_objective(text) == "" and plan_switch(text) == "", text
+
+
+@check
+def the_planning_discipline_never_impersonates_the_user_request():
+    """ROOT CAUSE of a poisoned skill: the transform REPLACED the user's text with the planning
+    prompt, so the archived CURRENT REQUEST became host prose. Consolidation then learned a skill
+    titled "PLANNING MODE (host-enforced read-only turn)" whose taught process was
+    append_to_file/edit_file/run_command — a skill that claims read-only and demonstrates writing.
+
+    The discipline must ride the SYSTEM layer; the user's exact words stay the request.
+    """
+    import tempfile
+    from sliceagent.memory import NullMemory
+    from sliceagent.pfc import Slice, record_user
+    from sliceagent.retriever import NullRetriever
+    from sliceagent.seed import make_build_slice
+    from sliceagent.tools import LocalToolHost
+
+    user_text = "use plan mode to review the code again"
+    overlay = build_plan_prompt("review the code again")
+    state = Slice()
+    state.reset(user_text)
+    record_user(state, user_text, source_event_id="e1", logical_id="l1")
+    messages = make_build_slice(
+        state, LocalToolHost(root=tempfile.mkdtemp(prefix="plan-overlay-")), NullRetriever(),
+        NullMemory(), user_text, "s-1", system_extra=overlay,
+    )()
+    system, request = str(messages[0].get("content", "")), str(messages[-1].get("content", ""))
+    assert "PLANNING MODE" in system, "the discipline must still reach the model"
+    assert user_text in request, "the user's exact words must remain the request"
+    assert "PLANNING MODE" not in request, (
+        "the host prompt is masquerading as the user's request — everything derived from history "
+        "(consolidation, skills, recall) will learn from prose the user never wrote")
+    assert "named subagent" not in system, (
+        "a top-level planning turn is not a subagent; the overlay heading must not assert one")
+
+
+@check
 def slashless_plan_trigger_ignores_talk_about_a_plan():
     """The slashless form must not fire on talk ABOUT a plan — the likeliest phrasing at the exact
     moment a plan is on screen and the agent has just asked for approval. Every rejected case below
