@@ -71,6 +71,16 @@ def test_work_delta_effect_carries_complete_plan_progress_projection():
     projection = created.effects[0].payload["plan_progress"]
     assert projection == {
         "total": 2, "done": 0, "current": "Implement the change", "current_index": 1,
+        "items": [
+            {
+                "id": "implement", "status": "in_progress", "description": "Implement the change",
+                "done_when": "focused check passes", "host_verified": False,
+            },
+            {
+                "id": "document", "status": "open", "description": "Document the behavior",
+                "done_when": "", "host_verified": False,
+            },
+        ],
     }
     reduce(state, created)
 
@@ -82,6 +92,16 @@ def test_work_delta_effect_carries_complete_plan_progress_projection():
     projection = completed.effects[0].payload["plan_progress"]
     assert projection == {
         "total": 2, "done": 1, "current": "Document the behavior", "current_index": 2,
+        "items": [
+            {
+                "id": "implement", "status": "verified", "description": "Implement the change",
+                "done_when": "focused check passes", "host_verified": True,
+            },
+            {
+                "id": "document", "status": "open", "description": "Document the behavior",
+                "done_when": "", "host_verified": False,
+            },
+        ],
     }
 
 

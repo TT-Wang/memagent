@@ -12,10 +12,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 try:
     from rich.cells import cell_len  # noqa: E402
     from rich.console import Console  # noqa: E402
-    from sliceagent.tui import (RichSink, _ToolTiming, _agent_matrix_plain_lines, _box_width,  # noqa: E402
-                                _live_status_line, _render_agent_batch, _render_read_summary,
-                                _private_prompt_history, _record_usage, _render_tool_result,
-                                _response_panel, _toolbar)
+    from sliceagent.tui import (RichSink, _ToolTiming, _agent_matrix_plain_lines,  # noqa: E402
+                                _bounded_detail_lines, _box_width, _live_status_line,
+                                _plan_checklist_plain_lines, _private_prompt_history,
+                                _record_usage, _render_agent_batch, _render_read_summary,
+                                _render_tool_result, _response_panel, _toolbar)
     from sliceagent.tui_projection import AgentResultView, output_preview  # noqa: E402
     from sliceagent.events import (StepBegin, StepEnd, SubagentProgress, ToolResult, ToolStarted,
                                    TurnStarted)  # noqa: E402
@@ -193,6 +194,55 @@ def live_agent_matrix_is_stable_bounded_and_cell_safe():
         assert "15" in joined and "failed" in joined and "hidden" in joined, joined
         visible_ids = [line.split()[0] for _, line in lines if line.strip()[:1].isdigit()]
         assert visible_ids == sorted(visible_ids, key=int), visible_ids
+
+
+@check
+def live_work_checklist_earns_checkmarks_only_from_host_receipts():
+    machine = TurnProgress(await_commit=True)
+    machine.reduce(TurnStarted("implement", task_id="task-work", turn_id="turn-work"))
+    invocation = ToolInvocation("work-1", "update_work", {"changes": []}, 0)
+    effect = ToolEffect("work-1:effect", "work_delta", {
+        "delta": {"expected_revision": 1, "creates": [], "updates": []},
+        "plan_progress": {
+            "total": 5, "done": 1, "current": "Implement parser", "current_index": 2,
+            "items": [
+                {"id": "inspect", "status": "verified", "description": "Inspect parser",
+                 "host_verified": True},
+                {"id": "implement", "status": "in_progress", "description": "Implement parser"},
+                {"id": "question", "status": "waiting_user", "description": "Choose compatibility"},
+                {"id": "ship", "status": "delivered", "description": "Ship artifact"},
+                {"id": "docs", "status": "open", "description": "Write docs"},
+            ],
+        },
+    })
+    outcome = ToolOutcome(invocation, ToolStatus.SUCCEEDED, "updated", (effect,))
+    machine.reduce(ToolResult(
+        invocation.name, dict(invocation.args), outcome.text, False,
+        status="succeeded", invocation_id=invocation.id, outcome=outcome,
+    ))
+    lines = _plan_checklist_plain_lines(machine.snapshot(), 80)
+    rendered = "\n".join(line for _, line in lines)
+    assert rendered.count("✓") == 1 and "✓ Inspect parser · host verified" in rendered, rendered
+    assert "▶ Implement parser · in progress" in rendered, rendered
+    assert "! Choose compatibility · blocked · waiting for input" in rendered, rendered
+    assert "! Ship artifact · delivered · unverified" in rendered, rendered
+    assert all(cell_len(line) <= 80 for _, line in lines), lines
+    for budget in range(0, 10):
+        bounded = _bounded_detail_lines(machine.snapshot(), 80, extra_budget=budget)
+        assert len(bounded) <= budget, (budget, bounded)
+    child = ToolInvocation(
+        "spawn-work-review", "spawn_agent",
+        {"agent": "explorer", "name": "reviewer", "task": "review checklist"}, 1,
+    )
+    machine.reduce(ToolStarted(child.name, dict(child.args), child))
+    machine.subagent_activity(SubagentProgress(
+        "child-work-review", "turn-work", 1, "explorer", "reviewer", 1,
+        "running", "reviewing checklist", 1, 1,
+        invocation_id=child.id, request_ordinal=1,
+    ))
+    combined = _bounded_detail_lines(machine.snapshot(), 80, extra_budget=8)
+    combined_text = "\n".join(line for _, line in combined)
+    assert len(combined) <= 8 and "work ·" in combined_text and "agents 1" in combined_text, combined
 
 
 @check

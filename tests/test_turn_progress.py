@@ -146,6 +146,21 @@ def work_delta_effect_feeds_plan_position_and_same_task_turns_preserve_it():
         "delta": {"expected_revision": 1, "creates": [], "updates": []},
         "plan_progress": {
             "total": 3, "done": 1, "current": "Implement the parser fix", "current_index": 2,
+            "items": [
+                {
+                    "id": "inspect", "status": "verified", "description": "Inspect the parser",
+                    "done_when": "scope understood", "host_verified": True,
+                },
+                {
+                    "id": "implement", "status": "in_progress",
+                    "description": "Implement the parser fix",
+                    "done_when": "focused tests pass", "host_verified": False,
+                },
+                {
+                    "id": "document", "status": "open", "description": "Document the behavior",
+                    "done_when": "", "host_verified": False,
+                },
+            ],
         },
     })
     outcome = ToolOutcome(call, ToolStatus.SUCCEEDED, "updated", (effect,))
@@ -155,6 +170,9 @@ def work_delta_effect_feeds_plan_position_and_same_task_turns_preserve_it():
     ))
     assert projected.plan.total == 3 and projected.plan.done == 1
     assert projected.plan.current == "Implement the parser fix" and projected.plan.current_index == 2
+    assert [item.id for item in projected.plan.items] == ["inspect", "implement", "document"]
+    assert projected.plan.items[0].host_verified
+    assert not projected.plan.items[1].host_verified
 
     continued = machine.reduce(TurnStarted(
         "go", task_title="Parser fix", task_id="task-1", turn_id="turn-2",

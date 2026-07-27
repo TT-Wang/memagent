@@ -672,7 +672,9 @@ def _plan_progress_payload(graph: WorkGraph, logical_id: str) -> dict[str, objec
         if item.kind != "request" and item.root_id == root.id
         and item.status not in {"cancelled", "superseded"}
     ]
-    done_statuses = {"delivered", "verified"}
+    # A green check is earned only by host verification. ``delivered`` remains useful semantic state, but
+    # it must not inflate the verified counter or become a checkmark merely because the model says it shipped.
+    done_statuses = {"verified"}
     done = sum(item.status in done_statuses for item in items)
     current = None
     for wanted in ("in_progress", "waiting_user", "open", "ready"):
@@ -684,6 +686,22 @@ def _plan_progress_payload(graph: WorkGraph, logical_id: str) -> dict[str, objec
         "done": done,
         "current": current.description if current is not None else "",
         "current_index": items.index(current) + 1 if current is not None else 0,
+        "items": [
+            {
+                "id": item.id,
+                "status": item.status,
+                "description": item.description,
+                "done_when": item.done_when,
+                "host_verified": (
+                    item.status == "verified"
+                    and any(
+                        ref.kind == "verify_receipt" and ref.ref == f"host-verify:{item.id}"
+                        for ref in item.evidence_refs
+                    )
+                ),
+            }
+            for item in items
+        ],
     }
 
 

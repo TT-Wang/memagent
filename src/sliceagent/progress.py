@@ -159,11 +159,23 @@ def _tool_detail(name: str, args: Mapping | None) -> tuple[ProgressPhase, str]:
 
 
 @dataclass(frozen=True)
+class PlanItemProgress:
+    """One UI-only Active Work row; semantic ownership remains in ``WorkGraph``."""
+
+    id: str = ""
+    status: str = "open"
+    description: str = ""
+    done_when: str = ""
+    host_verified: bool = False
+
+
+@dataclass(frozen=True)
 class PlanProgress:
     total: int = 0
     done: int = 0
     current: str = ""
     current_index: int = 0
+    items: tuple[PlanItemProgress, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -473,7 +485,27 @@ class TurnProgress:
                 continue
             if not current or not 1 <= current_index <= total:
                 current, current_index = "", 0
-            self._plan = PlanProgress(total, done, current, current_index)
+            rows = projection.get("items")
+            items = []
+            if isinstance(rows, (list, tuple)):
+                for row in rows[:32]:
+                    if not isinstance(row, Mapping):
+                        continue
+                    item_id = _one_line(row.get("id", ""), 120)
+                    description = _one_line(row.get("description", ""), 160)
+                    status = _one_line(row.get("status", "open"), 32).lower()
+                    if not item_id or not description or status not in {
+                        "open", "in_progress", "waiting_user", "ready", "delivered", "verified",
+                    }:
+                        continue
+                    items.append(PlanItemProgress(
+                        id=item_id,
+                        status=status,
+                        description=description,
+                        done_when=_one_line(row.get("done_when", ""), 160),
+                        host_verified=bool(row.get("host_verified")) and status == "verified",
+                    ))
+            self._plan = PlanProgress(total, done, current, current_index, tuple(items))
             self._replace()
             return
 
@@ -1151,6 +1183,6 @@ class TurnProgress:
 
 
 __all__ = [
-    "ActiveSubagent", "ActiveTool", "PlanProgress", "ProgressPhase", "ProgressSnapshot",
+    "ActiveSubagent", "ActiveTool", "PlanItemProgress", "PlanProgress", "ProgressPhase", "ProgressSnapshot",
     "TurnProgress", "tool_bucket",
 ]

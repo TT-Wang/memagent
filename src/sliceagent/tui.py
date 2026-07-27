@@ -10,7 +10,7 @@ Design (a rich + prompt_toolkit terminal UI):
     They are TEMPORALLY separate (output during the synchronous run_turn, input between turns), so
     there is no patch_stdout/threading minefield.
   - quiet, width-safe activity rails with stronger durable milestones,
-  - one truthful live progress row plus a responsive identity footer,
+  - one truthful progress row plus bounded Active Work and child-agent surfaces,
   - one canonical SLASH-command palette shared with CLI help (including session and capability discovery),
   - graceful ctrl-c AND esc: a physical Ctrl-C (SIGINT) aborts a running turn via Python's own
     KeyboardInterrupt delivery; Esc does the SAME thing via `_EscSentinel`, a narrow background thread that
@@ -838,8 +838,74 @@ def _progress_focus(snap) -> str:
         if snap.plan.current:
             pos = snap.plan.current_index or min(snap.plan.done + 1, snap.plan.total)
             return f"{pos}/{snap.plan.total} {snap.plan.current}"
-        return f"{snap.plan.done}/{snap.plan.total} plan complete"
+        return f"{snap.plan.done}/{snap.plan.total} host verified"
     return ""
+
+
+_PLAN_CHECKLIST_CAP = 6
+
+
+def _plan_checklist_plain_lines(snap, width: int, *,
+                                cap: int = _PLAN_CHECKLIST_CAP) -> list[tuple[str, str]]:
+    """Project the immutable Active Work snapshot as a bounded, evidence-honest checklist."""
+    if cap < 0:
+        return []
+    items = tuple(getattr(getattr(snap, "plan", None), "items", ()) or ())
+    if not items:
+        return []
+    verified = sum(bool(getattr(item, "host_verified", False)) for item in items)
+    lines: list[tuple[str, str]] = [(
+        "header",
+        _shorten_cells(f"  work · {verified}/{len(items)} host verified", width),
+    )]
+    if cap == 0:
+        return lines
+
+    selected = list(items[:cap])
+    current_index = int(getattr(getattr(snap, "plan", None), "current_index", 0) or 0)
+    if 1 <= current_index <= len(items):
+        current = items[current_index - 1]
+        if current not in selected and selected:
+            selected[-1] = current
+    selected_ids = {getattr(item, "id", "") for item in selected}
+    for item in selected:
+        status = str(getattr(item, "status", "") or "")
+        host_verified = bool(getattr(item, "host_verified", False))
+        suffix = ""
+        if host_verified:
+            glyph, semantic, suffix = "✓", "ok", " · host verified"
+        elif status == "verified":
+            # Fail closed if an old/foreign projection claims verified without the host receipt bit.
+            glyph, semantic, suffix = "!", "fail", " · verification receipt missing"
+        elif status == "in_progress":
+            glyph, semantic, suffix = "▶", "accent", " · in progress"
+        elif status == "waiting_user":
+            glyph, semantic, suffix = "!", "warn", " · blocked · waiting for input"
+        elif status == "ready":
+            glyph, semantic, suffix = "○", "warn", " · ready · unverified"
+        elif status == "delivered":
+            glyph, semantic, suffix = "!", "warn", " · delivered · unverified"
+        else:
+            glyph, semantic = "○", "dim"
+        description = safe_terminal_text(
+            str(getattr(item, "description", "") or ""), multiline=False,
+        )
+        lines.append((semantic, _shorten_cells(f"  {glyph} {description}{suffix}", width)))
+    hidden = len(items) - len(selected_ids)
+    if hidden:
+        lines.append(("dim", _shorten_cells(f"  … {hidden} more work item{'s' if hidden != 1 else ''}", width)))
+    return [(style, _crop_cells(line, width)) for style, line in lines]
+
+
+def _render_plan_checklist(snap, width: int) -> Group | None:
+    lines = _plan_checklist_plain_lines(snap, width)
+    if not lines:
+        return None
+    styles = {
+        "header": f"bold {TH['accent']}", "dim": TH["dim"], "accent": TH["accent"],
+        "ok": TH["ok"], "warn": TH["warn"], "fail": TH["fail"],
+    }
+    return Group(*(Text(line, style=styles.get(semantic, TH["dim"])) for semantic, line in lines))
 
 
 def _render_progress(snap, width: int, *, now: float | None = None,
@@ -1352,8 +1418,16 @@ class _LiveStatus:
             # Rich Status contributes the animated activity glyph; reserve four cells for it.
             width = max(8, int(getattr(self._sink.c, "width", 100) or 100) - 4)
             progress = _render_progress(snap, width, include_glyph=False)
-            matrix = _render_agent_matrix(snap, width)
-            return Group(progress, matrix) if matrix is not None else progress
+            detail_lines = _bounded_detail_lines(snap, width, extra_budget=12)
+            styles = {
+                "header": f"bold {TH['accent']}", "dim": TH["dim"], "accent": TH["accent"],
+                "ok": TH["ok"], "warn": TH["warn"], "fail": TH["fail"], "tool": TH["tool"],
+            }
+            details = [
+                Text(line, style=styles.get(semantic, TH["dim"]))
+                for semantic, line in detail_lines
+            ]
+            return Group(progress, *details) if details else progress
         except Exception:  # noqa: BLE001 — a progress indicator must never break the run
             return Text("working…", style=TH["dim"])
 
@@ -1649,9 +1723,15 @@ class RichSink(_EventSinkCore):
                 self._status.start()
             elif not self._spinner_on:
                 line = _render_progress(snap, _line_width(self.c))
-                if line.plain != self._last_plain_status:
-                    self.c.print(line)
-                    self._last_plain_status = line.plain
+                checklist = _render_plan_checklist(snap, _line_width(self.c))
+                signature = line.plain + (
+                    "\n" + "\n".join(
+                        row for _, row in _plan_checklist_plain_lines(snap, _line_width(self.c))
+                    ) if checklist is not None else ""
+                )
+                if signature != self._last_plain_status:
+                    self.c.print(Group(line, checklist) if checklist is not None else line)
+                    self._last_plain_status = signature
 
 def make_rich_sink(console: Console, stats: dict, *, await_commit: bool = False) -> RichSink:
     return RichSink(console, stats, await_commit=await_commit)
@@ -1727,8 +1807,49 @@ def _live_status_line(status: str, stats: dict, width: int) -> FormattedText:
     ])
 
 
+def _bounded_detail_lines(snap, width: int, *, now: float | None = None,
+                          extra_budget: int | None = None) -> list[tuple[str, str]]:
+    """Share a finite live-composer height budget between work truth and child truth."""
+    if extra_budget is None:
+        return [
+            *_plan_checklist_plain_lines(snap, width),
+            *_agent_matrix_plain_lines(snap, width, now=now),
+        ]
+    budget = max(0, int(extra_budget))
+    if not budget:
+        return []
+
+    has_plan = bool(getattr(getattr(snap, "plan", None), "items", ()))
+    has_agents = bool(_agent_matrix_rows(snap, now=now))
+    plan_budget = budget if not has_agents else (budget + 1) // 2
+    if not has_plan:
+        plan_budget = 0
+
+    def fit(renderer, maximum: int, allowance: int):
+        for cap in range(maximum, -2, -1):
+            rows = renderer(cap)
+            if len(rows) <= allowance:
+                return rows
+        return []
+
+    plan_lines = fit(
+        lambda cap: _plan_checklist_plain_lines(snap, width, cap=cap),
+        _PLAN_CHECKLIST_CAP, plan_budget,
+    )
+    matrix_lines = fit(
+        lambda cap: _agent_matrix_plain_lines(snap, width, now=now, cap=cap),
+        _AGENT_MATRIX_CAP, budget - len(plan_lines),
+    )
+    # If the child matrix needed less than its share, give the remaining rows back to the checklist.
+    plan_lines = fit(
+        lambda cap: _plan_checklist_plain_lines(snap, width, cap=cap),
+        _PLAN_CHECKLIST_CAP, budget - len(matrix_lines),
+    )
+    return [*plan_lines, *matrix_lines]
+
+
 def _live_status_surface(status: str, snap, stats: dict, width: int,
-                         *, now: float | None = None, matrix_cap: int = _AGENT_MATRIX_CAP) -> FormattedText:
+                         *, now: float | None = None, extra_budget: int | None = None) -> FormattedText:
     """Multi-line prompt-toolkit surface; finalized output still goes to scrollback once."""
     fragments = list(_live_status_line(status, stats, width))
     if snap is None:
@@ -1738,7 +1859,8 @@ def _live_status_surface(status: str, snap, stats: dict, width: int,
         "accent": "fg:ansibrightcyan", "ok": "fg:ansigreen",
         "fail": "fg:ansired", "warn": "fg:ansiyellow", "tool": "",
     }
-    for semantic, line in _agent_matrix_plain_lines(snap, width, now=now, cap=matrix_cap):
+    for semantic, line in _bounded_detail_lines(
+            snap, width, now=now, extra_budget=extra_budget):
         fragments.append(("", "\n"))
         fragments.append((prompt_style.get(semantic, ""), line))
     return FormattedText(fragments)
@@ -1767,22 +1889,15 @@ def build_live_app(*, console: Console, stats: dict, root: str | None, run_one_t
     app_ref = {"value": None}
     toolbar = _toolbar(stats, lambda: console.width)
 
-    def _matrix_cap(width: int) -> int:
+    def _surface_budget() -> int:
         output = getattr(app_ref.get("value"), "output", None) or pt_output
         try:
             rows = int(output.get_size().rows) if output is not None else 24
         except Exception:
             rows = 24
-        # Reserve three rows for the framed composer and one for the primary progress line. Matrix overhead is
-        # summary + optional column header + overflow; child rows consume the remainder up to the global cap.
-        # A negative cap means even the aggregate is hidden on a four-row emergency terminal.
-        matrix_budget = max(0, rows - 4)
-        if matrix_budget == 0:
-            return -1
-        if matrix_budget < 3:
-            return 0
-        overhead = 1 + (1 if width >= 72 else 0) + 1
-        return max(0, min(_AGENT_MATRIX_CAP, matrix_budget - overhead))
+        # Three rows belong to the framed composer and one to primary progress. Work and child truth share
+        # every remaining physical row; the bounded projections decide how to divide that space.
+        return max(0, rows - 4)
 
     def set_status(text):                  # called from the worker thread; invalidate() is thread-safe
         with state_lock:
@@ -1831,7 +1946,7 @@ def build_live_app(*, console: Console, stats: dict, root: str | None, run_one_t
             live_status = (status if status_override else _render_progress(progress, width).plain) \
                 if progress is not None else status
             return _live_status_surface(
-                live_status or "◌ Working", progress, stats, width, matrix_cap=_matrix_cap(width),
+                live_status or "◌ Working", progress, stats, width, extra_budget=_surface_budget(),
             )
         return toolbar()                   # idle → stable product/workspace/model identity
 
@@ -1841,7 +1956,9 @@ def build_live_app(*, console: Console, stats: dict, root: str | None, run_one_t
         if not (running or status) or progress is None:
             return 1
         width = max(12, int(getattr(console, "width", 100) or 100))
-        return 1 + len(_agent_matrix_plain_lines(progress, width, cap=_matrix_cap(width)))
+        return 1 + len(_bounded_detail_lines(
+            progress, width, extra_budget=_surface_budget(),
+        ))
 
     # Read-only diagnostics used by headless renderer tests; the live UI itself consumes the same callbacks.
     state["render_status"] = _status_line
