@@ -282,7 +282,7 @@ def _same_shape_mask(value: str) -> str:
     return "".join(char if char in "\r\n" else "*" for char in value)
 
 
-def redact_text(text: str, *, code_file: bool = False, preserve_length: bool = False) -> str:
+def redact_text(text: str | None, *, code_file: bool = False, preserve_length: bool = False) -> str:
     """Mask API keys, tokens, JWTs, private keys, DB passwords, etc. in a block of text.
     Safe on any string — non-matching text passes through unchanged. Always on (this is a
     safety boundary, not a logging preference, so the env-toggle from the source is dropped).
@@ -291,7 +291,7 @@ def redact_text(text: str, *, code_file: bool = False, preserve_length: bool = F
     constants/fixtures); prefix/JWT/private-key/DB/header/phone passes still apply.
     """
     if text is None:
-        return None
+        return ""
     if not isinstance(text, str):
         text = str(text)
     if not text:

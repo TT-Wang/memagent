@@ -868,7 +868,7 @@ def make_search_history_tool(memory, session_id: str):
         q = (args.get("query") or args.get("search") or "")
         q = q.strip() if isinstance(q, str) else ""
         if not q:
-            return "search_history: pass a 'query' (FTS5 keywords — AND/OR, \"quoted\", prefix*)."
+            return "search_history: pass a free-text query (terms are safely OR-ranked)."
         mine = pages.lookup(q, kind="episode-search-thissession", k=6)
         cross = pages.lookup(q, kind="episode-xsession", k=6)
         if not mine and not cross:
@@ -884,9 +884,10 @@ def make_search_history_tool(memory, session_id: str):
             "session. EVERY match comes with the read_file(...) call to open the full turn: this session as "
             "read_file(\"history/turn-N.md\"), a past session as read_file(\"history/<session-id>/turn-N.md\") "
             "— never guess a raw filesystem path. For THIS session you can also read_file(\"history/index.md\") "
-            "to browse every turn, or grep the history/ files. Query supports AND/OR, \"quoted\", and prefix*."),
+            "to browse every turn, or grep the history/ files. Query is forgiving free text: punctuation and "
+            "quotes are separators, and content terms are safely OR-ranked for recall."),
         "parameters": {"type": "object", "properties": {
-            "query": {"type": "string", "description": "FTS5 keywords to search episode content for."},
+            "query": {"type": "string", "description": "Free-text terms to search episode content for."},
         }, "required": ["query"]}}}
     return ToolEntry(name="search_history", schema=schema, handler=_handler, source="builtin")
 
@@ -1045,4 +1046,3 @@ class SubagentFS:
         if offset + limit < len(body_lines):
             body += f"\n\n[truncated; use offset={offset + limit} to see more]"
         return body
-

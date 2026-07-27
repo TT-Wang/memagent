@@ -49,16 +49,28 @@ _FTS_TABLE = "episodes"
 _RECENCY_W = 0.25
 
 
-def _fts_match_query(q: str) -> str:
-    """Turn a free-text query into a SAFE FTS5 MATCH expression. Extract word tokens only and quote each
-    (so query punctuation/operators - " * : ( ) AND OR NEAR can never trigger a syntax error that silently
-    returns nothing), then OR-join them. OR (not AND) is the recall-correct default: a query carries terms
-    the target turn won't all contain — meta/ordinal words ("second", "finding"), the user's own framing,
-    stray operators — and AND-joining means ONE absent token zeroes the whole result (the 'can't locate my
-    second finding' bug: 'second' appeared in no review turn, so the AND failed). With OR, any term surfaces
-    the turn and BM25 rank + the relative floor in search() keep it precise. Empty → '' (no search)."""
+_LOOSE_QUERY_CONNECTIVES = frozenset({"and", "or", "not", "near"})
+
+
+def loose_fts_match_query(q: str) -> str:
+    """Turn forgiving free text into one safe FTS5 OR query.
+
+    Punctuation, quotes, ``*``, and FTS operator syntax are intentionally ordinary separators—not a hidden
+    second query language. Boolean-looking connective words are dropped when other terms exist so a natural
+    request such as ``parser AND tokenizer`` does not recall every episode containing the word "and".
+    OR (not AND) is the recall-correct default: one absent framing/ordinal term must not zero the whole result.
+    Empty input returns ``""``.
+    """
     toks = re.findall(r"\w+", q or "", flags=re.UNICODE)
+    content = [token for token in toks if token.casefold() not in _LOOSE_QUERY_CONNECTIVES]
+    if content:
+        toks = content
     return " OR ".join(f'"{t}"' for t in toks)
+
+
+def _fts_match_query(q: str) -> str:
+    """Backward-compatible private alias for the shared loose-query contract."""
+    return loose_fts_match_query(q)
 
 
 def fts5_available() -> bool:

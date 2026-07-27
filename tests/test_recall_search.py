@@ -125,6 +125,15 @@ def query_tokens_are_or_joined_not_and_joined():
 
 
 @check
+def query_is_forgiving_free_text_not_a_hidden_fts_language():
+    assert _fts_match_query("auth*") == '"auth"'
+    assert _fts_match_query('"exact phrase"') == '"exact" OR "phrase"'
+    assert _fts_match_query("parser AND tokenizer") == '"parser" OR "tokenizer"'
+    assert _fts_match_query("alpha OR beta") == '"alpha" OR "beta"'
+    assert _fts_match_query("AND") == '"AND"'  # an all-connective query remains searchable, not empty
+
+
+@check
 def or_join_finds_the_review_despite_ordinal_meta_terms():
     if not fts5_available():
         print("  (skipped: no FTS5)"); return

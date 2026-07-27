@@ -55,6 +55,13 @@ def l1a_redact_second_pass_only_reduces_never_resurrects():
         assert redact_text(twice) == twice, f"redaction never stabilizes for {raw[:40]!r}"
 
 
+@check
+def l1a_redaction_is_total_and_always_returns_text():
+    assert redact_text(None) == ""
+    assert isinstance(redact_text(None), str)
+    assert redact_text(42) == "42"
+
+
 # ── L1b + L3 · dependency closure is a closure operator (idempotent · extensive · monotone) ─────
 def _random_graph(seed: int) -> WorkGraph:
     rng = random.Random(seed)

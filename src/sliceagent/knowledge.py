@@ -29,6 +29,7 @@ from types import MappingProxyType
 from typing import Any
 
 from .private_state import private_dir, private_file
+from .search_index import loose_fts_match_query
 
 
 KNOWLEDGE_SCHEMA_VERSION = 1
@@ -642,8 +643,8 @@ def fts5_available() -> bool:
 
 
 def _fts_match_query(query: str) -> str:
-    tokens = re.findall(r"\w+", query or "", flags=re.UNICODE)
-    return " OR ".join(f'"{token.replace(chr(34), chr(34) * 2)}"' for token in tokens)
+    """Use the same forgiving, punctuation-safe free-text contract as episode search."""
+    return loose_fts_match_query(query)
 
 
 def _lexical_tokens(text: str) -> list[str]:
