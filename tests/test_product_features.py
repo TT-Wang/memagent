@@ -287,6 +287,21 @@ def build_attaches_pending_images_as_parts_and_consumes():
 
 
 @check
+def scoped_child_cannot_consume_parent_pending_images():
+    from sliceagent.agents import BUILTIN_AGENTS
+    from sliceagent.scoped_agent import ScopedSurface, allowed_for
+
+    host = LocalToolHost(root=tempfile.mkdtemp(prefix="img-scope-"))
+    image = {"path": "a.png", "b64": "QUJD", "mime": "image/png"}
+    host.pending_images = [image]
+    child = ScopedSurface(host, allowed_for(BUILTIN_AGENTS["explorer"], host))
+
+    assert isinstance(_slice_msgs(child, "inspect text files")[1]["content"], str)
+    assert child.pending_images == []
+    assert host.pending_images == [image], "a child seed stole the parent's one-shot image attachment"
+
+
+@check
 def attach_image_encodes_and_errors_cleanly():
     wd = tempfile.mkdtemp(prefix="att-")
     open(os.path.join(wd, "x.png"), "wb").write(b"\x89PNG\r\n\x1a\n" + b"payload")

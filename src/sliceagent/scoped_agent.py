@@ -165,6 +165,9 @@ class ScopedSurface:
     def __init__(self, inner, allowed):
         self._inner = inner
         self._allowed = frozenset(allowed)
+        # Parent attachments belong to the parent's next provider call. Delegated children share the host
+        # surface for workspace reads, but must not race to consume or leak that private one-shot payload.
+        self.pending_images = []
 
     def __getattr__(self, name):
         return getattr(self._inner, name)

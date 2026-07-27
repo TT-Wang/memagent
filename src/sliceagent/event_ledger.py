@@ -196,7 +196,7 @@ class EventLedger:
             try:
                 decoded = json.loads(content.decode("utf-8"))
                 event = LedgerEvent.from_dict(decoded)
-            except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
+            except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError, OverflowError) as exc:
                 # A process may die between append bytes and fsync.  Only the final,
                 # newline-less fragment is recoverable; corruption in the immutable
                 # prefix must stay visible.

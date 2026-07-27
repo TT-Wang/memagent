@@ -7,6 +7,7 @@ an invocation succeeded once it has crossed the typed registry boundary.
 from __future__ import annotations
 
 import json
+import math
 import os
 import posixpath
 import threading
@@ -27,6 +28,14 @@ CHILD_CANCEL_SIGNAL_ARG = "__sliceagent_cancel_signal"
 CHILD_INVOCATION_ID_ARG = "__sliceagent_invocation_id"
 CHILD_REQUEST_ORDINAL_ARG = "__sliceagent_request_ordinal"
 CHILD_ACTIVITY_ARG = "__sliceagent_activity"
+# Delegation is a lifecycle class, not four unrelated string comparisons. A host that introduces another
+# delegation tool registers its name here once; scheduling leases, reconciliation, and receipt accounting then
+# move together instead of silently disagreeing.
+DELEGATION_TOOL_NAMES = frozenset({"spawn_agent"})
+
+
+def is_delegation_tool(name: object) -> bool:
+    return str(name or "") in DELEGATION_TOOL_NAMES
 
 
 class ChildActivity:
@@ -92,7 +101,7 @@ def reconciliation_targets(name: str, args: Mapping[str, object] | None) -> tupl
     """
     name = str(name or "")
     args = args if isinstance(args, Mapping) else {}
-    if name == "spawn_agent" and str(args.get("agent") or "").casefold() == "explorer":
+    if is_delegation_tool(name) and str(args.get("agent") or "").casefold() == "explorer":
         return ()
     if name.startswith("mcp__"):
         # MCP methods have no trustworthy common effect schema. A nominal database/network method may also
@@ -183,6 +192,25 @@ class Usage(Mapping[str, int | float]):
     cost_usd: float | None = None
 
     def __post_init__(self) -> None:
+        # Provider accounting is untrusted telemetry. Negative or malformed counters must never refund a
+        # turn's real usage and evade the host budget; non-finite cost values must not poison aggregation.
+        for name in (
+            "prompt_tokens", "completion_tokens", "input_other",
+            "input_cache_read", "input_cache_creation", "output",
+        ):
+            try:
+                value = max(0, int(getattr(self, name) or 0))
+            except (TypeError, ValueError, OverflowError):
+                value = 0
+            object.__setattr__(self, name, value)
+        try:
+            cost = float(self.cost_usd) if self.cost_usd is not None else None
+        except (TypeError, ValueError, OverflowError):
+            cost = None
+        object.__setattr__(
+            self, "cost_usd",
+            cost if cost is not None and math.isfinite(cost) and cost >= 0 else None,
+        )
         typed_input = self.input_other + self.input_cache_read + self.input_cache_creation
         if self.prompt_tokens == 0 and typed_input:
             object.__setattr__(self, "prompt_tokens", typed_input)
@@ -200,7 +228,7 @@ class Usage(Mapping[str, int | float]):
         def integer(key: str) -> int:
             try:
                 return int(data.get(key, 0) or 0)
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 return 0
 
         cost = data.get("cost_usd")
@@ -211,7 +239,7 @@ class Usage(Mapping[str, int | float]):
             input_cache_read=integer("input_cache_read"),
             input_cache_creation=integer("input_cache_creation"),
             output=integer("output"),
-            cost_usd=float(cost) if isinstance(cost, (int, float)) and cost >= 0 else None,
+            cost_usd=cost,
         )
 
     def as_dict(self) -> dict[str, int | float]:
@@ -309,7 +337,7 @@ def _positive_int(value: object) -> int:
     try:
         result = int(value or 0)
         return result if result > 0 else 0
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 0
 
 
@@ -451,10 +479,11 @@ def coerce_tool_status(value: object, *, legacy_text: str | None = None) -> Tool
 
 __all__ = [
     "CHILD_ACTIVITY_ARG", "CHILD_CANCEL_SIGNAL_ARG", "CHILD_INVOCATION_ID_ARG",
-    "CHILD_REQUEST_ORDINAL_ARG", "ChildActivity",
+    "CHILD_REQUEST_ORDINAL_ARG", "ChildActivity", "DELEGATION_TOOL_NAMES",
     "PreflightOverflow", "PreflightReport",
     "ToolEffect", "ToolInvocation", "ToolOutcome",
     "ToolPurity", "ToolStatus", "TurnOutcome", "TurnStatus", "UnknownContextWindow", "Usage",
-    "available_content_capacity", "coerce_tool_status", "estimate_model_call", "model_context_window",
+    "available_content_capacity", "coerce_tool_status", "estimate_model_call", "is_delegation_tool",
+    "model_context_window",
     "preflight_model_call",
 ]

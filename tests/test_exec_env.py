@@ -66,6 +66,16 @@ def edit_file_new_file_stays_lf():
     assert _read_raw(os.path.join(d, "new.txt")) == b"a\nb\n"  # default LF, no forced CRLF
 
 
+@check
+def append_preserves_existing_crlf():
+    d = tempfile.mkdtemp(prefix="eol-")
+    path = _write_raw(d, "win.log", b"alpha\r\nbeta\r\n")
+    LocalToolHost(d).run("append_to_file", {"path": "win.log", "content": "gamma\ndelta\n"})
+    data = _read_raw(path)
+    assert data == b"alpha\r\nbeta\r\ngamma\r\ndelta\r\n", data
+    assert b"\n" not in data.replace(b"\r\n", b""), "append introduced mixed line endings"
+
+
 def main():
     failed = 0
     for fn in CHECKS:

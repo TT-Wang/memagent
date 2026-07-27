@@ -92,7 +92,7 @@ def _coerce_int(v):
     """Tolerant int() for model-supplied args (str/float/None) — never raises."""
     try:
         return int(v) if v is not None else None
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
@@ -302,7 +302,8 @@ TOOL_SCHEMAS = [
         "file — it discards all current content.",
         {"path": {"type": "string"}, "content": {"type": "string"}}, ["path", "content"]),
     _fn("append_to_file",
-        "Append `content` verbatim to the END of a file (creates it + parent dirs if missing) — the only writer "
+        "Append `content` to the END of a file (creates it + parent dirs if missing), preserving an existing "
+        "file's dominant CRLF line endings — the only writer "
         "that ADDS without touching existing content. Use str_replace to modify text already in the file, "
         "edit_file to replace the whole file. No newline is added — include a leading '\\n' yourself if needed.",
         {"path": {"type": "string"}, "content": {"type": "string"}}, ["path", "content"]),
@@ -1519,14 +1520,17 @@ class LocalToolHost:
         full = self.resolve_read(args["path"])   # I2: append to the SAME file read_file shows; new files still land at the focus base
         self._mkparent(full)
         self._journal(args["path"], full)
+        content = args["content"]
+        if os.path.exists(full):
+            content = self._preserve_eol(content, self._detect_crlf(full))
         with open(full, "ab") as f:   # byte-exact (like write_file's "wb") — text mode would translate newlines, corrupting CRLF
-            f.write(args["content"].encode("utf-8"))
-        msg = f"Appended {len(args['content'])} bytes to {args['path']}"
+            f.write(content.encode("utf-8"))
+        msg = f"Appended {len(content.encode('utf-8'))} bytes to {args['path']}"
         try:                             # echo the file tail so the model sees the appended content in context
             with open(full, encoding="utf-8", errors="replace") as _f:
                 whole = _f.read()
             total = whole.replace("\r\n", "\n").rstrip("\n").count("\n") + 1
-            app = args["content"].replace("\r\n", "\n").rstrip("\n").count("\n") + 1
+            app = content.replace("\r\n", "\n").rstrip("\n").count("\n") + 1
             return f"{msg}. File tail:\n" + _numbered_window(whole, max(0, total - app), total - 1, ctx=2)
         except Exception:  # noqa: BLE001
             return msg

@@ -53,7 +53,7 @@ from .execution import (CHILD_ACTIVITY_ARG, CHILD_CANCEL_SIGNAL_ARG, CHILD_INVOC
                         CHILD_REQUEST_ORDINAL_ARG, ChildActivity,
                         ToolInvocation, ToolOutcome, ToolPurity,
                         PreflightOverflow, ToolStatus, TurnOutcome, Usage,
-                        available_content_capacity, estimate_model_call)
+                        available_content_capacity, estimate_model_call, is_delegation_tool)
 from .registry import ToolAdmission, ToolText, finalize_tool_outcome, tool_result_text
 from .scheduler import ScheduledTool, run_ordered
 
@@ -842,7 +842,6 @@ def run_tool_batch(tool_calls, tools, dispatch: Dispatcher, hooks: Hooks, *, ste
     # cap plus the scheduler-owned delegation deadline; a parent-level budget still applies through usage
     # accounting on the parent side. The metadata below is host-private: preflight, events, journals, and
     # provider-visible args retain only the model's original call.
-    spawn_names = frozenset({"spawn_agent"})
     invocations = []
     for provider_index, tc in enumerate(tool_calls):
         raw_args = tc.args if isinstance(getattr(tc, "args", None), dict) else {}
@@ -863,7 +862,7 @@ def run_tool_batch(tool_calls, tools, dispatch: Dispatcher, hooks: Hooks, *, ste
                                   CHILD_INVOCATION_ID_ARG, CHILD_REQUEST_ORDINAL_ARG)}
         child_cancel = None
         child_activity = None
-        if name in spawn_names:
+        if is_delegation_tool(name):
             # Every physical child gets its own cancellation edge even when the parent has no signal. The
             # scheduler owns the delegation deadline; composition keeps parent Esc/Ctrl-C live as well.
             child_cancel = _ChildCancellationLease(signal)
@@ -1049,13 +1048,13 @@ def run_tool_batch(tool_calls, tools, dispatch: Dispatcher, hooks: Hooks, *, ste
             # Read-only children may overlap, but they finish by sealing artifacts and handing references to
             # the parent. A generic thread deadline must not abandon those lifecycle callbacks into a later
             # turn; the parent waits for settlement while still allowing sibling explorers to run in parallel.
-            timeout_safe=invocation.name != "spawn_agent",
+            timeout_safe=not is_delegation_tool(invocation.name),
             prepare=prepare,
             on_queued=(
                 (lambda reason, inv=invocation: dispatch(ToolQueued(
                     inv, reason, invocation_id=inv.id, request_ordinal=inv.provider_index + 1,
                 )))
-                if invocation.name in spawn_names else None
+                if is_delegation_tool(invocation.name) else None
             ),
             request_cancel=(child_cancel.request if child_cancel is not None else None),
             cancel_grace=(_delegation_cancel_grace() if child_cancel is not None else 0.0),

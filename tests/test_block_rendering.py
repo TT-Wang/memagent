@@ -72,7 +72,8 @@ def test_virtual_archive_and_clean_str_replace_rejections_are_steered() -> None:
     })
     assert ambiguous.status is ToolStatus.STEERED
     assert missing.status is ToolStatus.STEERED
-    assert open(path, encoding="utf-8").read() == "same\nsame\n"
+    with open(path, encoding="utf-8") as stream:
+        assert stream.read() == "same\nsame\n"
 
 
 def test_no_user_answer_remains_a_real_cancellation() -> None:

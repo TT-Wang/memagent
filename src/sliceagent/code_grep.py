@@ -66,7 +66,7 @@ def _norm_int(value, default: int) -> int:
     """Coerce a model-supplied arg to a non-negative int, falling back to default."""
     try:
         n = int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
     return n if n >= 0 else default
 

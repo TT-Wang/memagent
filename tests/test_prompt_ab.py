@@ -24,20 +24,23 @@ def test_variants_build_and_preserve_marker():
     assert "{{MEMORY_MODEL}}" in base
     V.build_all()
     for name in V.list_variants():
-        t = open(V.variant_path(name), encoding="utf-8").read()
+        with open(V.variant_path(name), encoding="utf-8") as stream:
+            t = stream.read()
         assert "{{MEMORY_MODEL}}" in t, f"{name} dropped the memory marker"
 
 
 def test_control_is_a_noop():
     base = V.control_text()
     V.build_all()
-    assert open(V.variant_path("control"), encoding="utf-8").read() == base
+    with open(V.variant_path("control"), encoding="utf-8") as stream:
+        assert stream.read() == base
 
 
 def test_lead_verification_is_pure_reorder():
     base = V.control_text()
     V.build_all()
-    t = open(V.variant_path("v02_lead_verification"), encoding="utf-8").read()
+    with open(V.variant_path("v02_lead_verification"), encoding="utf-8") as stream:
+        t = stream.read()
     assert len(t) == len(base)                       # no chars added/removed
     assert t.index("<verification>") < t.index("<ask>")   # moved to the front
     assert t.count("<verification>") == 1
@@ -46,7 +49,8 @@ def test_lead_verification_is_pure_reorder():
 def test_recency_verify_appends_reminder_without_deleting():
     base = V.control_text()
     V.build_all()
-    t = open(V.variant_path("v01_recency_verify"), encoding="utf-8").read()
+    with open(V.variant_path("v01_recency_verify"), encoding="utf-8") as stream:
+        t = stream.read()
     assert t.startswith(base)                         # adds only, deletes nothing
     assert t.count("<reminder>") == 1 and t.rstrip().endswith("</reminder>")
 
@@ -54,7 +58,8 @@ def test_recency_verify_appends_reminder_without_deleting():
 def test_dedupe_control_removes_only_the_two_clauses():
     base = V.control_text()
     V.build_all()
-    t = open(V.variant_path("ctrl_dedupe"), encoding="utf-8").read()
+    with open(V.variant_path("ctrl_dedupe"), encoding="utf-8") as stream:
+        t = stream.read()
     assert "does NOT clear a user report" not in t
     assert "NOT proof — confirm it on the real artifact first" not in t
     assert len(t) < len(base)

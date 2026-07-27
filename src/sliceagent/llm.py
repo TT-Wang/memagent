@@ -100,7 +100,7 @@ def _int(x) -> int:
     report counts as strings or odd objects, and `x or 0` keeps a truthy non-number → arithmetic TypeError."""
     try:
         return int(x)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 0
 
 

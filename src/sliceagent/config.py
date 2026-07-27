@@ -171,7 +171,7 @@ class Config:
         v = self._get("agent", "subagent_depth", "AGENT_SUBAGENT_DEPTH", 1)
         try:
             return max(0, int(v))                 # 0 = off; a malformed value falls back to the default
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return 1
 
     @property
@@ -201,7 +201,7 @@ class Config:
         v = self._get("budget", "max_tokens", "AGENT_MAX_TOKENS", None)
         try:
             n = int(v) if v is not None else None
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return None                            # garbage budget → no budget (don't crash startup)
         return n if (n is not None and n > 0) else None   # discard a nonsensical <=0 budget
 
@@ -213,7 +213,7 @@ class Config:
         v = self._get("budget", "max_steps", "AGENT_MAX_STEPS", None)
         try:
             n = int(v) if v not in (None, "") else None
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return 120
         return n if (n is not None and n >= 1) else 120   # <=0 (incl. the env STRING "0") → default, consistent across env/TOML
 

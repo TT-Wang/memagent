@@ -9,7 +9,7 @@ What the LOOP already provides (this host adds none of it):
   * cancellation — run_tool_batch injects a ``_ChildCancellationLease`` (parent Esc composed) into the
     call args; the scheduler cancels via ``request_cancel=lease.request``; the lease is Event-like and
     plugs straight into ``run_scoped_agent(signal=...)``;
-  * delegation liveness — ``spawn_agent`` is ``timeout_safe=False`` by NAME in the loop, so the
+  * delegation liveness — the execution protocol classifies ``spawn_agent`` as a delegation tool, so the
     scheduler's per-child inactivity window marks a silent child INDETERMINATE while active siblings
     continue, with an absolute leak guard as the final backstop;
   * parallelism — this host declares ``accesses``: a read-only kind advertises ReadAllAccess (children
