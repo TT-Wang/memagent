@@ -5,7 +5,68 @@ this project aims for [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-07-27
+
+### Added
+- **Plan mode is a sticky, host-enforced read-only mode.** Arm it with `/plan <objective>`, a plain
+  leading `plan <objective>`, or natural phrasing built on the product term — "use plan mode to
+  review X", "in plan mode, audit auth", "enter plan mode". It PERSISTS across turns so a plan can be
+  iterated without re-typing the command, and exits on the approval the planning prompt itself asks
+  for (`go`, `approved`, `lgtm`, `开始`, `执行`, …) or `/plan off`. Merely talking ABOUT the mode
+  ("why did plan mode not trigger?") is inert — arming requires an activation shape, never a mention.
+  A `◦ planning` toolbar chip rides both the idle row and the running status line, so a mode that
+  forbids writes is never invisible, and approval prints what it approved rather than silently
+  unlocking the tool surface.
+- **Plan position during execution.** Every successful `work_delta` carries a `plan_progress`
+  projection derived from the post-delta Active Work graph, so "2/5" is visible while the plan runs.
+  A projection, not a second store.
+- **The plain REPL runs the full slash palette** without the `[tui]` extra, and `/help` lists each
+  command with its description.
+- **Esc on an empty composer asks before undoing.** The first press arms a self-expiring 3s hint; a
+  second confirms. `/undo` reverts a real file edit — too destructive for one reflexive keypress on
+  the most instinctive "cancel" key.
+
 ### Changed
+- **A child outcome has exactly ONE projection.** `ScopedResult.to_record()` is the single source for
+  the parent's typed effects, the durable seal, the recall view, and the TUI matrix. Four
+  hand-written projections had drifted to carrying 3/6, 4/6, 3/6 and 0/6 of the fields; a
+  completeness gate now fails CI when a new field reaches some surfaces and not others.
+- **History search tells the truth.** `search_history` no longer advertises `prefix*` matching that
+  the query builder destroyed by quoting every token into an FTS5 phrase; both query builders now
+  share one forgiving, punctuation-safe implementation.
+- **Automatic skill mining is quarantined.** Derived procedures land in an INACTIVE candidates store
+  outside the discovery root — a cleanly-ended trajectory is evidence for a candidate, not authority
+  to inject instructions — and a fail-closed gate refuses to mine any episode whose goal is
+  host-authored overlay text.
+- `AGENT_MAX_STEPS` is documented as its real default (60), not 120.
+
+### Fixed
+- **The typed return lane between child and parent.** The scoped host returned prose with no
+  `ToolEffect`s, so three capabilities were silently dark: coverage counting ("0/6 reports ready"
+  while six reports existed), evidence assessment, and child token accounting — a fan-out could
+  overrun `AGENT_MAX_TOKENS` unseen because `model_usage` never reached the loop.
+- **A child that produced a report is never reported as `failed`.** An unmapped stop reason such as
+  `max_tokens` used to discard a complete, truncated report as a crash; outcomes now classify by
+  content, and a non-clean child names its reason to the parent (`partial · max_tokens`).
+- **The per-child TUI matrix updates live again** — the host emitted a task id where the progress
+  reducer's stale-callback check requires the presentation turn id, so every update was dropped.
+- **The turn surface follows a workspace handoff.** It was resolved once before the segment loop, so
+  a continuation executed against the workspace the user had just left while its slice described the
+  new one.
+- **The planning prompt no longer impersonates the user's request.** It rode the request channel into
+  the durable archive, poisoning everything derived from history — consolidation learned a skill
+  titled "PLANNING MODE (host-enforced read-only turn)" whose taught process was
+  `append_to_file`/`edit_file`/`run_command`. The discipline now rides the system layer.
+- **Redaction is total**: `redact_text(None)` returns `""` rather than `None`, which crashed four
+  persistence callers — and a crash inside a redaction path is data reaching disk unredacted.
+- `/cost` works without the `[tui]` extra, `_EscSentinel.pause()` is idempotent instead of stalling
+  a second, and the temp-file writer can no longer close a descriptor another thread now owns.
+- **Provider-gate lease reaper hardened.** Per-call reap horizons derived from each call's own
+  deadline, so raising `AGENT_COMPLETION_TOKENS` cannot get a live call reaped; the already-active
+  guard no longer retires the lease it merely detected; `LLM_STREAM_CLOSE_GRACE_SEC` and
+  `LLM_GATE_LEASE_MARGIN_SEC` are validated finite and non-negative (a NaN silently disabled it).
+
+### Changed (0.3.0 development, unreleased until now)
 - **Subagents are now scoped turns (docs/SUBAGENT-SCOPED-TURN.md).** A delegation is one ordinary
   `run_turn` over a fresh, scoped slice — not a nested agent object. `ScopedSpawnHost` replaces
   `SubagentHost` behind an unchanged `spawn_agent` schema; children share the parent's cache prefix

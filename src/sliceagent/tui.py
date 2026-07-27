@@ -20,6 +20,7 @@ Design (a rich + prompt_toolkit terminal UI):
 from __future__ import annotations
 
 import os
+import queue
 import shutil
 import sys
 import threading
@@ -41,7 +42,7 @@ from prompt_toolkit.formatted_text import FormattedText
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.utils import get_cwidth
 
-from .events import (AssistantText, ApiRetry, Event, LessonSaved, StepBegin, StepEnd,
+from .events import (AssistantText, ApiRetry, Event, LessonSaved, SteerDelivered, StepBegin, StepEnd,
                      SubagentProgress, ToolResult, ToolStarted, TurnCommitted, TurnEnd,
                      TurnInterrupted, TurnStarted)
 from .mentions import completion_path
@@ -1540,6 +1541,16 @@ class _EventSinkCore:
                     self.c.print(_render_assistant_update(event.content, _line_width(self.c)))
                 else:
                     self.c.print(_response_panel(event.content, self.c))
+        elif isinstance(event, SteerDelivered):
+            # A queued mid-turn steer just landed in the live trajectory — render it inline so the user
+            # sees queued → delivered (the transient "steer queued" status is its counterpart).
+            self._flush_agents()
+            self._flush_reads()
+            self.c.print(_fit_line(Text.assemble(
+                Text("│ ", style=TH["gutter"]), Text("▸ ", style=f"bold {TH['user']}"),
+                Text("steer · ", style=f"bold {TH['user']}"),
+                Text(_shorten(safe_terminal_text(event.content), 120), style=TH["dim"]),
+            ), _line_width(self.c)))
         elif isinstance(event, ApiRetry):
             self._flush_agents()
             self._flush_reads()
@@ -1995,8 +2006,19 @@ def build_live_app(*, console: Console, stats: dict, root: str | None, run_one_t
             ev.app.invalidate()
             return
         with state_lock:
-            if state["running"]:           # one turn at a time — only a pending input request accepts Enter
-                return
+            running, steer_q = state["running"], state.get("steer_queue")
+            owner, signal = state.get("status_owner", 0), state.get("signal")
+        if running:
+            # Mid-turn input is a STEER, not a new turn: queue it for the running loop's next step
+            # boundary (was: silently swallowed). The queue lives exactly one turn; empty input is a no-op.
+            text = ta.text.strip()
+            if text and steer_q is not None:
+                ta.text = ""
+                steer_q.put(text)
+                set_running_status("◌ steer queued · lands after the current step",
+                                   owner=owner, signal=signal)
+                ev.app.invalidate()
+            return
         text = ta.text.strip()
         ta.text = ""
         with state_lock:
@@ -2072,10 +2094,13 @@ def build_live_app(*, console: Console, stats: dict, root: str | None, run_one_t
             console, stats, owned_status, await_commit=True, set_surface=owned_surface,
         )
         sig = threading.Event()
+        steer_q = queue.Queue()          # mid-turn user input → drained by the loop at step boundaries
+        sink.steer_queue = steer_q       # per-turn attribute: _run_one_turn forwards it to run_turn
         with state_lock:
             state["status_owner"] = owner
             state["running"] = True
             state["signal"] = sig
+            state["steer_queue"] = steer_q
             state["status"] = "◌ Preparing · starting turn"
             state["status_override"] = False
             state["progress"] = None
@@ -2096,7 +2121,17 @@ def build_live_app(*, console: Console, stats: dict, root: str | None, run_one_t
                         pass
             finally:
                 sink.retire()
+                # Steers that arrived after the loop's final drain must not vanish: hand them back to
+                # the input box as a draft for the user's next turn instead of dropping them silently.
+                leftover = []
+                while True:
+                    try:
+                        leftover.append(steer_q.get_nowait())
+                    except queue.Empty:
+                        break
                 with state_lock:
+                    if state.get("steer_queue") is steer_q:
+                        state["steer_queue"] = None
                     if state.get("status_owner") == owner:
                         state["status_owner"] = 0
                         state["status"] = ""
@@ -2106,6 +2141,12 @@ def build_live_app(*, console: Console, stats: dict, root: str | None, run_one_t
                     # This is deliberately last: Enter cannot start a new owner in
                     # the old sink's clear-status window.
                     state["running"] = False
+                if leftover:
+                    draft = "\n".join(leftover)
+                    def restore_steer(text=draft):
+                        if not ta.text:
+                            ta.text = text
+                    _on_ui_thread(restore_steer)
                 try:
                     app.invalidate()
                 except Exception:
