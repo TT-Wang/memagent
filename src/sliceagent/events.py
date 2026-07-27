@@ -87,6 +87,18 @@ class AssistantText(Event):
 
 
 @dataclass
+class SteerDelivered(Event):
+    """A user message injected into the RUNNING turn (typed while the turn was mid-flight).
+
+    Emitted once per drained steer at the moment it is appended to the live trajectory, so the UI can
+    move the message from "queued" to "delivered" and render it inline. The steer never aborts the
+    in-flight model call — it lands at the next step boundary, as a plain user-role message.
+    """
+
+    content: str
+
+
+@dataclass
 class ToolRequested(Event):
     """One provider-requested logical invocation, before preflight or scheduling.
 

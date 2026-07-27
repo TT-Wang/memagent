@@ -32,6 +32,7 @@ from .events import (
     SliceTightened,
     StepBegin,
     StepEnd,
+    SteerDelivered,
     ToolExecutionStarted,
     ToolRejected,
     ToolQueued,
@@ -1258,7 +1259,7 @@ def _prepared(hooks, msgs: list) -> list:
 def run_turn(*, build_slice, llm, tools, dispatch: Dispatcher, hooks: Hooks | None = None,
              max_steps: int = 40, signal=None, checkpoint=None, consolidate=None,
              turn_id: str = "", call_namespace: str = "", transport_activity=None,
-             allow_park_closeout: bool = True) -> TurnResult:
+             allow_park_closeout: bool = True, steer_queue=None) -> TurnResult:
     """One per-LOOP working-memory turn. The slice is the SEED, built ONCE; within the while(true) working
     memory ACCUMULATES as native assistant/tool messages — NO per-step rebuild, NO eviction. The LLM ends
     by not calling tools (Markov at the loop boundary; continuous within).
@@ -1273,7 +1274,12 @@ def run_turn(*, build_slice, llm, tools, dispatch: Dispatcher, hooks: Hooks | No
     call is affordable). A budget/safety stop PARKS — never `end_turn` (the caller checkpoints end_turn⇒done).
     ``allow_park_closeout=False`` delegates every such closeout to an outer lifecycle owner (for callers that
     reserve the sole allowed follow-up model call for a separately budgeted stage).
-    Overflow compacts the oldest WHOLE exchange; a seed that alone overflows parks soft."""
+    Overflow compacts the oldest WHOLE exchange; a seed that alone overflows parks soft.
+
+    ``steer_queue`` (optional, e.g. queue.Queue) carries user input typed WHILE the turn runs. Drained
+    only at step boundaries (top of loop, and once more before a clean exit so a last-second steer keeps
+    the turn alive), each steer is appended as a plain user-role message and announced with
+    SteerDelivered; the in-flight model call is never aborted."""
     hooks = hooks or Hooks()
     total = Usage()
     steps = 0
@@ -1285,6 +1291,32 @@ def run_turn(*, build_slice, llm, tools, dispatch: Dispatcher, hooks: Hooks | No
     repeated_observation = _ObservationRepeatAdvisory()
     failure_origin = ""
     should_cancel = signal.is_set if signal is not None else None
+
+    def _drain_steers() -> int:
+        """Append every queued user steer to the live trajectory; returns how many landed.
+
+        A steer is a plain user-role message injected at a STEP BOUNDARY — the in-flight model call
+        is never aborted (the request is already gone; the earliest safe point is the next call).
+        ``_prepare_model_messages`` re-derives seed + trajectory per call, so an appended steer rides
+        into the very next provider request with the prompt-cache prefix intact. Draining anywhere
+        between an assistant tool_calls message and its tool results would corrupt the sequence, so
+        only the two call sites below (top of loop, pre-finalization) are allowed.
+        """
+        if steer_queue is None:
+            return 0
+        landed = 0
+        while True:
+            try:
+                text = steer_queue.get_nowait()
+            except Exception:  # queue.Empty — drained; never let a UI queue break the turn
+                break
+            text = str(text or "").strip()
+            if not text:
+                continue
+            messages.append({"role": "user", "content": text})
+            dispatch(SteerDelivered(text))
+            landed += 1
+        return landed
     # Direct child reports are ordinary tool-result messages, but unlike reconstructible reads they are the
     # result of expensive delegated computation. Keep only their small identities here so overflow handling
     # can protect the corresponding message bodies without creating a second report store or fan-in packet.
@@ -1356,6 +1388,7 @@ def run_turn(*, build_slice, llm, tools, dispatch: Dispatcher, hooks: Hooks | No
         while True:
             if signal is not None and signal.is_set():
                 return _park("aborted", None, closeout=False)
+            _drain_steers()          # user input queued mid-turn lands at this step boundary
             if steps >= max_steps:
                 # Parent turns keep the generic best-effort closeout by default. A staged explorer has a
                 # separately reserved, full-reasoning synthesis owner; its fast navigator opts out here so
@@ -1545,6 +1578,10 @@ def run_turn(*, build_slice, llm, tools, dispatch: Dispatcher, hooks: Hooks | No
                     if candidate:
                         messages.append({"role": "assistant", "content": candidate})
                     dispatch(StepEnd(steps, step_usage.as_dict(), stop))
+                    if _drain_steers():
+                        # A steer typed WHILE the model composed its "final" answer keeps the SAME turn
+                        # alive: the answer stands in the trajectory, the steer becomes the next input.
+                        continue
                     dispatch(TurnPhaseChanged("checking_completion", "checking whether the turn can finish"))
                     cont = _safe_advisory("should_continue_after_stop", lambda: hooks.should_continue_after_stop(stop))
                     if cont and cont.get("park"):

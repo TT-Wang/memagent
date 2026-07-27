@@ -295,7 +295,7 @@ def search_history_tool_empty_query_and_no_matches():
     from sliceagent.hippocampus import make_search_history_tool
     tool = make_search_history_tool(_FakeMem([]), "s")
     assert tool.schema["function"]["name"] == "search_history"
-    assert "pass a 'query'" in tool.handler({})                       # empty query → usage
+    assert "pass a free-text query" in tool.handler({})               # empty query → usage
     out = tool.handler({"query": "nonexistent-token-xyz"})            # FakeMem returns no hits
     assert "No content matches" in out and 'history/index.md' in out  # points back at the file namespace
 

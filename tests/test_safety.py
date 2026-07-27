@@ -162,9 +162,11 @@ def redact_code_file_keeps_larger_budget():
 
 
 @check
-def redact_text_none_returns_none():
-    assert redact_text(None) is None
-    assert redact_text(None, code_file=True) is None
+def redact_text_none_returns_empty_text():
+    # H1: returning None made redaction PARTIAL — four persistence callers crashed on it, and a crash
+    # inside a redaction path means unredacted data never reaches disk redacted. Redaction is TOTAL.
+    assert redact_text(None) == ""
+    assert redact_text(None, code_file=True) == ""
 
 
 @check
