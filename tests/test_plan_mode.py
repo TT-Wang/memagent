@@ -173,6 +173,64 @@ def verification_red_rejects_with_the_failing_output():
     assert "Applied is not Verified" in failure
 
 
+# ── NO VERDICT is not a red check ───────────────────────────────────────────────────────────────
+# A verify that never ran (deadline overrun, program not installed) reported as failed told the model
+# to "fix the work". It re-edited correct code, set ready again, hit the same wall, and the oscillation
+# detector escalated to the debugger — a permanent ✗ on a build that just needed longer than 120s.
+@check
+def verification_no_verdict_is_not_reported_as_a_failed_check():
+    from sliceagent.execution import ToolStatus
+    from sliceagent.oracle import OracleResult
+    from sliceagent.tools import run_item_verification
+    attempts = {}
+    green, message = run_item_verification(
+        [("s1", ("npm run build",))],
+        lambda _c: OracleResult(ToolStatus.INDETERMINATE, "Command timed out after 600s"),
+        attempts,
+    )
+    assert green == frozenset(), "an unproven item must never be promoted"
+    assert "NO VERDICT" in message and "do NOT re-edit" in message, message
+    assert "verify failed" not in message, f"a timeout is not a failed check: {message}"
+    assert "AGENT_VERIFY_TIMEOUT" in message, "must name the knob that fixes it"
+    # …and it must not poison the oscillation history: no verdict is not a failure signature.
+    assert attempts == {}, f"indeterminate leaked into the failure history: {attempts}"
+
+
+@check
+def verify_naming_a_missing_program_never_runs_and_never_blames_the_work():
+    """127 from the shell is indistinguishable from a real red check, so resolve the program first."""
+    from sliceagent.execution import ToolStatus
+    from sliceagent.tools import LocalToolHost, _unrunnable_verify_program
+    assert _unrunnable_verify_program("definitely-not-installed-xyz --check") == "definitely-not-installed-xyz"
+    assert _unrunnable_verify_program("cd frontend && definitely-not-installed-xyz") == "definitely-not-installed-xyz"
+    # conservative: shell words, paths and variables are never adjudicated, and real programs pass
+    for benign in ("cd build && echo ok", "./scripts/verify.sh", "$MY_RUNNER --check",
+                   "CI=1 python -c 'pass'"):
+        assert _unrunnable_verify_program(benign) == "", benign
+    host = LocalToolHost()
+    result = host._run_verify_command("definitely-not-installed-xyz --check")
+    assert getattr(result, "status", None) is ToolStatus.INDETERMINATE, result
+    assert "not on PATH" in result.output
+
+
+@check
+def verify_deadline_is_the_shell_ceiling_and_is_overridable():
+    import os
+    from sliceagent.oracle import CommandOracle, default_verify_timeout
+    prior = os.environ.get("AGENT_VERIFY_TIMEOUT")
+    try:
+        os.environ.pop("AGENT_VERIFY_TIMEOUT", None)
+        assert default_verify_timeout() == 600.0, "a plan-authored build must not die at 120s"
+        assert CommandOracle("pytest -q").timeout == 600.0
+        for raw, want in (("300", 300.0), ("99999", 600.0), ("0", 600.0), ("junk", 600.0)):
+            os.environ["AGENT_VERIFY_TIMEOUT"] = raw
+            assert default_verify_timeout() == want, raw
+    finally:
+        os.environ.pop("AGENT_VERIFY_TIMEOUT", None)
+        if prior is not None:
+            os.environ["AGENT_VERIFY_TIMEOUT"] = prior
+
+
 @check
 def oscillation_same_failure_four_times_escalates_to_the_debugger():
     from sliceagent.tools import run_item_verification

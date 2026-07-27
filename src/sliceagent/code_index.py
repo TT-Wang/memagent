@@ -362,7 +362,7 @@ class RipgrepCodeIndex:
     # --- internals ----------------------------------------------------------
     def _search(self, terms: list[str]) -> dict[str, dict]:
         """One ripgrep pass over all terms; group matches by file."""
-        cmd = [self.rg, "--json", "-i", "--max-filesize", self.max_filesize,
+        cmd = [self.rg, "--no-require-git", "--json", "-i", "--max-filesize", self.max_filesize,
                "--max-columns", "400"]
         for t in terms:
             cmd += ["-e", t]
@@ -398,7 +398,7 @@ class RipgrepCodeIndex:
 
     def _code_files(self, max_files: int) -> list[str]:
         try:
-            proc = subprocess.run([self.rg, "--files", self.root],
+            proc = subprocess.run([self.rg, "--no-require-git", "--files", self.root],
                                   capture_output=True, text=True, encoding="utf-8",   # H10: UTF-8, not locale
                                   errors="replace", timeout=self.timeout)
         except (OSError, subprocess.SubprocessError):

@@ -13,7 +13,15 @@ export PYTHONUTF8=1   # Windows console defaults to cp1252; test output contains
 pass=0; fail=0; failed=""
 log="$(mktemp)"
 for t in tests/test_*.py; do
-  if "$PY" "$t" >"$log" 2>&1; then
+  # A file with no __main__ block defines its tests and exits 0 without running ANY of them, so the
+  # wrapper counted it green while it verified nothing (18 of 165 files were silently inert). Those are
+  # pytest-style; hand them to pytest so every file in tests/ actually executes.
+  if grep -q "if __name__" "$t"; then
+    runner=("$PY" "$t")
+  else
+    runner=("$PY" -m pytest -q "$t")
+  fi
+  if "${runner[@]}" >"$log" 2>&1; then
     pass=$((pass + 1))
   else
     fail=$((fail + 1)); failed="$failed ${t##*/}"

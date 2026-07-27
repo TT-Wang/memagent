@@ -22,6 +22,11 @@ from .registry import ToolEntry, ToolText
 _DEFAULT_LIMIT = 50
 _RG_MAX_FILESIZE = "300K"
 _RG_MAX_COLUMNS = "400"
+# ripgrep applies .gitignore ONLY inside a git repository. A workspace that is not a repo (a scratch
+# project, an unpacked tarball, a vendored subtree) therefore gets node_modules/.next/venv walked in
+# full — measured >20s vs 1s on the same tree. The ignore rules are what make rg fast, and wanting
+# them has nothing to do with whether the directory happens to be version-controlled.
+_RG_BASE = ["--no-require-git"]
 
 
 _GREP_SCHEMA = {
@@ -108,7 +113,7 @@ def make_grep_tool(host) -> ToolEntry:
                 status=ToolStatus.FAILED,
             )
 
-        cmd = [rg] + (["--path-separator", "/"] if IS_WINDOWS else [])  # model-facing paths: '/' on all platforms
+        cmd = [rg] + _RG_BASE + (["--path-separator", "/"] if IS_WINDOWS else [])  # model-facing paths: '/' on all platforms
         if mode == "files_with_matches":
             cmd += ["-l", "--sortr", "modified"]      # just the files, newest-changed first (cheap relevance)
         elif mode == "count":
@@ -286,7 +291,7 @@ def make_glob_tool(host) -> ToolEntry:
         rg = shutil.which("rg")
         files: list = []
         if rg:
-            cmd = [rg] + (["--path-separator", "/"] if IS_WINDOWS else []) + ["--files", "--sortr", "modified", "-g", pattern, target]
+            cmd = [rg] + _RG_BASE + (["--path-separator", "/"] if IS_WINDOWS else []) + ["--files", "--sortr", "modified", "-g", pattern, target]
             try:
                 proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",   # H10: UTF-8, not locale
                                        errors="replace", cwd=host.root(), timeout=30)

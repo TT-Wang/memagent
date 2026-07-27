@@ -147,6 +147,35 @@ def cleanup_kills_all():
     assert "handle" in h.run("proc_poll", {"handle": "p1"}).lower()
 
 
+# ── the deadline is a TOOL CHOICE, not a verdict ────────────────────────────────────────────────
+# A timeout that reports only "Exit code 124" reads as a dead end, and the next step is a blind retry
+# at the same limit. Both blocking runners must instead hand back the escalation (raise timeout →
+# proc_start) so long work can always finish somewhere.
+@check
+def timeout_result_carries_the_escalation():
+    wd, h = _host()
+    open(os.path.join(wd, "slow.py"), "w").write("import time\ntime.sleep(30)\n")
+    for name, args in (("run_command", {"command": f"{PY} slow.py", "timeout": 1}),
+                       ("execute_code", {"code": f"print(run({PY!r} + ' slow.py'))", "timeout": 1})):
+        out = h.run(name, args)
+        assert "124" in out, f"{name}: lost the timeout sentinel — {out!r}"
+        assert "proc_start" in out, f"{name}: no escalation to the unbounded runner — {out!r}"
+        assert getattr(out.status, "value", out.status) == "indeterminate", (
+            f"{name}: a reaped tree is INDETERMINATE, never failed — {out.status!r}")
+
+
+@check
+def execute_code_honours_a_raised_deadline():
+    """The regression that motivated this: execute_code is the MULTI-EDIT tool, so a hard 30s cap can
+    land between two edits with no way for the caller to widen it."""
+    wd, h = _host()
+    code = "import time\ntime.sleep(2)\nwrite_file('done.txt', 'ok')\nprint('finished')"
+    assert "finished" in h.run("execute_code", {"code": code, "timeout": 60})
+    assert open(os.path.join(wd, "done.txt")).read() == "ok"
+    # …and the ceiling still holds: no caller can ask for an unbounded blocking call.
+    assert h._call_timeout(10**9) == 600.0 and h._call_timeout("nonsense") == float(h.timeout)
+
+
 def main():
     failed = 0
     for fn in CHECKS:

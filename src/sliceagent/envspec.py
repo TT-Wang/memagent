@@ -45,6 +45,10 @@ REGISTRY: list[EnvVar] = [
     EnvVar("AGENT_ADVANCED_TOOLS", "agent", "Expose persistent process and interactive terminal tools; "
            "off by default in the demo kernel.", ""),
     EnvVar("AGENT_VERIFY_CMD", "agent", "Oracle verify command run after a turn (e.g. 'pytest -q').", ""),
+    EnvVar("AGENT_VERIFY_TIMEOUT", "agent",
+           "Deadline in seconds for an acceptance check (a work item's verify command, or the oracle); "
+           "clamped to the 600s shell ceiling. A check that overruns is INDETERMINATE, never failed.",
+           "600"),
     EnvVar("AGENT_MAX_TOKENS", "agent", "Per-turn task token budget, including delegated child usage (parks when exhausted).", ""),
     EnvVar("AGENT_COMPLETION_TOKENS", "agent", "Per-REQUEST completion cap (max output tokens); distinct from "
            "the AGENT_MAX_TOKENS turn budget. Unset = model-aware default (8192; 32768 for reasoning-output "
