@@ -901,6 +901,22 @@ def _plain_arg(args: dict) -> str:
     return " ".join(safe_terminal_text(v, multiline=False).split())[:60]
 
 
+class _PlainConsole:
+    """print()-backed stand-in for the Rich Console when the tui extra is absent. Known style tags are
+    stripped (plain stdout can't render them); markup=False payloads are DATA (paths may contain '[id]'
+    segments) and print verbatim — the same contract as Rich."""
+
+    _STYLE_TAGS = ("[bold]", "[/bold]", "[grey50]", "[grey70]", "[/]")
+
+    @staticmethod
+    def print(text="", *args, markup=True, style=None, **kwargs):
+        s = str(text)
+        if markup:
+            for tag in _PlainConsole._STYLE_TAGS:
+                s = s.replace(tag, "")
+        print(s)
+
+
 def cli_sink(show_slice: bool = False):
     """Plain stdout sink (AGENT_TUI=off / no tui extra / pipes / CI): no color, no spinner — one readable
     line per tool action (✓/✗ + name + primary arg, output for commands/failures) and a delimited answer."""
@@ -1649,7 +1665,7 @@ def main() -> None:
             pass
     except Exception:
         _tui = None
-    _console = _tui.make_console() if _tui else None   # themed: no black-bg highlight on inline `code`/paths
+    _console = _tui.make_console() if _tui else _PlainConsole()   # themed with the extra; plain print() without
 
     # THE interactive UI = the LIVE composer (the rich TUI): the bordered box stays pinned at the bottom
     # while its worker publishes lifecycle/tool progress above it; provider completion uses the off-main
@@ -1851,7 +1867,7 @@ def main() -> None:
                 return p
         return None
 
-    def _handle_slash(line, *, modal_safe: bool = False):  # TUI navigation palette — existing session ops
+    def _handle_slash(line, *, modal_safe: bool = False):  # navigation palette — live TUI AND plain REPL
         nonlocal cfg
         parts = line.split(maxsplit=1)
         cmd, arg = parts[0], (parts[1].strip() if len(parts) > 1 else "")
@@ -1960,7 +1976,7 @@ def main() -> None:
         elif cmd == "/agents":
             _console.print("\n".join(_discovery_agent_lines(tools)), markup=False)
         elif cmd == "/model":
-            if not arg and sys.stdin.isatty() and (modal_safe or not _live_runtime["active"]):
+            if not arg and _tui is not None and sys.stdin.isatty() and (modal_safe or not _live_runtime["active"]):
                 from .tui import select_model_reasoning
                 choice = select_model_reasoning(llm, cfg)
                 if choice:
@@ -2560,7 +2576,7 @@ def main() -> None:
             if line == "/learn" or line.startswith("/learn "):  # transcript → reusable skill (runs as a turn)
                 from .neocortex import build_learn_prompt
                 line = build_learn_prompt(line[len("/learn"):].strip())
-            elif _tui and line.startswith("/"):                # navigation palette (no turn)
+            elif line.startswith("/"):                        # navigation palette (no turn) — plain REPL too
                 _handle_slash(line)
                 continue
             # INVARIANT: echo the user's line BEFORE any blocking work (esp. route_topic's LLM round-trip),

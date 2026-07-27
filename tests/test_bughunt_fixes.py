@@ -1371,6 +1371,35 @@ def slash_handlers_print_bracketed_paths_without_markup_crash():
     con.print(f"model [bold]{_rich_escape('model[next]')}[/]")
 
 
+# ── plain-REPL slash parity: without the tui extra, `/plan` & friends must hit the SAME navigation
+#    palette instead of falling through to a model turn (was: `elif _tui and line.startswith("/")`) ──
+@check
+def plain_repl_slash_palette_is_not_gated_on_the_tui_extra():
+    import contextlib
+    import inspect
+    from io import StringIO
+
+    import sliceagent.cli as cli_mod
+
+    src = inspect.getsource(cli_mod)
+    assert "_tui and line.startswith" not in src, \
+        "the plain-REPL palette is gated on the tui extra again — bare /plan becomes a model turn"
+    assert "_console = _tui.make_console() if _tui else _PlainConsole()" in src
+
+    # The fallback console: markup=False payloads are DATA and print verbatim (bracketed paths survive);
+    # markup=True strips only KNOWN style tags — unknown brackets are content and must stay.
+    buf = StringIO()
+    with contextlib.redirect_stdout(buf):
+        cli_mod._PlainConsole.print("  Undid the last edit to app/[id]/page.tsx (1 change).", markup=False)
+        cli_mod._PlainConsole.print("  model: [bold]gpt-5[/] · reasoning [bold]full[/]")
+        cli_mod._PlainConsole.print("  add [mcp_servers.<name>] to ~/.sliceagent/config.toml")
+        cli_mod._PlainConsole.print("  note", style="yellow", markup=False)   # style kwarg tolerated
+    out = buf.getvalue()
+    assert "app/[id]/page.tsx" in out
+    assert "[bold]" not in out and "gpt-5" in out and "full" in out
+    assert "[mcp_servers.<name>]" in out
+
+
 @check
 def as_text_coerces_none_and_bytes():
     from sliceagent.loop import _as_text
