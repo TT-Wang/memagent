@@ -1316,7 +1316,8 @@ class ContextFS:
             for name in ("lessons", "skills", "skills_rejected", "errors"):
                 count = _optional_count(snapshot.last_consolidation.get(name))
                 if count is not None:
-                    result_counts.append(f"{name.replace('_', ' ')}={count}")
+                    label = "inactive skill candidates" if name == "skills" else name.replace("_", " ")
+                    result_counts.append(f"{label}={count}")
             if result_counts:
                 lines.append("- consolidation outputs: " + ", ".join(result_counts))
         if isinstance(snapshot.compatibility_health, Mapping):

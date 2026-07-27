@@ -37,7 +37,8 @@ REGISTRY: list[EnvVar] = [
     EnvVar("AGENT_REASONING", "agent", "Reasoning effort: full=provider default, fast=minimal, high/max=more.",
            "full", choices=("full", "fast", "high", "max"), validate=True),
     EnvVar("AGENT_THINKING", "agent", "Set to 'off' to disable reasoning (alias for AGENT_REASONING=fast).", ""),
-    EnvVar("AGENT_MINE", "agent", "Lesson-mining mode for end-of-session consolidation.", "deterministic"),
+    EnvVar("AGENT_MINE", "agent", "Opt-in lesson/skill-candidate mining mode for end-of-session "
+           "consolidation: deterministic, llm, or off. Automatic skill candidates stay inactive.", "off"),
     EnvVar("AGENT_SUBAGENT_DEPTH", "agent", "Max delegation depth for spawn_agent (0=off).", "1"),
     EnvVar("AGENT_TOPIC_TOOLS", "agent", "Expose model-callable topic switching (off by default; host "
            "routing and slash commands remain available).", ""),
@@ -100,6 +101,8 @@ REGISTRY: list[EnvVar] = [
     EnvVar("SLICEAGENT_AGENT_ID", "memory", "Stable agent scope key for typed CRAFT knowledge.", "sliceagent"),
     EnvVar("MEMEM_VAULT", "memory", "memem's lesson vault (markdown long-term memories), if memem is installed.", ""),
     EnvVar("SLICEAGENT_SKILLS_DIR", "memory", "Extra directory to discover skills from.", ""),
+    EnvVar("SLICEAGENT_SKILL_CANDIDATES_DIR", "memory", "Inactive store for project-scoped automatically "
+           "derived skill candidates; never discovered as active skills.", ""),
     EnvVar("SLICEAGENT_BASH", "agent", "Windows only: bash.exe that runs shell commands (default: auto-detect Git Bash).", ""),
     EnvVar("AGENT_BACKGROUND_REVIEW", "agent", "Set truthy to run an off-thread reviewer that consolidates "
            "lessons after each turn.", ""),

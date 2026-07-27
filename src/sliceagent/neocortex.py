@@ -180,6 +180,14 @@ def build_learn_prompt(user_request: str = "") -> str:
 
 
 _GOAL_STOP = frozenset("the a an to of in for and or with on at by add fix make build update create".split())
+_HOST_GOAL_MARKERS = (
+    "planning mode (host-enforced",
+    "host-enforced read-only",
+    "# active user intent",
+    "# turn contract",
+    "# active skill(s)",
+    "[/learn]",
+)
 
 
 def _goal_tokens(s: str) -> set:
@@ -193,6 +201,17 @@ def _near_dup_goal(a: str, b: str, thresh: float = 0.6) -> bool:
     if not ta or not tb:
         return False
     return len(ta & tb) / len(ta | tb) >= thresh
+
+
+def _host_authored_goal(goal: str) -> bool:
+    """Synthetic host overlays and policy text are never reusable model instructions.
+
+    Episode titles historically could inherit a transformed host prompt instead of the exact user request.
+    Keep this fail-closed gate even after fixing that producer: old episodes remain durable and an explicitly
+    enabled consolidation run may revisit them.
+    """
+    normalized = (goal or "").casefold()
+    return any(marker in normalized for marker in _HOST_GOAL_MARKERS)
 
 
 def _slug(text: str) -> str:
@@ -235,7 +254,7 @@ def promote_procedures(records: list[dict], *, min_actions: int = PROC_MIN_ACTIO
         if len(actions) < min_actions or len(set(names)) < 2:
             continue                                   # a real multi-step workflow, not one action
         goal = next((m.get("title") for m in rmeta if m.get("title")), "") or "procedure"
-        if _is_secret(goal):
+        if _is_secret(goal) or _host_authored_goal(goal):
             continue
         files = sorted({f for m in rmeta for f in m.get("meta", {}).get("files", [])})
         cand.append({"shape": "→".join(names), "goal": goal,
@@ -393,11 +412,11 @@ class NeocortexMixin:
         """Run the deprecated compatibility sweep from episodic JSONL into Memem and skill files.
 
         Native production consolidation lives on ``LocalMemory`` and binds facts to typed L2 with provenance.
-        Here facts go to the optional legacy bridge and procedures become adjacent ``SKILL.md`` assets.
+        Here facts go to the optional legacy bridge and procedures become inactive ``SKILL.md`` candidates.
         ``mode="llm"`` generalizes skill bodies, with deterministic fallback. Returns truthful stats and never
         raises.
         """
-        from .memory import _skills_dir, write_skill_file
+        from .memory import _skill_candidates_dir, write_skill_file
         stats = {"lessons": 0, "skills": 0, "skills_rejected": 0, "errors": 0}
         try:
             records = self.read_episodes(session_id)   # HippocampusMixin, resolved via self/MRO
@@ -410,7 +429,7 @@ class NeocortexMixin:
                     stats["lessons"] += 1
                 except Exception:  # noqa: BLE001 — one bad lesson must not sink the rest
                     stats["errors"] += 1
-            skills_dir = _skills_dir()
+            skills_dir = _skill_candidates_dir(getattr(self, "_project_id", "") or self._scope)
             for proc in promote_procedures(records):                 # procedures → adjacent skill packs
                 try:
                     body = (render_skill_llm(proc, llm) if mode == "llm" else render_skill(proc))

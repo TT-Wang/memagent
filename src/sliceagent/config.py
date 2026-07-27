@@ -162,7 +162,9 @@ class Config:
 
     @property
     def mine(self) -> str:
-        return self._get("agent", "mine", "AGENT_MINE", "deterministic")
+        # A trajectory is only a candidate procedure, never implicit authority to inject future prompts.
+        # Mining is therefore opt-in; even when enabled, automatic output goes to the inactive candidate store.
+        return self._get("agent", "mine", "AGENT_MINE", "off")
 
     @property
     def subagent_depth(self) -> int:

@@ -8,7 +8,7 @@ the project identity captured when the source work ran; Memem is only an optiona
 WHY THIS CAN'T DESTABILIZE THE DEFAULT PATH (the hard requirement):
   - OFF by default. Only runs when AGENT_BACKGROUND_REVIEW is truthy.
   - The fork reads ONLY the episodic compatibility mirror (already flushed by ``EpisodeSink``) and writes
-    ONLY typed L2 candidates plus adjacent ``SKILL.md`` assets. It NEVER
+    ONLY typed L2 candidates plus inactive ``SKILL.md`` candidates. It NEVER
     touches the Slice, the Session, the loop, the dispatcher, or the prompt cache.
   - It is a daemon thread: it can't block process exit and an exception in it is swallowed.
   - Re-entrancy guard: at most one review in flight; a new turn while one runs is skipped.
@@ -129,9 +129,9 @@ class BackgroundReviewer:
                     pass
             procs = promote_procedures(records)
             if procs:
-                from .memory import _skills_dir, write_skill_file   # SAME guarded writer as session-end
+                from .memory import _skill_candidates_dir, write_skill_file  # same guarded writer as session-end
                 from .skill_provenance import AUTO, reset_authoring_origin, set_authoring_origin
-                skills_dir = _skills_dir()
+                skills_dir = _skill_candidates_dir(self.project_id)
                 token = set_authoring_origin(AUTO)   # mark fork-authored skills curator-prunable
                 try:
                     for proc in procs:

@@ -85,13 +85,29 @@ def _vault_root() -> str:
 
 
 def _skills_dir() -> str:
-    """Return the adjacent capability store for promoted ``SKILL.md`` packs.
+    """Return the ACTIVE capability store for user-approved ``SKILL.md`` packs.
 
     Skills are executable assets discovered by ``SkillManager``, not L2 records or another memory layer.
     ``SLICEAGENT_SKILLS_DIR`` overrides the default ``~/.sliceagent/skills`` location.
     """
     return os.path.expanduser(os.environ.get("SLICEAGENT_SKILLS_DIR")
                               or os.path.join("~", ".sliceagent", "skills"))
+
+
+def _skill_candidates_dir(project_id: str = "") -> str:
+    """Return an INACTIVE, project-scoped store for automatically derived skill candidates.
+
+    This directory is deliberately outside ``~/.sliceagent/skills`` and is not a SkillManager discovery
+    root. A cleanly-ended trajectory is evidence for a candidate, not authority to inject instructions into
+    every future task. Explicit ``/learn`` writes continue to use :func:`_skills_dir`.
+    """
+    raw = str(project_id or "").strip()
+    label = re.sub(r"[^A-Za-z0-9._-]+", "-", raw).strip("._-")[:48] or "unscoped"
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:10] if raw else "0000000000"
+    base = os.environ.get("SLICEAGENT_SKILL_CANDIDATES_DIR") or os.path.join(
+        "~", ".sliceagent", "skill-candidates",
+    )
+    return os.path.join(os.path.expanduser(base), f"{label}-{digest}")
 
 
 def _knowledge_db_path() -> str:
@@ -1321,7 +1337,10 @@ class LocalMemory(HippocampusMixin):
                     stats["lessons"] += 1
                 except Exception:
                     stats["errors"] += 1
-            skills_dir = _skills_dir()
+            # Automatic consolidation may propose a skill, but never activates it. Candidates live outside
+            # every SkillManager discovery root and remain project-bound until a future explicit review /
+            # promotion surface accepts them. Foreground /learn is the only direct active-skill writer.
+            skills_dir = _skill_candidates_dir(bound_project_id)
             for procedure in promote_procedures(episodes):
                 try:
                     body = render_skill_llm(procedure, llm) if mode == "llm" else render_skill(procedure)

@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from sliceagent.neocortex import (  # noqa: E402
     build_learn_prompt, promote_episodes, promote_procedures, render_skill, render_skill_llm)
-from sliceagent.memory import make_write_skill_tool  # noqa: E402
+from sliceagent.memory import _skill_candidates_dir, make_write_skill_tool  # noqa: E402
 
 CHECKS = []
 def check(fn):
@@ -120,6 +120,18 @@ def procedure_from_clean_multistep_workflow():
 
 
 @check
+def host_mode_overlay_never_becomes_a_procedure():
+    workflow = [act("read_file", path="app.py"), act("str_replace", path="app.py"),
+                act("run_command", command="pytest")]
+    for title in (
+        "PLANNING MODE (host-enforced read-only turn) — produce an execution plan",
+        "# ACTIVE USER INTENT\nreview the repository",
+        "# TURN CONTRACT\ninspect before editing",
+    ):
+        assert promote_procedures([prec("t1", 1, workflow, title=title)]) == []
+
+
+@check
 def incomplete_task_with_open_requirements_no_procedure():
     # a clean multistep workflow, but the task DECLARED standing requirements and left one OPEN at its
     # final turn → an incomplete task, so no skill is mined from it (task-outcome gate, #3).
@@ -159,14 +171,17 @@ def procedures_dedup_by_shape_repeated_first():
 
 
 @check
-def consolidate_routes_facts_and_procedures_if_memem():
+def consolidate_routes_facts_and_inactive_procedure_candidates_if_memem():
     try:
         from sliceagent.memory import MememMemory
         m = MememMemory()
     except Exception:
         print("  (skip: memem not importable)"); return
     m._vault = tempfile.mkdtemp()
-    sk = tempfile.mkdtemp(); os.environ["SLICEAGENT_SKILLS_DIR"] = sk
+    active = tempfile.mkdtemp()
+    candidates = tempfile.mkdtemp()
+    os.environ["SLICEAGENT_SKILLS_DIR"] = active
+    os.environ["SLICEAGENT_SKILL_CANDIDATES_DIR"] = candidates
     captured = []
     m.remember = lambda content, *, title="", scope="default", tags="", paths=None: captured.append(title)
     try:
@@ -183,12 +198,16 @@ def consolidate_routes_facts_and_procedures_if_memem():
                                          "note": "", "meta": {"failing": False, "stop_reason": "end_turn", "files": ["b.py"]}})
         m.consolidate("s1")
         assert len(captured) == 1                                   # one FACT remembered
-        skills = [d for d in os.listdir(sk) if os.path.isdir(os.path.join(sk, d))]
-        assert skills, "expected a procedure skill written"
-        body = open(os.path.join(sk, skills[0], "SKILL.md")).read()  # one PROCEDURE skill
+        assert not os.listdir(active), "automatic consolidation must never activate a global skill"
+        candidate_root = _skill_candidates_dir(getattr(m, "_project_id", "") or m._scope)
+        skills = [d for d in os.listdir(candidate_root)
+                  if os.path.isdir(os.path.join(candidate_root, d))]
+        assert skills, "expected an inactive procedure candidate written"
+        body = open(os.path.join(candidate_root, skills[0], "SKILL.md")).read()
         assert body.startswith("---\nname:") and "## Process" in body and "read_file" in body
     finally:
         os.environ.pop("SLICEAGENT_SKILLS_DIR", None)
+        os.environ.pop("SLICEAGENT_SKILL_CANDIDATES_DIR", None)
 
 
 # --- R1: lessons tagged with files (paths_context bonus) + paths threaded read-side ---------------

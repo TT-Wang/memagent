@@ -174,17 +174,17 @@ def _smooth_proc_record(task_id: str, *, title: str, command: str) -> dict:
 
 
 def _run_consolidate(records_for_session, skills_root):
-    """Drive MememMemory.consolidate against a temp vault+skills dir. Returns the skills dir."""
+    """Drive MememMemory.consolidate against a temp vault+inactive-candidate root."""
     fake = _FakeSave(); _install_fake_memem(fake)  # fact-promotion may call remember() → fake
     with tempfile.TemporaryDirectory() as vault:
         m = _mem_no_init()
         m._vault = vault
         _write_episodes(vault, "S", records_for_session)
-        os.environ["SLICEAGENT_SKILLS_DIR"] = skills_root
+        os.environ["SLICEAGENT_SKILL_CANDIDATES_DIR"] = skills_root
         try:
             m.consolidate("S")
         finally:
-            os.environ.pop("SLICEAGENT_SKILLS_DIR", None)
+            os.environ.pop("SLICEAGENT_SKILL_CANDIDATES_DIR", None)
 
 
 @check

@@ -168,7 +168,7 @@ def canonical_memory_status_cannot_be_shadowed_and_reports_lifecycle_truth():
     assert "never add or compare them as layer sizes, unique memories" in diagnostics
     assert "source episodes considered: 12" in diagnostics
     assert "consolidation mode: deterministic" in diagnostics
-    assert "lessons=2, skills=1, skills rejected=3, errors=0" in diagnostics
+    assert "lessons=2, inactive skill candidates=1, skills rejected=3, errors=0" in diagnostics
     assert "STALE INVENTORY" not in diagnostics and "/private/home" not in diagnostics
     assert "STALE INVENTORY" not in fs.grep("STALE", path="@sliceagent/memory/diagnostics.md")
 

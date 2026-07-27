@@ -184,7 +184,8 @@ class Memory(Protocol):
     # --- consolidation / retrieval-feedback (declared now; implemented in later steps) ---
     def mark_used(self, memory_id: str) -> None: ...
     # llm = the abstract LLMClient contract (llm-agnostic — never a concrete provider type); returns a
-    # stats dict {lessons, skills, skills_rejected, errors} so callers report the truth, not a blind success.
+    # stats dict {lessons, skills, skills_rejected, errors}; "skills" counts INACTIVE auto-derived candidates
+    # for wire compatibility. Foreground /learn is the only writer that directly activates a skill.
     def consolidate(self, session_id: str, *, llm=None, mode: str = "deterministic") -> dict: ...
     # Release native episode/knowledge indexes. Implementations must make repeated shutdown paths safe.
     def close(self) -> None: ...

@@ -2,7 +2,7 @@
 
 _Auto-generated from `src/sliceagent/envspec.py` — do not edit by hand (`python scripts/gen_config_reference.py`)._
 
-sliceagent reads **57** environment variables across **6** groups; every value is validated at startup (a misspelled enum warns instead of silently defaulting). Run `sliceagent config --list` to see the resolved value of each on your machine. Secrets (🔒) are read from the environment / config and never printed.
+sliceagent reads **58** environment variables across **6** groups; every value is validated at startup (a misspelled enum warns instead of silently defaulting). Run `sliceagent config --list` to see the resolved value of each on your machine. Secrets (🔒) are read from the environment / config and never printed.
 
 ## agent
 
@@ -16,7 +16,7 @@ sliceagent reads **57** environment variables across **6** groups; every value i
 | `AGENT_DELEGATION_TIMEOUT` | `900` | Hard ceiling for a child-agent wave in seconds; invalid/non-positive values use 900. |
 | `AGENT_MAX_STEPS` | `120` | Per-turn step ceiling (runaway backstop, NOT a work meter — the budget and the user are); raise for deep analysis. |
 | `AGENT_MAX_TOKENS` | — | Per-turn task token budget, including delegated child usage (parks when exhausted). |
-| `AGENT_MINE` | `deterministic` | Lesson-mining mode for end-of-session consolidation. |
+| `AGENT_MINE` | `off` | Opt-in lesson/skill-candidate mining mode for end-of-session consolidation. Automatic candidates remain inactive. |
 | `AGENT_MODEL` | — | LLM model id to drive the agent. REQUIRED — no default; set it here or pick a provider+model via `sliceagent init`. |
 | `AGENT_MODEL_FALLBACK` | — | Larger-context model to switch to ONCE if the context overflows even after compaction (secondary net; the bounded slice is the primary). |
 | `AGENT_PROVIDER` | — | Default provider id to use from the config's [providers.<id>] tables (overrides [agent].default_provider). |
@@ -52,6 +52,7 @@ sliceagent reads **57** environment variables across **6** groups; every value i
 | `SLICEAGENT_KNOWLEDGE_DB` | — | Override the native typed-knowledge SQLite database path. |
 | `SLICEAGENT_PROJECT_REGISTRY` | — | Override the private stable project-identity registry path. |
 | `SLICEAGENT_SKILLS_DIR` | — | Extra directory to discover skills from. |
+| `SLICEAGENT_SKILL_CANDIDATES_DIR` | — | Inactive project-scoped store for automatically derived skill candidates; never discovered as active skills. |
 | `SLICEAGENT_USER_ID` | `local-user` | Stable local user scope key for typed USER knowledge. |
 | `SLICEAGENT_VAULT` | — | Legacy episodic/task compatibility vault. |
 

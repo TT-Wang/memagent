@@ -110,6 +110,21 @@ def agent_max_steps_is_documented_in_envspec():
     assert any(v.name == "AGENT_MAX_STEPS" for v in REGISTRY), "AGENT_MAX_STEPS must be in the env registry"
 
 
+@check
+def automatic_skill_mining_is_opt_in():
+    from sliceagent.config import load_config
+    from sliceagent.envspec import REGISTRY
+    os.environ.pop("AGENT_MINE", None)
+    assert load_config().mine == "off"
+    spec = next(v for v in REGISTRY if v.name == "AGENT_MINE")
+    assert spec.default == "off"
+    os.environ["AGENT_MINE"] = "deterministic"
+    try:
+        assert load_config().mine == "deterministic"
+    finally:
+        os.environ.pop("AGENT_MINE", None)
+
+
 def main():
     failed = 0
     for fn in CHECKS:
