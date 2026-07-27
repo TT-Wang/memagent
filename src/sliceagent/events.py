@@ -93,9 +93,13 @@ class SteerDelivered(Event):
     Emitted once per drained steer at the moment it is appended to the live trajectory, so the UI can
     move the message from "queued" to "delivered" and render it inline. The steer never aborts the
     in-flight model call — it lands at the next step boundary, as a plain user-role message.
+
+    ``admission_id`` is empty for interactive input; a durable host (e.g. the Raft bridge) supplies a
+    stable admission key per steer so delivery can be acked exactly once across restarts.
     """
 
     content: str
+    admission_id: str = ""
 
 
 @dataclass

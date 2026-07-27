@@ -1313,14 +1313,22 @@ def run_turn(*, build_slice, llm, tools, dispatch: Dispatcher, hooks: Hooks | No
         landed = 0
         while True:
             try:
-                text = steer_queue.get_nowait()
+                item = steer_queue.get_nowait()
             except Exception:  # queue.Empty — drained; never let a UI queue break the turn
                 break
-            text = str(text or "").strip()
+            # Items are plain text, or (text, admission_id) from a host that must reconcile delivery
+            # against a durable inbox (the Raft bridge): the id rides the SteerDelivered receipt so an
+            # admission is acked exactly once, and equal-text steers stay distinguishable.
+            admission_id = ""
+            if isinstance(item, (tuple, list)) and len(item) == 2:
+                text, admission_id = str(item[0] or ""), str(item[1] or "")
+            else:
+                text = str(item or "")
+            text = text.strip()
             if not text:
                 continue
             messages.append({"role": "user", "content": text})
-            dispatch(SteerDelivered(text))
+            dispatch(SteerDelivered(text, admission_id=admission_id))
             landed += 1
         return landed
     # Direct child reports are ordinary tool-result messages, but unlike reconstructible reads they are the

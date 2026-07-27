@@ -94,3 +94,24 @@ def test_no_steer_queue_means_clean_single_pass():
         llm=llm, tools=_Host(), dispatch=lambda _e: None, hooks=Hooks(),
     )
     assert outcome.stop_reason == "end_turn" and len(llm.seen) == 1
+
+
+def test_steer_admission_id_rides_the_delivery_receipt():
+    """A durable host pairs deliveries with its inbox: (text, admission_id) items keep the id,
+    equal-text steers stay distinguishable, and the trajectory carries only the text."""
+    q: queue.Queue = queue.Queue()
+    q.put(("same words", "adm-1"))
+    q.put(("same words", "adm-2"))
+    llm = _ScriptLLM([_done_response("ok"), _done_response("done")])
+    events = []
+    outcome = run_turn(
+        build_slice=lambda: [{"role": "user", "content": "go"}],
+        llm=llm, tools=_Host(), dispatch=events.append, hooks=Hooks(), steer_queue=q,
+    )
+    assert outcome.stop_reason == "end_turn"
+    receipts = [e for e in events if isinstance(e, SteerDelivered)]
+    assert [e.admission_id for e in receipts] == ["adm-1", "adm-2"]
+    assert all(e.content == "same words" for e in receipts)
+    second = llm.seen[1]
+    steered = [m for m in second if m["role"] == "user" and m["content"] == "same words"]
+    assert len(steered) == 2, "both steers land in the trajectory as plain user text"

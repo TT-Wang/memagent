@@ -1128,13 +1128,39 @@ def render_closure(s) -> str:
             "declare done until each is updated or confirmed.\n\n")
 
 
+def _repeat_pressure(s) -> int:
+    """Re-observation count: how many tool calls REPEATED an already-settled observation (action_log
+    signature seen before). This is the honest 'no new evidence' signal (#33 P0): a raw call count
+    cannot distinguish gathering evidence from re-checking it, and the count-only escalation caused
+    more premature completion than the step ceiling. Failing signatures don't count — a red check is
+    active fixing, and the ACTION HISTORY block already pressures exact repeats of failures."""
+    log = getattr(s, "action_log", None) or {}
+    return sum(max(0, int(a.get("count", 0)) - 1) for a in log.values() if not a.get("failing"))
+
+
+def _unfinished_frontier(s) -> tuple[int, int]:
+    """(open-ish, ready-unverified) Active Work item counts — the receipt-aware completion signal.
+    ``ready`` items are exactly the ones whose host verify has not yet run: pressuring the model to
+    'write the final summary' while they exist invites an unverified done-claim (Applied ≠ Verified)."""
+    graph = getattr(s, "active_work", None)
+    items = getattr(graph, "items", None) or ()
+    open_ish = sum(1 for item in items
+                   if getattr(item, "kind", "") != "request"
+                   and getattr(item, "status", "") in ("open", "in_progress", "waiting_user"))
+    ready = sum(1 for item in items if getattr(item, "status", "") == "ready")
+    return open_ish, ready
+
+
 def render_convergence(s) -> str:
     """Convergence pressure against over-verification. Once a change exists and the agent has spent
     several tool calls since its last edit with NO current error, it is re-checking something already
     settled — tell it to finish. General + Markov: purely a function of state (edited? error?
-    calls-since-edit), no task/tool/language assumptions. Fires ONLY post-edit and ONLY when nothing
-    is broken, so it never cuts off active fixing (a failing check keeps last_error set → no nudge).
-    This SHRINKS wasted steps/tokens/time; the model still decides (it may continue for a real edit)."""
+    calls-since-edit, repeated observations, unverified frontier), no task/tool/language assumptions.
+    Fires ONLY post-edit and ONLY when nothing is broken, so it never cuts off active fixing (a failing
+    check keeps last_error set → no nudge). Evidence-aware (#33 P0): the STRONG escalation requires
+    demonstrated re-observation — fresh evidence-gathering past the soft threshold stays a soft
+    checkpoint — and an unverified Active Work frontier redirects to earning the receipts instead of
+    claiming completion. The model still decides (it may continue for a real edit)."""
     if not s.edited_files:
         # EXPLORER children are SUPPOSED to do many read-only calls (their deliverable is the
         # investigation); the read-only nudge below is for the TOP-LEVEL agent over-exploring instead
@@ -1148,7 +1174,11 @@ def render_convergence(s) -> str:
         # is edited (→ the post-edit path below), so real edit-tasks are unaffected.
         ta = getattr(s, "turn_actions", 0)
         if not s.last_error and ta >= EXPLORE_NUDGE_AFTER:
-            strong = "STOP exploring NOW — " if ta >= EXPLORE_NUDGE_AFTER + 6 else ""
+            # STRONG only on demonstrated re-observation: a long but FRESH evidence trail (every call a
+            # new signature) keeps the checkpoint soft no matter the count — the raw-count escalation
+            # was the premature-completion driver (#33 P0).
+            strong = ("STOP exploring NOW — "
+                      if ta >= EXPLORE_NUDGE_AFTER + 6 and _repeat_pressure(s) >= 2 else "")
             return (
                 f"# CONVERGENCE CHECK\n{strong}you've made {ta} tool calls this turn and edited nothing. Decide "
                 f"NOW — stop exploring (do NOT re-read what you've seen). If the task needs a CODE CHANGE, make "
@@ -1161,7 +1191,25 @@ def render_convergence(s) -> str:
         return ""
     if render_closure(s):           # an unreached dependent outranks the done-nudge (targeted > frequency):
         return ""                   # show CLOSURE instead of STOP so the model finishes the refactor first
-    strong = "STOP NOW — " if s.since_edit >= STOP_NUDGE_AFTER + 4 else ""
+    open_ish, ready = _unfinished_frontier(s)
+    if ready:
+        # Receipt-aware (#33 P0): 'ready' items are awaiting HOST verification — the completion pressure
+        # must point at earning the receipts, never at summarizing past them (Applied ≠ Verified).
+        return (
+            f"# CONVERGENCE CHECK\nyou have edited {len(s.edited_files)} file(s) and {ready} Active Work "
+            f"item(s) sit at 'ready' awaiting host verification. Do NOT write a final summary over an "
+            f"unverified frontier: advance those items (update_work) so their verify commands run, fix "
+            f"anything that comes back red, and only then finish.\n\n")
+    if open_ish:
+        # Named uncovered scope instead of a stop order: completion pressure with open work invites a
+        # false done-claim; the bounded checkpoint tells the model exactly what remains.
+        return (
+            f"# CONVERGENCE CHECK\nyou have edited {len(s.edited_files)} file(s) and made {s.since_edit} "
+            f"tool calls since your last edit, but {open_ish} Active Work item(s) are still open/in "
+            f"progress. Either advance them now or, if they no longer apply, close them with a reason — "
+            f"do not finish leaving the frontier ambiguous.\n\n")
+    strong = ("STOP NOW — "
+              if s.since_edit >= STOP_NUDGE_AFTER + 4 and _repeat_pressure(s) >= 2 else "")
     return (
         f"# CONVERGENCE CHECK\n{strong}you have edited {len(s.edited_files)} file(s) and made "
         f"{s.since_edit} tool calls since your last edit with no error — the change appears complete and "
