@@ -9,8 +9,9 @@ What the LOOP already provides (this host adds none of it):
   * cancellation — run_tool_batch injects a ``_ChildCancellationLease`` (parent Esc composed) into the
     call args; the scheduler cancels via ``request_cancel=lease.request``; the lease is Event-like and
     plugs straight into ``run_scoped_agent(signal=...)``;
-  * the delegation ceiling — ``spawn_agent`` is ``timeout_safe=False`` by NAME in the loop, so the
-    scheduler's 900s lifecycle deadline marks a hung child INDETERMINATE and the turn continues;
+  * delegation liveness — ``spawn_agent`` is ``timeout_safe=False`` by NAME in the loop, so the
+    scheduler's per-child inactivity window marks a silent child INDETERMINATE while active siblings
+    continue, with an absolute leak guard as the final backstop;
   * parallelism — this host declares ``accesses``: a read-only kind advertises ReadAllAccess (children
     overlap in the wave), a writable kind advertises AllAccess (globally exclusive barrier).
 
@@ -25,7 +26,7 @@ from collections.abc import Iterable, Mapping
 from .events import (AssistantText, ModelCallPrepared, StepBegin, StepEnd, SubagentProgress,
                      ToolStarted)
 from .access import AllAccess, ReadAllAccess
-from .execution import (CHILD_CANCEL_SIGNAL_ARG, CHILD_INVOCATION_ID_ARG,
+from .execution import (CHILD_ACTIVITY_ARG, CHILD_CANCEL_SIGNAL_ARG, CHILD_INVOCATION_ID_ARG,
                         CHILD_REQUEST_ORDINAL_ARG, ToolEffect, ToolStatus, Usage)
 from .registry import ToolText
 from .scoped_agent import allowed_for, run_scoped_agent
@@ -103,8 +104,9 @@ class _ProgressEmitter:
     execution facts from the child's own dispatch: starting → awaiting_model → writing/running_tool
     (cycling) → settling; the terminal state is the outer ToolResult, not a phase."""
 
-    def __init__(self, notify, **identity):
+    def __init__(self, notify, *, activity=None, **identity):
         self._notify = notify
+        self._activity = activity
         self._identity = identity
         self._lock = threading.Lock()
         self._seq = 0
@@ -112,6 +114,7 @@ class _ProgressEmitter:
         self._last = ("", "")
 
     def __call__(self, event) -> None:
+        self._touch()
         if isinstance(event, StepBegin):
             self._publish("starting", f"pass {event.step}")
         elif isinstance(event, ModelCallPrepared):
@@ -129,7 +132,12 @@ class _ProgressEmitter:
             self._publish("awaiting_model", "")
 
     def settling(self) -> None:
+        self._touch()
         self._publish("settling", "")
+
+    def _touch(self) -> None:
+        if self._activity is not None:
+            self._activity.touch()
 
     def _publish(self, phase: str, detail: str, tool_name: str = "") -> None:
         with self._lock:
@@ -138,6 +146,8 @@ class _ProgressEmitter:
             self._last = (phase, detail)
             self._seq += 1
             seq, tools = self._seq, self._tools
+        if self._notify is None:
+            return
         try:
             self._notify(SubagentProgress(phase=phase, detail=detail, tool_name=tool_name,
                                           sequence=seq, tool_count=tools, **self._identity))
@@ -300,6 +310,7 @@ class ScopedSpawnHost:
         if err is not None:
             return err
         cancel = args.get(CHILD_CANCEL_SIGNAL_ARG)          # loop-injected; Event-like, parent-composed
+        activity = args.get(CHILD_ACTIVITY_ARG)             # loop-injected; shared monotonic liveness cell
         invocation_id = str(args.get(CHILD_INVOCATION_ID_ARG) or "")
         request_ordinal = int(args.get(CHILD_REQUEST_ORDINAL_ARG) or 0)
         with self._lock:
@@ -313,9 +324,9 @@ class ScopedSpawnHost:
             except Exception:  # noqa: BLE001
                 turn_id = ""
         emitter = None
-        if self._notify is not None:
+        if self._notify is not None or activity is not None:
             emitter = _ProgressEmitter(
-                self._notify, agent_id=f"{turn_id or 'turn'}:agent:{launch}",
+                self._notify, activity=activity, agent_id=f"{turn_id or 'turn'}:agent:{launch}",
                 parent_turn_id=turn_id, launch_ordinal=launch, kind=spec.name, name=spec.name,
                 depth=1, session_id=self._session_id, invocation_id=invocation_id,
                 request_ordinal=request_ordinal, objective=task)
@@ -324,7 +335,10 @@ class ScopedSpawnHost:
             brief, tools=self._inner, llm=self._llm, retriever=self._retriever, memory=self._memory,
             allowed_tools=allowed_for(spec, self._inner), model_id=self._model_id,
             max_steps=self._max_steps, signal=cancel, reasoning=spec.reasoning or "",
-            system_extra=spec.system_prompt, on_event=emitter)
+            system_extra=spec.system_prompt, on_event=emitter,
+            transport_activity=(
+                (lambda *_args, **_kwargs: activity.touch()) if activity is not None else None
+            ))
         if emitter is not None:
             emitter.settling()
 

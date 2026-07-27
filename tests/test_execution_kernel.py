@@ -16,13 +16,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from sliceagent.events import (ApiRetry, AssistantText, ToolResult, TurnEnd,
                                TurnInterrupted)  # noqa: E402
-from sliceagent.execution import (CHILD_INVOCATION_ID_ARG, CHILD_REQUEST_ORDINAL_ARG,
-                                  PreflightOverflow, ToolEffect,
+from sliceagent.execution import (CHILD_ACTIVITY_ARG, CHILD_INVOCATION_ID_ARG,
+                                  CHILD_REQUEST_ORDINAL_ARG, ChildActivity, PreflightOverflow, ToolEffect,
                                   ToolInvocation, ToolOutcome, ToolPurity, ToolStatus, TurnOutcome,
                                   Usage, preflight_model_call, reconciliation_targets)  # noqa: E402
 from sliceagent.hooks import BudgetHook, Hooks  # noqa: E402
-from sliceagent.loop import (_assistant_message, _delegation_timeout, run_tool_batch,
-                             run_turn)  # noqa: E402
+from sliceagent.loop import (_assistant_message, _delegation_absolute, _delegation_timeout,
+                             run_tool_batch, run_turn)  # noqa: E402
 from sliceagent.model_runner import complete_model_call  # noqa: E402
 from sliceagent.registry import ToolEntry, ToolRegistry, ToolText  # noqa: E402
 from sliceagent.scheduler import ScheduledTool, run_ordered  # noqa: E402
@@ -334,6 +334,149 @@ def delegation_timeout_cannot_be_disabled_with_nonfinite_values():
             os.environ.pop("AGENT_DELEGATION_TIMEOUT", None)
         else:
             os.environ["AGENT_DELEGATION_TIMEOUT"] = old
+
+
+@check
+def delegation_absolute_cannot_be_disabled_with_nonfinite_values():
+    old = os.environ.get("AGENT_DELEGATION_ABSOLUTE")
+    try:
+        for raw in ("inf", "-inf", "nan", "1e309", "0", "-1", "invalid"):
+            os.environ["AGENT_DELEGATION_ABSOLUTE"] = raw
+            assert _delegation_absolute() == 3600.0, raw
+        os.environ["AGENT_DELEGATION_ABSOLUTE"] = "12.5"
+        assert _delegation_absolute() == 12.5
+    finally:
+        if old is None:
+            os.environ.pop("AGENT_DELEGATION_ABSOLUTE", None)
+        else:
+            os.environ["AGENT_DELEGATION_ABSOLUTE"] = old
+
+
+@check
+def child_inactivity_timeout_is_per_job_not_pooled_by_a_live_sibling():
+    inactive_cancel = threading.Event()
+    live_cancel = threading.Event()
+    inactive_activity = ChildActivity()
+    live_activity = ChildActivity()
+    inactive_inv = ToolInvocation("inactive-child", "spawn_agent", {}, 0)
+    live_inv = ToolInvocation("live-child", "spawn_agent", {}, 1)
+
+    def inactive():
+        assert inactive_cancel.wait(1)
+        return ToolOutcome(inactive_inv, ToolStatus.CANCELLED, "inactive child closed")
+
+    def live():
+        until = time.monotonic() + 0.18
+        while time.monotonic() < until:
+            assert not live_cancel.is_set(), "live child was cancelled by its sibling's inactivity"
+            live_activity.touch()
+            time.sleep(0.01)
+        return ToolOutcome(live_inv, ToolStatus.SUCCEEDED, "live child completed")
+
+    outcomes = run_ordered([
+        ScheduledTool(
+            inactive_inv, ToolPurity.PURE_READ, inactive, timeout_safe=False,
+            request_cancel=lambda _kind: inactive_cancel.set(), cancel_grace=0.2,
+            activity=inactive_activity,
+        ),
+        ScheduledTool(
+            live_inv, ToolPurity.PURE_READ, live, timeout_safe=False,
+            request_cancel=lambda _kind: live_cancel.set(), cancel_grace=0.2,
+            activity=live_activity,
+        ),
+    ], lifecycle_timeout=0.05, lifecycle_absolute=1.0)
+    assert [outcome.status for outcome in outcomes] == [
+        ToolStatus.FAILED, ToolStatus.SUCCEEDED,
+    ], outcomes
+    assert "no activity for 0.05s" in outcomes[0].text
+    assert not live_cancel.is_set()
+
+
+@check
+def active_child_still_stops_at_absolute_delegation_guard():
+    cancel = threading.Event()
+    activity = ChildActivity()
+    invocation = ToolInvocation("long-child", "spawn_agent", {}, 0)
+
+    def active():
+        while not cancel.wait(0.01):
+            activity.touch()
+        return ToolOutcome(invocation, ToolStatus.CANCELLED, "active child closed")
+
+    outcomes = run_ordered([
+        ScheduledTool(
+            invocation, ToolPurity.PURE_READ, active, timeout_safe=False,
+            request_cancel=lambda _kind: cancel.set(), cancel_grace=0.2, activity=activity,
+        ),
+    ], lifecycle_timeout=0.05, lifecycle_absolute=0.12)
+    assert outcomes[0].status is ToolStatus.FAILED
+    assert "0.12s absolute delegation leak guard" in outcomes[0].text
+
+
+@check
+def queued_child_inactivity_starts_at_physical_admission():
+    first_activity = ChildActivity()
+    second_activity = ChildActivity()
+    first_inv = ToolInvocation("first-child", "spawn_agent", {}, 0)
+    second_inv = ToolInvocation("queued-child", "spawn_agent", {}, 1)
+    second_started = []
+
+    def first():
+        until = time.monotonic() + 0.12
+        while time.monotonic() < until:
+            first_activity.touch()
+            time.sleep(0.01)
+        return ToolOutcome(first_inv, ToolStatus.SUCCEEDED, "first complete")
+
+    def second():
+        second_started.append(True)
+        time.sleep(0.02)
+        return ToolOutcome(second_inv, ToolStatus.SUCCEEDED, "queued child complete")
+
+    outcomes = run_ordered([
+        ScheduledTool(
+            first_inv, ToolPurity.PURE_READ, first, timeout_safe=False,
+            request_cancel=lambda _kind: None, activity=first_activity,
+        ),
+        ScheduledTool(
+            second_inv, ToolPurity.PURE_READ, second, timeout_safe=False,
+            request_cancel=lambda _kind: None, activity=second_activity,
+        ),
+    ], max_workers=1, lifecycle_timeout=0.05, lifecycle_absolute=1.0)
+    assert second_started == [True], "queue wait was incorrectly charged as child inactivity"
+    assert [outcome.status for outcome in outcomes] == [
+        ToolStatus.SUCCEEDED, ToolStatus.SUCCEEDED,
+    ]
+
+
+@check
+def parent_cancellation_outranks_child_liveness_cutoffs():
+    parent_cancel = threading.Event()
+    child_cancel = threading.Event()
+    activity = ChildActivity()
+    invocation = ToolInvocation("cancelled-child", "spawn_agent", {}, 0)
+    entered = threading.Event()
+    box = {}
+
+    def child():
+        entered.set()
+        assert child_cancel.wait(1)
+        return ToolOutcome(invocation, ToolStatus.CANCELLED, "child closed")
+
+    runner = threading.Thread(target=lambda: box.setdefault("outcomes", run_ordered([
+        ScheduledTool(
+            invocation, ToolPurity.PURE_READ, child, timeout_safe=False,
+            request_cancel=lambda _kind: child_cancel.set(), cancel_grace=0.2, activity=activity,
+        ),
+    ], lifecycle_timeout=0.5, lifecycle_absolute=1.0, should_cancel=parent_cancel.is_set)), daemon=True)
+    runner.start()
+    assert entered.wait(1)
+    parent_cancel.set()
+    runner.join(1)
+    assert not runner.is_alive()
+    assert box["outcomes"][0].status is ToolStatus.CANCELLED
+    assert "parent turn cancellation" in box["outcomes"][0].text
+    assert "inactivity" not in box["outcomes"][0].text
 
 
 @check
@@ -2232,15 +2375,18 @@ def parallel_children_receive_lifecycle_metadata_but_no_budget_share():
     ]
     _, results = run_tool_batch(calls, Host(), lambda _event: None, budget)
     assert len(seen) == 2
-    # Children are bounded by their step cap and the delegation deadline only. A parent-level budget
-    # applies through usage accounting on the parent side; it is never split into per-child shares.
+    # Children are bounded by their step cap and per-child liveness policy. A parent-level budget applies
+    # through usage accounting on the parent side; it is never split into per-child shares.
     assert all("__sliceagent_token_budget" not in args for args in seen)
     by_task = {args["task"]: args for args in seen}
     assert by_task["one"][CHILD_INVOCATION_ID_ARG] == "one"
     assert by_task["two"][CHILD_INVOCATION_ID_ARG] == "two"
     assert by_task["one"][CHILD_REQUEST_ORDINAL_ARG] == 1
     assert by_task["two"][CHILD_REQUEST_ORDINAL_ARG] == 2
-    private = {CHILD_INVOCATION_ID_ARG, CHILD_REQUEST_ORDINAL_ARG}
+    assert isinstance(by_task["one"][CHILD_ACTIVITY_ARG], ChildActivity)
+    assert isinstance(by_task["two"][CHILD_ACTIVITY_ARG], ChildActivity)
+    assert by_task["one"][CHILD_ACTIVITY_ARG] is not by_task["two"][CHILD_ACTIVITY_ARG]
+    private = {CHILD_ACTIVITY_ARG, CHILD_INVOCATION_ID_ARG, CHILD_REQUEST_ORDINAL_ARG}
     assert all(not private.intersection(result["args"]) for result in results), \
         "scheduler metadata must not leak into the canonical invocation"
 

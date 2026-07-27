@@ -14,20 +14,21 @@ import os
 import sys
 import tempfile
 import threading
+import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from sliceagent.access import AllAccess, ReadAllAccess            # noqa: E402
 from sliceagent.agents import BUILTIN_AGENTS                       # noqa: E402
-from sliceagent.events import SubagentProgress                     # noqa: E402
-from sliceagent.execution import ToolStatus                        # noqa: E402
+from sliceagent.events import StepBegin, SubagentProgress           # noqa: E402
+from sliceagent.execution import ChildActivity, ToolStatus          # noqa: E402
 from sliceagent.hooks import Hooks                                 # noqa: E402
 from sliceagent.llm import AssistantMessage, ToolCall              # noqa: E402
 from sliceagent.loop import run_tool_batch                         # noqa: E402
 from sliceagent.memory import NullMemory                           # noqa: E402
 from sliceagent.retriever import NullRetriever                     # noqa: E402
 from sliceagent.scoped_agent import ScopedSurface, allowed_for     # noqa: E402
-from sliceagent.scoped_spawn import ScopedSpawnHost                # noqa: E402
+from sliceagent.scoped_spawn import ScopedSpawnHost, _ProgressEmitter  # noqa: E402
 from sliceagent.tools import LocalToolHost                         # noqa: E402
 
 CHECKS = []
@@ -190,6 +191,46 @@ def matrix_truth_progress_phases_and_identities():
     assert seqs == sorted(seqs) and len(set(seqs)) == len(seqs), "sequence must be monotonic"
     assert all(u.parent_turn_id == "t-1" and u.agent_id for u in ups)
     assert all(u.kind == "explorer" for u in ups)
+
+
+@check
+def child_activity_touches_before_progress_dedup_and_wires_transport_heartbeats():
+    activity = ChildActivity(1.0)
+    seen = []
+    emitter = _ProgressEmitter(seen.append, activity=activity, agent_id="a", parent_turn_id="t",
+                               launch_ordinal=1, kind="explorer", name="explorer", depth=1,
+                               session_id="s", invocation_id="i", request_ordinal=1, objective="x")
+    emitter(StepBegin(1))
+    first = activity.last
+    time.sleep(0.001)
+    emitter(StepBegin(1))  # same visible row: deduplicated for presentation, still liveness
+    assert activity.last > first
+    assert len(seen) == 1
+    emitter.settling()
+    settling = activity.last
+    time.sleep(0.001)
+    emitter.settling()
+    assert activity.last > settling, "sealing activity must refresh even when its UI row is deduplicated"
+    assert len(seen) == 2
+
+    heartbeats = []
+
+    class HeartbeatLLM(_ScriptedLLM):
+        def set_transport_activity(self, sink):
+            self._activity = sink
+
+        def complete_with_control(self, messages, tools, *, should_cancel=None,
+                                  transport_activity=None):
+            sink = transport_activity if transport_activity is not None else self._activity
+            assert sink is not None, "the scoped child cleared its mandatory transport observer"
+            sink("stream_heartbeat", {"chunks": 1})
+            heartbeats.append(True)
+            return self.complete(messages, tools)
+
+    host = _host(_workspace(), llm=HeartbeatLLM())
+    run_tool_batch([_TC({"agent": "explorer", "task": "Read a.py."})],
+                   host, lambda _event: None, Hooks(), step=1, turn_id="t-1")
+    assert heartbeats, "child transport activity never reached the liveness cell"
 
 
 @check

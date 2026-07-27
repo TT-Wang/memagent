@@ -13,7 +13,8 @@ sliceagent reads **59** environment variables across **6** groups; every value i
 | `AGENT_BACKGROUND_REVIEW` | — | Set truthy to run an off-thread reviewer that consolidates lessons after each turn. |
 | `AGENT_COMPLETION_TOKENS` | `model-aware` | Per-REQUEST completion cap (max output tokens); distinct from the AGENT_MAX_TOKENS turn budget. Unset = model-aware default (32768 for reasoning families incl. claude/kimi, 16384 for unknown models, 8192 for known chat models). 0 = provider default. |
 | `AGENT_CONTEXT_WINDOW` | — | Provider context window used for strict per-call capacity preflight when the model catalog cannot supply one (0/unset = explicit compatibility mode). |
-| `AGENT_DELEGATION_TIMEOUT` | `900` | Hard ceiling for a child-agent wave in seconds; invalid/non-positive values use 900. |
+| `AGENT_DELEGATION_TIMEOUT` | `900` | Per-child inactivity window in seconds, reset by child/transport activity; invalid/non-positive values use 900. |
+| `AGENT_DELEGATION_ABSOLUTE` | `3600` | Absolute child leak guard in seconds; invalid/non-positive values use 3600. |
 | `AGENT_MAX_STEPS` | `120` | Per-turn step ceiling (runaway backstop, NOT a work meter — the budget and the user are); raise for deep analysis. |
 | `AGENT_MAX_TOKENS` | — | Per-turn task token budget, including delegated child usage (parks when exhausted). |
 | `AGENT_MINE` | `off` | Opt-in lesson/skill-candidate mining mode for end-of-session consolidation: deterministic, llm, or off. Automatic skill candidates stay inactive. |

@@ -1,7 +1,6 @@
 # Child liveness: inactivity-based delegation deadline (design)
 
-Status: proposed (#33 review P0 #4) · 2026-07-27 · implementation owner: TBD (scheduler seam — coordinate
-with the steer/lease work)
+Status: implemented by task #36 (#33 review P0 #4) · 2026-07-27
 
 ## Problem
 

@@ -59,7 +59,10 @@ REGISTRY: list[EnvVar] = [
     EnvVar("AGENT_TOOL_TIMEOUT", "agent",
            "Outer deadline for declared pure-read tools in seconds (0/unset = off).", ""),
     EnvVar("AGENT_DELEGATION_TIMEOUT", "agent",
-           "Hard ceiling for a child-agent wave in seconds; invalid/non-positive values use 900.", "900"),
+           "Per-child inactivity window in seconds, reset by child/transport activity; "
+           "invalid/non-positive values use 900.", "900"),
+    EnvVar("AGENT_DELEGATION_ABSOLUTE", "agent",
+           "Absolute per-wave child leak guard in seconds; invalid/non-positive values use 3600.", "3600"),
     EnvVar("AGENT_ROOT", "agent", "Workspace root override (defaults to the current directory).", ""),
     EnvVar("AGENT_ALLOW_PLUGINS", "agent", "Set truthy to load project/user plugins.", ""),
     EnvVar("AGENT_SANDBOX", "agent", "Tool sandbox backend; docker requires POSIX/WSL2 "

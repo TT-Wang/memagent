@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 import os
 import posixpath
+import threading
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from enum import Enum
@@ -24,6 +26,25 @@ CHILD_CANCEL_SIGNAL_ARG = "__sliceagent_cancel_signal"
 # invocation or a child brief; they let the progress reducer bind one physical spawn call to exactly one row.
 CHILD_INVOCATION_ID_ARG = "__sliceagent_invocation_id"
 CHILD_REQUEST_ORDINAL_ARG = "__sliceagent_request_ordinal"
+CHILD_ACTIVITY_ARG = "__sliceagent_activity"
+
+
+class ChildActivity:
+    """Thread-safe monotonic liveness cell shared by one parent scheduler and one child."""
+
+    def __init__(self, admitted_at: float | None = None):
+        self._lock = threading.Lock()
+        self._last = time.monotonic() if admitted_at is None else float(admitted_at)
+
+    @property
+    def last(self) -> float:
+        with self._lock:
+            return self._last
+
+    def touch(self, at: float | None = None) -> None:
+        observed = time.monotonic() if at is None else float(at)
+        with self._lock:
+            self._last = max(self._last, observed)
 
 
 class ToolStatus(str, Enum):
@@ -429,7 +450,8 @@ def coerce_tool_status(value: object, *, legacy_text: str | None = None) -> Tool
 
 
 __all__ = [
-    "CHILD_CANCEL_SIGNAL_ARG", "CHILD_INVOCATION_ID_ARG", "CHILD_REQUEST_ORDINAL_ARG",
+    "CHILD_ACTIVITY_ARG", "CHILD_CANCEL_SIGNAL_ARG", "CHILD_INVOCATION_ID_ARG",
+    "CHILD_REQUEST_ORDINAL_ARG", "ChildActivity",
     "PreflightOverflow", "PreflightReport",
     "ToolEffect", "ToolInvocation", "ToolOutcome",
     "ToolPurity", "ToolStatus", "TurnOutcome", "TurnStatus", "UnknownContextWindow", "Usage",

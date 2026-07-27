@@ -49,8 +49,8 @@ from .guidance import BUDGET_EXHAUSTED
 from .hooks import Hooks, ToolPreflight
 from .errors import IndeterminateModelCallError, RetryCancelledError
 from .model_runner import complete_model_call
-from .execution import (CHILD_CANCEL_SIGNAL_ARG, CHILD_INVOCATION_ID_ARG,
-                        CHILD_REQUEST_ORDINAL_ARG,
+from .execution import (CHILD_ACTIVITY_ARG, CHILD_CANCEL_SIGNAL_ARG, CHILD_INVOCATION_ID_ARG,
+                        CHILD_REQUEST_ORDINAL_ARG, ChildActivity,
                         ToolInvocation, ToolOutcome, ToolPurity,
                         PreflightOverflow, ToolStatus, TurnOutcome, Usage,
                         available_content_capacity, estimate_model_call)
@@ -154,14 +154,13 @@ def _tool_timeout() -> float | None:
 
 
 def _delegation_timeout() -> float:
-    """Wall-clock CEILING (seconds) for a delegation/lifecycle read-wave, from AGENT_DELEGATION_TIMEOUT.
+    """Per-child INACTIVITY window for delegation, from AGENT_DELEGATION_TIMEOUT.
     Defaults NON-None (900s) and, unlike _tool_timeout, cannot be turned off: a spawned child is exempt
     from the SHORT per-tool reader deadline (it must be allowed to SEAL its report rather than be abandoned
     mid-write), but a child whose loop never terminates would otherwise freeze the parent turn forever —
-    the wave's own deadline machinery marks a still-running child INDETERMINATE at this ceiling and the turn
-    continues. Default is generous (a real child, bounded by max_steps and its per-call watchdog, seals in
-    well under it); 0/invalid → the default. To tolerate a slow proxy, RAISE it — there is deliberately no
-    disable, since disabling reinstates the freeze."""
+    the scheduler marks a child INDETERMINATE only after this much silence. Child loop events and transport
+    heartbeats refresh its own activity cell, so a healthy long-running sibling cannot mask a hung child and
+    active work is not cancelled merely for crossing a wave-wide wall clock. 0/invalid → the default."""
     import os
     raw = os.environ.get("AGENT_DELEGATION_TIMEOUT", "").strip()
     try:
@@ -169,6 +168,17 @@ def _delegation_timeout() -> float:
         return v if math.isfinite(v) and v > 0 else 900.0
     except ValueError:
         return 900.0
+
+
+def _delegation_absolute() -> float:
+    """Non-disableable absolute leak guard for a delegation wave (default 3600 seconds)."""
+    import os
+    raw = os.environ.get("AGENT_DELEGATION_ABSOLUTE", "").strip()
+    try:
+        v = float(raw)
+        return v if math.isfinite(v) and v > 0 else 3600.0
+    except ValueError:
+        return 3600.0
 
 
 def _delegation_cancel_grace() -> float:
@@ -849,16 +859,19 @@ def run_tool_batch(tool_calls, tools, dispatch: Dispatcher, hooks: Hooks, *, ste
         raw_args = tc.args if isinstance(getattr(tc, "args", None), dict) else {}
         invocation = invocations[provider_index]
         call_args = {k: v for k, v in raw_args.items()
-                     if k not in ("note", CHILD_CANCEL_SIGNAL_ARG,
+                     if k not in ("note", CHILD_ACTIVITY_ARG, CHILD_CANCEL_SIGNAL_ARG,
                                   CHILD_INVOCATION_ID_ARG, CHILD_REQUEST_ORDINAL_ARG)}
         child_cancel = None
+        child_activity = None
         if name in spawn_names:
             # Every physical child gets its own cancellation edge even when the parent has no signal. The
             # scheduler owns the delegation deadline; composition keeps parent Esc/Ctrl-C live as well.
             child_cancel = _ChildCancellationLease(signal)
+            child_activity = ChildActivity()
             call_args[CHILD_INVOCATION_ID_ARG] = invocation.id
             call_args[CHILD_REQUEST_ORDINAL_ARG] = provider_index + 1
             call_args[CHILD_CANCEL_SIGNAL_ARG] = child_cancel
+            call_args[CHILD_ACTIVITY_ARG] = child_activity
         entry = _entry_for(tools, name)
         purity = _purity_for(tools, name, call_args, entry)
         if purity is not ToolPurity.PURE_READ:
@@ -870,7 +883,7 @@ def run_tool_batch(tool_calls, tools, dispatch: Dispatcher, hooks: Hooks, *, ste
                 "preflight": ToolPreflight(), "entry": entry, "purity": purity,
                 "deduplicable": can_dedup,
                 "admission": None, "run_preflighted": None, "prepared_not_started": False,
-                "child_cancel": child_cancel}
+                "child_cancel": child_cancel, "child_activity": child_activity}
         descriptors.append(desc)
         if key is not None and key in wave_seen:
             dup_of[provider_index] = wave_seen[key]
@@ -1046,6 +1059,7 @@ def run_tool_batch(tool_calls, tools, dispatch: Dispatcher, hooks: Hooks, *, ste
             ),
             request_cancel=(child_cancel.request if child_cancel is not None else None),
             cancel_grace=(_delegation_cancel_grace() if child_cancel is not None else 0.0),
+            activity=desc.get("child_activity"),
         ))
 
     outcomes: list[ToolOutcome | None] = [None] * len(descriptors)
@@ -1136,6 +1150,7 @@ def run_tool_batch(tool_calls, tools, dispatch: Dispatcher, hooks: Hooks, *, ste
     try:
         run_ordered(
             scheduled, timeout=_tool_timeout(), lifecycle_timeout=_delegation_timeout(),
+            lifecycle_absolute=_delegation_absolute(),
             on_outcomes=publish,
             should_cancel=(signal.is_set if signal is not None else None),
         )
