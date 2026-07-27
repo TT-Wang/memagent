@@ -247,6 +247,42 @@ class ScopedResult:
     elapsed: float = 0.0
     usage: dict = field(default_factory=dict)   # summed over StepEnd: prompt/completion/cache splits
 
+    @property
+    def report_completion(self) -> str:
+        """Report-byte completeness, INDEPENDENT of execution state (tui_projection vocabulary).
+
+        A child can finish cleanly and say nothing (``absent``), or be cut off mid-sentence with
+        real findings (``partial``). The parent's coverage count keys on this, not on status.
+        """
+        if not self.report:
+            return "absent"
+        return "partial" if self.status in ("partial", "indeterminate") else "complete"
+
+    def to_record(self) -> dict:
+        """THE canonical projection of a child outcome — the single source every surface derives
+        from: the parent's typed effects, the durable seal, the recall view, and the TUI matrix.
+
+        This exists because hand-writing one projection per surface is how three capabilities went
+        dark at once: ``stop_reason`` never reached the recall view (so an agent had to GUESS why a
+        child stopped), ``report_completion`` never reached the parent (so the matrix reported
+        "0/6 reports ready" while six reports existed), and ``model_usage`` never reached the loop
+        (so child tokens vanished from the turn budget). Add a field here and it lands everywhere;
+        add it to one call site and it silently lands nowhere else.
+        """
+        return {
+            "status": self.status,
+            "operational_status": self.status,
+            "stop_reason": self.stop_reason,
+            "stop_cause": self.stop_reason,
+            "steps": self.steps,
+            "elapsed_s": round(self.elapsed, 3),
+            "report": self.report,
+            "report_bytes": len(self.report.encode("utf-8")),
+            "report_completion": self.report_completion,
+            "partial": self.status in ("partial", "indeterminate"),
+            "usage": dict(self.usage or {}),
+        }
+
 
 def run_scoped_agent(task: str, *, tools, llm, retriever, memory, allowed_tools=READ_ONLY_TOOLS,
                      model_id: str = "", max_steps: int = 40, signal=None,

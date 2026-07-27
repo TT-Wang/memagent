@@ -343,6 +343,104 @@ def seal_failure_never_gates_the_inline_report():
 # ── typed error edges ────────────────────────────────────────────────────────────────────────────
 
 @check
+def every_scoped_result_field_reaches_every_parent_surface():
+    """THE COMPLETENESS GATE — the structural fix, not another per-field patch.
+
+    A child's outcome is projected onto four independent surfaces. When each was hand-written, they
+    drifted and three capabilities went dark at once: `stop_reason` never reached the recall view
+    (an agent had to GUESS why a child stopped), `report_completion` never reached the parent (the
+    matrix showed "0/6 reports ready" while six reports existed), and `model_usage` never reached
+    the loop (child tokens vanished from the turn budget).
+
+    So: every field of ScopedResult must be reachable from to_record(), and every surface must
+    derive from to_record(). Add a field and forget a surface — this fails, in CI, immediately.
+    """
+    import dataclasses
+    from sliceagent.scoped_agent import ScopedResult
+
+    result = ScopedResult(report="findings", status="partial", stop_reason="max_tokens",
+                          steps=6, elapsed=1.5, usage={"prompt_tokens": 10, "completion_tokens": 4})
+    record = result.to_record()
+    for f in dataclasses.fields(ScopedResult):
+        assert any(f.name in key for key in record), (
+            f"ScopedResult.{f.name} is not represented in to_record() — it can never reach the "
+            "parent, the seal, the recall view, or the matrix")
+
+    # 1. the parent's TYPED lane (progress reducer + loop budget read these)
+    host = _host(_workspace())
+    effects = host._effects(result, "explorer", 1, "", "sub-1", "inv-1")
+    kinds = {e.kind for e in effects}
+    assert kinds == {"child_outcome", "model_usage"}, kinds
+    outcome = next(e.payload for e in effects if e.kind == "child_outcome")
+    for key in ("status", "stop_reason", "stop_cause", "report_completion", "partial", "steps"):
+        assert key in outcome, f"the progress reducer reads {key!r}; it is absent"
+    assert "report" not in outcome, "the body travels once, as prose — never duplicated into effects"
+    usage = next(e.payload for e in effects if e.kind == "model_usage")
+    assert usage.get("prompt_tokens") == 10, "child tokens must reach the parent's turn budget"
+
+    # 2. the DURABLE seal derives from the same record
+    sealed = dict(result.to_record())
+    for key in ("stop_reason", "report_completion", "report", "usage"):
+        assert key in sealed, key
+
+    # 3. the RECALL view must expose why a non-clean child stopped
+    from sliceagent.hippocampus import render_artifact
+    md = render_artifact({"id": "sub-4", "artifact": {**sealed, "kind": "explorer"}})
+    assert "max_tokens" in md, "sub-N.md hides the stop reason — the reader is forced to guess"
+    assert "partial" in md
+
+
+@check
+def the_coverage_display_counts_real_reports_end_to_end():
+    """FIELD REGRESSION: a 6-explorer review displayed "0/6 reports ready · 5 completed without
+    report" while all six children had delivered 5.7k-19k-char reports. The scoped host returned
+    prose with NO typed effects, so the progress reducer — which counts readiness from
+    `report_completion` in a child_outcome effect — saw nothing and reported zeros.
+
+    Drives the REAL path (host -> run_tool_batch -> TurnProgress) rather than asserting on fields,
+    because the bug lived in the wiring between them, not in either end.
+    """
+    from sliceagent.events import TurnStarted
+    from sliceagent.progress import TurnProgress
+    from sliceagent.scoped_agent import ScopedResult
+    import sliceagent.scoped_spawn as sp
+
+    def drive(result):
+        host = _host(_workspace())
+        progress = TurnProgress(await_commit=False)
+        progress.reduce(TurnStarted(request="r", task_id="t", turn_id="t-1"))
+        orig = sp.run_scoped_agent
+        sp.run_scoped_agent = lambda *a, **k: result
+        try:
+            _, rows = run_tool_batch([_TC({"agent": "explorer", "task": "review"})],
+                                     host, progress.reduce, Hooks(), step=1, turn_id="t-1")
+        finally:
+            sp.run_scoped_agent = orig
+        return list(progress.snapshot().subagents)[-1], rows[0]
+
+    healthy = ScopedResult(report="x" * 10301, status="ok", stop_reason="end_turn", steps=7,
+                           usage={"prompt_tokens": 4000, "completion_tokens": 900})
+    row, raw = drive(healthy)
+    assert row.phase == "report_ready", (
+        f"a 10k-char report counted as {row.phase!r} — the coverage display would under-report it")
+    assert row.report_completion == "complete", row.report_completion
+
+    # the child's tokens must reach the parent's turn budget (loop._model_usage_from_tool_results)
+    from sliceagent.loop import _model_usage_from_tool_results
+    folded = _model_usage_from_tool_results([raw])
+    assert folded.prompt_tokens == 4000, (
+        f"child tokens invisible to the parent budget ({folded.prompt_tokens}) — a fan-out would "
+        "overrun AGENT_MAX_TOKENS unseen")
+
+    # a truncated-but-useful child is 'partial', never silently dropped from the count
+    truncated = ScopedResult(report="## findings", status="partial", stop_reason="max_tokens",
+                             steps=6)
+    row, _ = drive(truncated)
+    assert row.phase == "partial" and row.report_completion == "partial", (row.phase,
+                                                                          row.report_completion)
+
+
+@check
 def a_child_that_produced_a_report_is_never_failed():
     """FIELD REGRESSION: a 6-subagent review reported "1 failed" — child 4 had written a 5,689-char
     review and then hit the provider's completion cap. `max_tokens` was absent from the status map,

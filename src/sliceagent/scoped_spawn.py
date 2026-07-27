@@ -26,7 +26,7 @@ from .events import (AssistantText, ModelCallPrepared, StepBegin, StepEnd, Subag
                      ToolStarted)
 from .access import AllAccess, ReadAllAccess
 from .execution import (CHILD_CANCEL_SIGNAL_ARG, CHILD_INVOCATION_ID_ARG,
-                        CHILD_REQUEST_ORDINAL_ARG, ToolStatus)
+                        CHILD_REQUEST_ORDINAL_ARG, ToolEffect, ToolStatus, Usage)
 from .registry import ToolText
 from .scoped_agent import allowed_for, run_scoped_agent
 
@@ -330,6 +330,8 @@ class ScopedSpawnHost:
 
         work_item_id = str(args.get("work_item_id") or "").strip()
         handle = self._seal(spec.name, brief, result, launch, work_item_id)
+        effects = self._effects(result, spec.name, launch, work_item_id, handle,
+                                invocation_id or f"child-{launch}")
 
         # A non-clean outcome names its REASON in the header: "partial" alone tells the parent that
         # something was cut short but not what to do about it (retry a token ceiling, don't retry a
@@ -341,15 +343,41 @@ class ScopedSpawnHost:
         locator = f'\n\nsealed: read_file("subagents/{handle}.md")' if handle else ""
         if result.status == "cancelled":
             return ToolText(f"{header}\nNot run to completion: the delegation was cancelled before "
-                            "the child could report.", status=ToolStatus.CANCELLED)
+                            "the child could report.", status=ToolStatus.CANCELLED, effects=effects)
         if result.status == "indeterminate":
             body = result.report or "(no report reached the parent)"
             return ToolText(
                 f"{header}\nThe child's physical state is UNKNOWN (unconfirmed close/timeout) — "
                 f"treat any partial output below as unverified.\n\n{body}{locator}",
-                ok=False, status=ToolStatus.INDETERMINATE)
+                ok=False, status=ToolStatus.INDETERMINATE, effects=effects)
         body = result.report or "(the child produced no report)"
-        return ToolText(f"{header}\n\n{body}{locator}", ok=result.status != "failed")
+        return ToolText(f"{header}\n\n{body}{locator}", ok=result.status != "failed",
+                        effects=effects)
+
+    def _effects(self, result, kind: str, launch: int, work_item_id: str, handle: str,
+                 identity: str) -> tuple:
+        """The TYPED lane beside the prose, derived wholly from ScopedResult.to_record().
+
+        The parent needs three things the report body cannot carry: the child's token usage (the
+        loop folds ``model_usage`` into the turn budget — without it a fan-out overruns
+        AGENT_MAX_TOKENS unseen), report completeness (the progress reducer counts "reports ready"
+        from ``report_completion``), and the stop cause. All three regressed to silence when this
+        host returned prose alone.
+        """
+        record = result.to_record()
+        outcome = {k: v for k, v in record.items() if k != "report"}   # body travels once, as prose
+        outcome.update({"kind": kind, "name": kind, "launch_ordinal": launch})
+        if work_item_id:
+            outcome["work_item_id"] = work_item_id
+        if handle:
+            outcome["report_handle"] = f"subagents/{handle}.md"
+            outcome["artifact_id"] = handle
+        effects = [ToolEffect(f"{identity}:child-outcome", "child_outcome", outcome)]
+        usage = record.get("usage") or {}
+        if any(usage.values()):
+            effects.append(ToolEffect(f"{identity}:model-usage", "model_usage",
+                                      Usage.from_value(usage).as_dict()))
+        return tuple(effects)
 
     def _seal(self, kind: str, brief: str, result, launch: int, work_item_id: str) -> str:
         """Dumb seal: ONE redacted JSON record through the existing archive; '' on any failure —
@@ -357,11 +385,10 @@ class ScopedSpawnHost:
         append = getattr(self._memory, "append_subagent_artifact", None)
         if not callable(append) or not self._session_id:
             return ""
-        artifact = {
-            "kind": kind, "status": result.status, "steps": result.steps,
-            "stop_reason": result.stop_reason, "launch_ordinal": launch,
-            "brief": {"task": brief}, "report": result.report,
-        }
+        # Same single projection as the typed effects — the durable record and the live one cannot
+        # drift, because neither is hand-assembled.
+        artifact = dict(result.to_record())
+        artifact.update({"kind": kind, "launch_ordinal": launch, "brief": {"task": brief}})
         if work_item_id:
             artifact["work_item_id"] = work_item_id
         try:

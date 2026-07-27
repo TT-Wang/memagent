@@ -918,6 +918,13 @@ def render_artifact(rec: dict) -> str:
     a = rec.get("artifact") or {}
     out = [f"# {rec.get('id', 'sub-?')} — {a.get('kind', 'subagent')} · {a.get('status', '?')} · "
            f"{a.get('steps', '?')} steps"]
+    # WHY it ended, not just that it did. Omitting this forced a reader (human or agent) to infer the
+    # cause of a non-clean outcome from the status alone — which is exactly how a truncated report
+    # got explained with an invented stop reason.
+    stop_reason = str(a.get("stop_reason") or "")
+    if stop_reason and stop_reason != a.get("status"):
+        out.append(f"stopped: {stop_reason}"
+                   + (f" (report {a['report_completion']})" if a.get("report_completion") else ""))
     if a.get("launch_ordinal"):
         out.append(f"launch-order: {a['launch_ordinal']} (among siblings under the same parent)")
     if a.get("coverage"):
