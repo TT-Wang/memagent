@@ -653,6 +653,40 @@ def build_work_delta(
     return WorkDelta(expected_revision=expected, creates=tuple(creates), updates=tuple(updates))
 
 
+def _plan_progress_payload(graph: WorkGraph, logical_id: str) -> dict[str, object]:
+    """Project the current request's Active Work into UI-only plan position.
+
+    The immutable graph remains the sole semantic store.  Carrying this complete projection on every
+    ``work_delta`` effect lets renderers follow partial item updates without reconstructing or caching a second
+    plan model.
+    """
+    roots = [
+        root for root in graph.request_roots
+        if not logical_id or root.logical_id == logical_id
+    ]
+    if not roots:
+        return {"total": 0, "done": 0, "current": "", "current_index": 0}
+    root = roots[-1]
+    items = [
+        item for item in graph.items
+        if item.kind != "request" and item.root_id == root.id
+        and item.status not in {"cancelled", "superseded"}
+    ]
+    done_statuses = {"delivered", "verified"}
+    done = sum(item.status in done_statuses for item in items)
+    current = None
+    for wanted in ("in_progress", "waiting_user", "open", "ready"):
+        current = next((item for item in items if item.status == wanted), None)
+        if current is not None:
+            break
+    return {
+        "total": len(items),
+        "done": done,
+        "current": current.description if current is not None else "",
+        "current_index": items.index(current) + 1 if current is not None else 0,
+    }
+
+
 def _default_ask_user(question: str, options) -> str:
     """Fallback when no interactive user is wired (headless/eval) — never hangs."""
     return ("(no interactive user is available to answer; proceed with your best assumption and "
@@ -822,9 +856,13 @@ class LocalToolHost:
             graph, dict(invocation.args), logical_id=logical_id, workspace_epoch=workspace_epoch,
             verified_ok=frozenset(self._item_verify_green),
         )
+        next_graph = graph.apply_delta(delta)
         return (ToolEffect(
             id=f"work-delta:{invocation.provider_index}:{invocation.id}:0",
-            kind="work_delta", payload={"delta": delta.to_dict()},
+            kind="work_delta", payload={
+                "delta": delta.to_dict(),
+                "plan_progress": _plan_progress_payload(next_graph, logical_id),
+            },
         ),)
 
     def root(self) -> str:

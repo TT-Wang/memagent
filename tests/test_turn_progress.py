@@ -138,6 +138,35 @@ def tool_wave_settles_by_invocation_and_then_integrates():
 
 
 @check
+def work_delta_effect_feeds_plan_position_and_same_task_turns_preserve_it():
+    machine, _ = _machine()
+    _start(machine)
+    call = ToolInvocation("work-1", "update_work", {"changes": []}, 0)
+    effect = ToolEffect("work-1:effect", "work_delta", {
+        "delta": {"expected_revision": 1, "creates": [], "updates": []},
+        "plan_progress": {
+            "total": 3, "done": 1, "current": "Implement the parser fix", "current_index": 2,
+        },
+    })
+    outcome = ToolOutcome(call, ToolStatus.SUCCEEDED, "updated", (effect,))
+    projected = machine.reduce(ToolResult(
+        call.name, dict(call.args), outcome.text, False, status="succeeded",
+        invocation_id=call.id, outcome=outcome,
+    ))
+    assert projected.plan.total == 3 and projected.plan.done == 1
+    assert projected.plan.current == "Implement the parser fix" and projected.plan.current_index == 2
+
+    continued = machine.reduce(TurnStarted(
+        "go", task_title="Parser fix", task_id="task-1", turn_id="turn-2",
+    ))
+    assert continued.plan == projected.plan, "the approved execution turn must retain the planned position"
+    unrelated = machine.reduce(TurnStarted(
+        "new task", task_title="Other", task_id="task-2", turn_id="turn-3",
+    ))
+    assert unrelated.plan.total == 0, "plan presentation must not bleed into another task"
+
+
+@check
 def retry_remains_live_and_prepared_call_owns_the_attempt_number():
     machine, _ = _machine()
     _start(machine)

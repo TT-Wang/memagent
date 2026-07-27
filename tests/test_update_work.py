@@ -54,6 +54,37 @@ def test_update_work_creates_typed_source_linked_child_and_replays_exactly_once(
     assert state.active_work.revision == revision
 
 
+def test_work_delta_effect_carries_complete_plan_progress_projection():
+    state, host = prepared()
+    host._verify_runner = lambda _command: (True, "ok")
+    created = invoke(host, {
+        "expected_revision": 1,
+        "changes": [
+            {
+                "id": "implement", "description": "Implement the change", "status": "in_progress",
+                "verify": ["focused-check"], "done_when": "focused check passes",
+            },
+            {"id": "document", "description": "Document the behavior", "status": "open"},
+        ],
+    })
+    assert created.status is ToolStatus.SUCCEEDED
+    projection = created.effects[0].payload["plan_progress"]
+    assert projection == {
+        "total": 2, "done": 0, "current": "Implement the change", "current_index": 1,
+    }
+    reduce(state, created)
+
+    completed = invoke(host, {
+        "expected_revision": 2,
+        "changes": [{"id": "implement", "status": "ready"}],
+    }, "complete")
+    assert completed.status is ToolStatus.SUCCEEDED
+    projection = completed.effects[0].payload["plan_progress"]
+    assert projection == {
+        "total": 2, "done": 1, "current": "Document the behavior", "current_index": 2,
+    }
+
+
 def test_update_work_rejects_terminal_forgery_root_mutation_and_stale_revision():
     state, host = prepared()
     terminal = invoke(host, {

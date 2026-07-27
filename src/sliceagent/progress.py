@@ -413,6 +413,8 @@ class TurnProgress:
         self._replace(phase=phase, detail=_one_line(detail, 120), phase_started_at=phase_started)
 
     def _reset(self, event: TurnStarted, now: float) -> None:
+        previous_plan = self._plan
+        previous_task_id = self._state.task_id
         self._legacy_tool_seq = 0
         self._active_tools = {}
         self._subagents = {}
@@ -423,7 +425,11 @@ class TurnProgress:
         self._agent_unlinked_outcomes = {}
         self._subagent_update_seq = 0
         self._counts = {}
-        self._plan = PlanProgress()
+        self._plan = (
+            previous_plan
+            if event.task_id and str(event.task_id) == previous_task_id
+            else PlanProgress()
+        )
         title = _one_line(event.task_title or event.request, 80)
         self._state = ProgressSnapshot(
             phase=ProgressPhase.PREPARING,
@@ -448,6 +454,28 @@ class TurnProgress:
                     if tool.name == event.name), None)
         if key is not None:
             self._active_tools.pop(key, None)
+
+    def _reduce_work_plan(self, event: ToolResult) -> None:
+        """Accept the full UI projection carried by a successful ``work_delta`` effect."""
+        for effect in (getattr(getattr(event, "outcome", None), "effects", ()) or ()):
+            if str(getattr(effect, "kind", "") or "") != "work_delta":
+                continue
+            payload = getattr(effect, "payload", None)
+            projection = payload.get("plan_progress") if isinstance(payload, Mapping) else None
+            if not isinstance(projection, Mapping):
+                continue
+            try:
+                total = max(0, int(projection.get("total", 0)))
+                done = min(total, max(0, int(projection.get("done", 0))))
+                current = _one_line(projection.get("current", ""), 90)
+                current_index = int(projection.get("current_index", 0))
+            except (TypeError, ValueError):
+                continue
+            if not current or not 1 <= current_index <= total:
+                current, current_index = "", 0
+            self._plan = PlanProgress(total, done, current, current_index)
+            self._replace()
+            return
 
     def _agent_activity_detail(self) -> str:
         """Describe concurrent child work from identities, never last-writer-wins prose."""
@@ -826,6 +854,8 @@ class TurnProgress:
                 status = coerce_tool_status(
                     raw_status if raw_status not in (None, "") else not event.failing,
                 ).value
+                if status == "succeeded":
+                    self._reduce_work_plan(event)
                 cancelled = status == "cancelled"
                 steered = status == "steered"
                 bucket = tool_bucket(event.name)
