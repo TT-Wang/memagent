@@ -254,7 +254,9 @@ def _use_chitchat_fast_path(text: str, state=None) -> bool:
 
 def _cost_lines(stats: dict, metrics=None) -> list[str]:
     """Stable `/cost` projection: session totals always, optional per-turn diagnostics when enabled."""
-    from .tui import _saved_dollars
+    # model_catalog, NOT tui: importing tui pulls rich at module level, and `/cost` is reachable in the
+    # plain REPL without the [tui] extra — the import crashed the command there (H6).
+    from .model_catalog import saved_dollars as _saved_dollars
 
     def count(key: str) -> int:
         try:
@@ -2752,7 +2754,7 @@ def main() -> None:
                 ) or {}
                 if st.get("lessons") or st.get("skills"):
                     print(f"  · consolidated: {st.get('lessons', 0)} lesson(s), "
-                          f"{st.get('skills', 0)} skill(s)"
+                          f"{st.get('skills', 0)} inactive skill candidate(s)"
                           + (f", {st['skills_rejected']} rejected" if st.get("skills_rejected") else "")
                           + (f", {st['errors']} error(s)" if st.get("errors") else ""))
                 elif st.get("skills_rejected") or st.get("errors"):

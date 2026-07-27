@@ -211,21 +211,27 @@ def _fsync_dir(path: str) -> None:
 def _temp_bytes(directory: str, data: bytes, *, prefix: str) -> str:
     _private_dir(directory)
     fd, path = tempfile.mkstemp(prefix=prefix, suffix=".tmp", dir=directory)
+    stream = None
     try:
         try:
             os.fchmod(fd, 0o600)
         except (AttributeError, OSError):
             pass
-        with os.fdopen(fd, "wb") as stream:
+        stream = os.fdopen(fd, "wb")
+        with stream:
             stream.write(data)
             stream.flush()
             os.fsync(stream.fileno())
         return path
     except BaseException:
-        try:
-            os.close(fd)
-        except OSError:
-            pass
+        # fdopen transfers fd ownership: once `stream` exists, its close (via `with`) closed the fd, and
+        # a second os.close(fd) here could close an UNRELATED freshly-allocated descriptor in another
+        # thread. Close the raw fd only when fdopen never took ownership.
+        if stream is None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
         try:
             os.unlink(path)
         except OSError:

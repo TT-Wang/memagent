@@ -754,6 +754,8 @@ class _EscSentinel:
         so the caller only proceeds once the fd is provably free."""
         if self._thread is None or not self._thread.is_alive():
             return
+        if self._pause_flag.is_set() and self._paused_ack.is_set():
+            return   # already paused and acked — a second pause() must not clear the ack and re-wait 1s
         self._paused_ack.clear()
         self._pause_flag.set()
         self._paused_ack.wait(timeout=1.0)   # generous bound; the sentinel acks within ~1 poll tick (~50ms)
@@ -2693,13 +2695,9 @@ def _accrue_cost(stats: dict, usage: dict) -> None:
         + usage.get("output", 0) * pout) / 1_000_000
 
 
-def _saved_dollars(stats: dict):
-    """$ the slice saved vs a full-transcript agent, priced at the CURRENT model's cached rate (the rate for
-    re-read history). Token-based, so switching /model re-prices the same savings. None if price unknown."""
-    pr = _price(stats.get("model", ""))
-    if not pr:
-        return None
-    return stats.get("saved_cached_tok", 0) * pr[1] / 1_000_000
+# Savings math lives in dependency-free model_catalog so `/cost` works without the [tui] extra;
+# the alias keeps this module's established name for its own meters and tests.
+from .model_catalog import saved_dollars as _saved_dollars  # noqa: E402
 
 
 def _compact_count(value) -> str:

@@ -59,6 +59,16 @@ def pricing(model: str, base_url: str = "") -> "tuple | None":
             return v
     return None
 
+
+def saved_dollars(stats: dict):
+    """$ the slice saved vs a full-transcript agent, priced at the CURRENT model's cached rate (the rate
+    for re-read history). Token-based, so a /model switch re-prices the same savings. None if price
+    unknown. Lives here — not in tui.py — because `/cost` must work without the optional [tui] extra."""
+    pr = pricing(str(stats.get("model", "") or ""))
+    if not pr:
+        return None
+    return stats.get("saved_cached_tok", 0) * pr[1] / 1_000_000
+
 # Vision is keyed off the MODEL name (not the family) — kimi-k2.7-code is text-only but moonshot-*-vision is
 # not; gpt-4o/gpt-5/claude-3+/gemini/`*-vl`/anything with 'vision' is multimodal. Conservative allowlist.
 _VISION_HINTS = ("vision", "gpt-4o", "gpt-4.1", "gpt-5", "gpt-6", "claude-3", "claude-4",

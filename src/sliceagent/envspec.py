@@ -51,7 +51,7 @@ REGISTRY: list[EnvVar] = [
            "models, whose chain-of-thought spends this same budget). 0 = provider default.", "model-aware"),
     EnvVar("AGENT_CONTEXT_WINDOW", "agent", "Provider context window used for strict per-call capacity "
            "preflight when the model catalog cannot supply one (0/unset = explicit compatibility mode).", ""),
-    EnvVar("AGENT_MAX_STEPS", "agent", "Per-turn step ceiling (runaway backstop, NOT a work meter — the budget and the user are); raise for deep analysis.", "120"),
+    EnvVar("AGENT_MAX_STEPS", "agent", "Per-turn step ceiling (runaway backstop, NOT a work meter — the budget and the user are); raise for deep analysis.", "60"),
     EnvVar("AGENT_TOOL_TIMEOUT", "agent",
            "Outer deadline for declared pure-read tools in seconds (0/unset = off).", ""),
     EnvVar("AGENT_DELEGATION_TIMEOUT", "agent",

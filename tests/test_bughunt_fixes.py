@@ -754,6 +754,24 @@ def saved_dollars_accrue_and_reprice():
     assert stats["saved_cached_tok"] == stats["saved_cached_tok"]  # tokens unchanged by repricing
 
 
+# ── BUG: `/cost` crashed without the [tui] extra — _cost_lines imported tui (→ rich) for savings math ─
+@check
+def slash_cost_needs_no_tui_extra():
+    import inspect
+
+    from sliceagent import cli
+    from sliceagent.model_catalog import saved_dollars
+
+    src = inspect.getsource(cli._cost_lines)
+    assert "from .tui import" not in src, (
+        "/cost is reachable in the plain REPL; it must not import the optional tui module (H6)")
+    lines = cli._cost_lines({"model": "deepseek-v4-flash", "saved_cached_tok": 1_000_000,
+                             "cost": 0.5, "tokens": 5, "fresh": 2})
+    assert any("saved $" in line for line in lines), lines
+    assert saved_dollars({"model": "unpriced-model-xyz"}) is None, \
+        "unknown model must fall back to the token-count head, not crash"
+
+
 # ── FEATURE: typing "/" pops a command menu — completer yields commands AND the composer has a menu float ─
 @check
 def slash_command_menu_renders():
