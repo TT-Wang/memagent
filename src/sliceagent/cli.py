@@ -2319,6 +2319,18 @@ def main() -> None:
             return build_plan_prompt(objective)
         if _planning["active"] and is_plan_approval(text):
             _set_planning(False)   # the approved plan executes with the full tool surface
+            # Approval is the one moment the mode changes with NO visible artifact — the chip just
+            # disappears. Name what was approved so "go" is a transition the user can see, not a vibe.
+            try:
+                graph = session.active().active_work if session.active_id else None
+                open_items = [it for it in getattr(graph, "items", ())
+                              if getattr(it, "kind", "") != "request"
+                              and getattr(it, "status", "") not in
+                              ("done", "cancelled", "superseded", "delivered", "verified")]
+                _console.print(f"  plan approved — executing {len(open_items)} open work item"
+                               f"{'s' if len(open_items) != 1 else ''} (full tools restored).")
+            except Exception:  # noqa: BLE001 — presentation must never block execution
+                pass
         return text
 
     def _turn_tools():

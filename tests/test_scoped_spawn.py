@@ -370,7 +370,20 @@ def every_scoped_result_field_reaches_every_parent_surface():
     host = _host(_workspace())
     effects = host._effects(result, "explorer", 1, "", "sub-1", "inv-1")
     kinds = {e.kind for e in effects}
-    assert kinds == {"child_outcome", "model_usage"}, kinds
+    assert kinds == {"child_outcome", "child_artifact", "model_usage"}, kinds
+
+    # 1b. `child_artifact` is a DISTINCT effect kind, not the same facts folded into child_outcome:
+    # scheduler._has_committed_child treats it as proof the report was durably published, so without
+    # it a wave cutoff can relabel an already-sealed child's completed work as lost.
+    from sliceagent.scheduler import _has_committed_child
+
+    class _Settled:
+        pass
+    _Settled.effects = effects
+    assert _has_committed_child(_Settled()), (
+        "the scheduler cannot see that this child's report was published — a cutoff would discard it")
+    _Settled.effects = host._effects(result, "explorer", 1, "", "", "inv-2")   # seal failed
+    assert not _has_committed_child(_Settled()), "no seal means nothing to protect"
     outcome = next(e.payload for e in effects if e.kind == "child_outcome")
     for key in ("status", "stop_reason", "stop_cause", "report_completion", "partial", "steps"):
         assert key in outcome, f"the progress reducer reads {key!r}; it is absent"

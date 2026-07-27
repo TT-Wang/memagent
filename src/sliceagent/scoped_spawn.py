@@ -373,6 +373,19 @@ class ScopedSpawnHost:
             outcome["report_handle"] = f"subagents/{handle}.md"
             outcome["artifact_id"] = handle
         effects = [ToolEffect(f"{identity}:child-outcome", "child_outcome", outcome)]
+        if handle:
+            # A SEPARATE `child_artifact` effect, not the same facts folded into child_outcome:
+            # every consumer keys on the effect KIND, so payload-level equivalence buys nothing.
+            # scheduler._child_publication_committed treats this effect as PROOF that the child's
+            # report was durably published — without it a wave cutoff may relabel an
+            # already-sealed child's completed work as lost. receipts/event_ledger/cli journal it.
+            effects.append(ToolEffect(f"{identity}:child-artifact", "child_artifact", {
+                **{k: outcome[k] for k in ("status", "stop_reason", "stop_cause",
+                                           "report_completion", "report_bytes") if k in outcome},
+                "artifact_id": handle,
+                "report_handle": f"subagents/{handle}.md",
+                **({"work_item_id": work_item_id} if work_item_id else {}),
+            }))
         usage = record.get("usage") or {}
         if any(usage.values()):
             effects.append(ToolEffect(f"{identity}:model-usage", "model_usage",
