@@ -1997,6 +1997,8 @@ def build_live_app(*, console: Console, stats: dict, root: str | None, run_one_t
                 return
         text = ta.text.strip()
         ta.text = ""
+        with state_lock:
+            state["undo_armed_at"] = 0.0   # submitting is an unrelated act: never leave /undo half-armed
         if not text:
             return
         if text in ("exit", "quit", "/exit"):
