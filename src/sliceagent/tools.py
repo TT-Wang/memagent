@@ -163,7 +163,7 @@ def _kill_run_tree(process, force=False):
         try: process.kill() if force else process.terminate()
         except OSError: pass
 
-def run(cmd, timeout=60):
+def run(cmd, timeout=120):
     _p = _sp.Popen(cmd, shell=True, stdout=_sp.PIPE, stderr=_sp.PIPE, text=True,
                    **_run_group_kwargs())
     try:
@@ -244,7 +244,7 @@ _LIST_CAP = 600   # bound recursive output so a huge tree can't flood the slice
 # .sliceagent/blobs and replaced inline by a BOUNDED head+tail view + a read_file reference — L1→L2 paging,
 # NOT a cut (the full output is preserved on disk and recall-on-demand). Keeps one huge run_command /
 # execute_code / terminal_read result from flooding the within-turn transcript and forcing coarse overflow.
-_OUTPUT_INLINE_CAP = 16000
+_OUTPUT_INLINE_CAP = 32000
 _OUTPUT_HEAD = 10000
 _OUTPUT_TAIL = 4000
 
@@ -333,7 +333,7 @@ TOOL_SCHEMAS = [
         ["path", "old_string", "new_string"]),
     _fn("run_command",
         "Run a shell command (blocking, cwd=workspace root); returns combined stdout+stderr (exit code on "
-        "failure). Pass timeout (seconds, default 30, max 600) for slow builds. Use for one-shot commands that "
+        "failure). Pass timeout (seconds, default 120, max 600) for slow builds. Use for one-shot commands that "
         "finish; for a process that must STAY alive use proc_start, for an interactive REPL use terminal_open, "
         "to chain several edits + a test in one turn use execute_code. No cwd arg — prepend `cd DIR &&`. The "
         "host records grounded paths used outside the primary workspace so file tools can re-observe them. If a command could "
@@ -343,10 +343,10 @@ TOOL_SCHEMAS = [
     _fn("execute_code",
         "Run a Python script that does SEVERAL file/shell steps in ONE turn (e.g. multiple edits + a test). Use "
         "over run_command when you'd chain many calls; over proc_start when it's one-shot. Blocking: pass "
-        "timeout (seconds, default 30, max 600) when the script builds or runs a slow suite, since the "
+        "timeout (seconds, default 120, max 600) when the script builds or runs a slow suite, since the "
         "deadline can otherwise land BETWEEN two edits. "
         "Helpers (no imports): read_file(path), write_file(path, content), append_file(path, content), "
-        "str_replace(path, old, new), list_files(path='.'), run(shell_cmd, timeout=60). Workspace is cwd + on "
+        "str_replace(path, old, new), list_files(path='.'), run(shell_cmd, timeout=120). Workspace is cwd + on "
         "sys.path. ONLY "
         "what you print() is returned. The Python file helpers operate in the primary workspace; use the ordinary "
         "file tools for grounded focus roots, or run() for a shell step whose paths the host can surface afterward.",
@@ -804,7 +804,7 @@ def _numbered_window(text: str, start_line: int, end_line: int, *, ctx: int = 4,
 
 
 class LocalToolHost:
-    def __init__(self, root: str | None = None, *, sandbox=None, timeout: int = 30,
+    def __init__(self, root: str | None = None, *, sandbox=None, timeout: int = 120,
                  registry: ToolRegistry | None = None):
         # root=None → confine to the *current* working directory, resolved per call
         # (so the eval runner, which chdirs into a temp workdir after construction,

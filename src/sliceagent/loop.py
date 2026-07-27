@@ -436,7 +436,11 @@ def _project_request_seed(plan: SeedPlan, trajectory: list[dict], llm, schemas: 
         report = estimate_model_call(llm, candidate, schemas)
         if report.required_tokens <= report.context_window:
             return projected
-        capacity = max(0, capacity - max(1, report.required_tokens - report.context_window))
+        # The deficit is in TOKENS; capacity is a CHAR budget — convert with the exact estimator
+        # inverse so one pass closes the gap (a raw token subtraction under-tightens ~2.6× and can
+        # exhaust the bounded attempts, #33 review).
+        from .execution import tokens_to_chars as _t2c
+        capacity = max(0, capacity - max(1, _t2c(report.required_tokens - report.context_window)))
     raise ContextOverflow(ValueError("elastic seed could not converge on a provider-fit representation"))
 
 
@@ -549,7 +553,9 @@ def _prepare_model_messages(
         selected = seed_plan.last_selection
         used = int(getattr(selected, "used_chars", 0) or 0)
         current_capacity = seed_plan._fixed_user_chars(seed_plan.last_request_copies) + used
-        deficit = max(1, report.required_tokens - report.context_window)
+        # Token deficit → char tightening via the exact estimator inverse (see _project_request_seed).
+        from .execution import tokens_to_chars as _t2c
+        deficit = max(1, _t2c(report.required_tokens - report.context_window))
         tighter_capacity = max(0, current_capacity - deficit)
         try:
             tighter_seed = _project_request_seed(
@@ -1257,7 +1263,7 @@ def _prepared(hooks, msgs: list) -> list:
 
 
 def run_turn(*, build_slice, llm, tools, dispatch: Dispatcher, hooks: Hooks | None = None,
-             max_steps: int = 40, signal=None, checkpoint=None, consolidate=None,
+             max_steps: int = 120, signal=None, checkpoint=None, consolidate=None,
              turn_id: str = "", call_namespace: str = "", transport_activity=None,
              allow_park_closeout: bool = True, steer_queue=None) -> TurnResult:
     """One per-LOOP working-memory turn. The slice is the SEED, built ONCE; within the while(true) working

@@ -313,10 +313,30 @@ def model_context_window(llm) -> int:
     return _context_window(llm)
 
 
+# Exact inverse pair (#33): _byte_upper_bound estimates bytes → tokens at this ratio, and
+# tokens_to_chars converts a token budget back to a character budget with the SAME ratio, so the
+# projection→estimate→check loop is algebraically consistent (a token deficit converts to exactly the
+# character tightening that closes it in one pass). Change one, change both.
+_TOKENS_PER_BYTE = 1.15 / 3
+
+
+def tokens_to_chars(tokens: float) -> int:
+    """Character-budget equivalent of a token count under ``_byte_upper_bound``'s estimate."""
+    return int(tokens / _TOKENS_PER_BYTE)
+
+
 def _byte_upper_bound(value: object) -> int:
-    """Conservative tokenizer-independent upper bound for text/JSON request material."""
+    """Tokenizer-independent token estimate for text/JSON request material.
+
+    Formerly bytes==tokens, which over-reserved ~3–4× (typical English/code runs ≈3–4 bytes per token),
+    so a configured 128k window behaved like ~32–50k and fired early compaction / false local overflows
+    (#33 review). Now ≈3 bytes/token with a 15% safety margin — still conservative (real ratios are
+    higher), and the provider-overflow fallback below remains the ground truth when the estimate or the
+    catalogued window is wrong. CJK-heavy content (≈1.5–2 bytes/token) is covered by the margin plus
+    that same fallback."""
     body = json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)
-    return len(body.encode("utf-8", "replace"))
+    raw = len(body.encode("utf-8", "replace"))
+    return int(raw * _TOKENS_PER_BYTE) + 1
 
 
 def preflight_model_call(
@@ -379,7 +399,13 @@ def available_content_capacity(llm, fixed_messages: list[dict], tools: list[dict
     report = estimate_model_call(llm, fixed_messages, tools)
     if not report.context_window:
         return None
-    return max(0, report.context_window - report.required_tokens)
+    # The window math above is in TOKENS; the seed projection this feeds (SeedPlan.project) budgets in
+    # CHARACTERS. Convert with the exact estimator inverse so the units are algebraically consistent —
+    # CJK-heavy content (fewer chars per token than ASCII) is corrected by the projection loop's exact
+    # re-check + reactive provider-overflow fallback, while an underfilled seed is never corrected
+    # (#33 review: the old bytes==tokens chain quarter-sized a 128k window; a token→char mismatch here
+    # would preserve exactly that bug).
+    return max(0, tokens_to_chars(report.context_window - report.required_tokens))
 
 
 def coerce_tool_status(value: object, *, legacy_text: str | None = None) -> ToolStatus:

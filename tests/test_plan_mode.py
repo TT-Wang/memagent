@@ -222,7 +222,10 @@ def verify_deadline_is_the_shell_ceiling_and_is_overridable():
         os.environ.pop("AGENT_VERIFY_TIMEOUT", None)
         assert default_verify_timeout() == 600.0, "a plan-authored build must not die at 120s"
         assert CommandOracle("pytest -q").timeout == 600.0
-        for raw, want in (("300", 300.0), ("99999", 600.0), ("0", 600.0), ("junk", 600.0)):
+        # #33 review: an explicit operator value may exceed the 600s default (long integration suites
+        # must be able to produce a green receipt), bounded by a 3600s leak guard.
+        for raw, want in (("300", 300.0), ("1800", 1800.0), ("99999", 3600.0), ("0", 600.0),
+                          ("junk", 600.0)):
             os.environ["AGENT_VERIFY_TIMEOUT"] = raw
             assert default_verify_timeout() == want, raw
     finally:

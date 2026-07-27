@@ -2323,7 +2323,7 @@ def registry_rejected_child_does_not_block_a_valid_sibling_same_or_later_wave():
 
 @check
 def preflight_counts_schemas_and_output_reserve():
-    llm = NS(context_window=180, max_tokens=40)
+    llm = NS(context_window=70, max_tokens=40)   # 180-byte-era fixture scaled to token units (#33)
     messages = [{"role": "user", "content": "m" * 50}]
     schemas = [{"type": "function", "function": {"name": "x", "description": "s" * 80}}]
     try:

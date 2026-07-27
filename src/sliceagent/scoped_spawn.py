@@ -153,7 +153,7 @@ class ScopedSpawnHost:
     """
 
     def __init__(self, inner, *, llm, retriever, memory, agents=None, notify=None,
-                 session_id: str = "", max_steps: int = 40, intent_provider=None, turn_id_fn=None,
+                 session_id: str = "", max_steps: int = 100, intent_provider=None, turn_id_fn=None,
                  work_provider=None, model_id: str = ""):
         from .agents import BUILTIN_AGENTS
         self._inner = inner

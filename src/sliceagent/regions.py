@@ -1085,9 +1085,13 @@ def render_action_history(action_log: dict) -> str:
 
 
 # ── CONVERGENCE ───────────────────────────────────────────────────────────────
-STOP_NUDGE_AFTER = 2  # non-edit tool calls since the last edit (with no error) before nudging to converge
-READONLY_NUDGE_AFTER = 4  # read-only tool calls with NO edit at all before nudging to answer/act
-EXPLORE_NUDGE_AFTER = 5  # tool calls in ONE turn with no edit before nudging to ANSWER or ask_user — keyed on
+# Thresholds raised per the #33 limits review: the old 2/4-post-edit and 5/8-read pressure fired below
+# the evidence needs of legitimate multi-file work ("no current error" is not verified completion) and
+# caused more premature completion than the step ceiling itself. These remain SOFT checkpoints — the
+# model may continue for a real reason; hard caps stay reserved for physical safety and spend.
+STOP_NUDGE_AFTER = 4  # non-edit tool calls since the last edit (with no error) before nudging to converge
+READONLY_NUDGE_AFTER = 8  # read-only tool calls with NO edit at all before nudging to answer/act
+EXPLORE_NUDGE_AFTER = 10  # tool calls in ONE turn with no edit before nudging to ANSWER or ask_user — keyed on
 # turn_actions (finding-INDEPENDENT), so a read-heavy Q&A that records a note each step still converges
 CLOSURE_MAX_SHOWN = 3   # max dangling-dependent locators in one CLOSURE block (bounds tokens; symbol-aware
 # staleness keeps the set tiny + self-extinguishing, so no window cap is needed to prevent a cascade)
@@ -1144,7 +1148,7 @@ def render_convergence(s) -> str:
         # is edited (→ the post-edit path below), so real edit-tasks are unaffected.
         ta = getattr(s, "turn_actions", 0)
         if not s.last_error and ta >= EXPLORE_NUDGE_AFTER:
-            strong = "STOP exploring NOW — " if ta >= EXPLORE_NUDGE_AFTER + 3 else ""
+            strong = "STOP exploring NOW — " if ta >= EXPLORE_NUDGE_AFTER + 6 else ""
             return (
                 f"# CONVERGENCE CHECK\n{strong}you've made {ta} tool calls this turn and edited nothing. Decide "
                 f"NOW — stop exploring (do NOT re-read what you've seen). If the task needs a CODE CHANGE, make "
@@ -1157,7 +1161,7 @@ def render_convergence(s) -> str:
         return ""
     if render_closure(s):           # an unreached dependent outranks the done-nudge (targeted > frequency):
         return ""                   # show CLOSURE instead of STOP so the model finishes the refactor first
-    strong = "STOP NOW — " if s.since_edit >= STOP_NUDGE_AFTER + 2 else ""
+    strong = "STOP NOW — " if s.since_edit >= STOP_NUDGE_AFTER + 4 else ""
     return (
         f"# CONVERGENCE CHECK\n{strong}you have edited {len(s.edited_files)} file(s) and made "
         f"{s.since_edit} tool calls since your last edit with no error — the change appears complete and "

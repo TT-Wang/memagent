@@ -105,7 +105,9 @@ def completion_cap_default_is_model_aware():
     assert capability("deepseek-chat", "https://api.deepseek.com/v1").completion_tokens_default == 8192
     assert capability("deepseek-v4-flash", "https://api.deepseek.com/v1").completion_tokens_default == 8192
     assert capability("gpt-5.5", "https://api.openai.com/v1").completion_tokens_default == 32768
-    assert capability("kimi-k2", "https://api.moonshot.cn/v1").completion_tokens_default == 8192
+    assert capability("kimi-k2", "https://api.moonshot.cn/v1").completion_tokens_default == 32768
+    assert capability("claude-sonnet-5", "").completion_tokens_default == 32768
+    assert capability("mystery-model-x", "").completion_tokens_default == 16384  # unknown = compatibility, never the 8k chat cap
 
 
 def main():

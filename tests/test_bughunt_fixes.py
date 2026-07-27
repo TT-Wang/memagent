@@ -754,6 +754,90 @@ def saved_dollars_accrue_and_reprice():
     assert stats["saved_cached_tok"] == stats["saved_cached_tok"]  # tokens unchanged by repricing
 
 
+# ── #33 limits review: the target profile — hard caps for safety/spend, not raw-count guillotines ─
+@check
+def limits_target_profile_holds():
+    import json as _json
+    import os
+
+    from sliceagent import regions
+    from sliceagent.config import Config
+    from sliceagent.execution import _byte_upper_bound
+    from sliceagent.model_catalog import capability
+    from sliceagent.tools import _OUTPUT_INLINE_CAP, LocalToolHost
+
+    prior = os.environ.get("AGENT_MAX_STEPS")
+    try:
+        os.environ.pop("AGENT_MAX_STEPS", None)
+        assert Config({}).max_steps == 120, "main step ceiling must default to 120 (#33)"
+    finally:
+        if prior is not None:
+            os.environ["AGENT_MAX_STEPS"] = prior
+    import inspect
+
+    from sliceagent.fanout import FanoutTask
+    from sliceagent.loop import run_turn
+    from sliceagent.scoped_agent import run_scoped_agent
+    assert inspect.signature(run_turn).parameters["max_steps"].default == 120, \
+        "library default must match the CLI default — embedders must not silently get a stricter policy"
+    assert inspect.signature(run_scoped_agent).parameters["max_steps"].default == 100
+    assert FanoutTask("t").max_steps == 100
+
+    assert LocalToolHost.__init__.__defaults__ is None or True  # keyword-only; assert via signature:
+    assert inspect.signature(LocalToolHost.__init__).parameters["timeout"].default == 120, \
+        "foreground shell default must be 120s, not the 30s interactive-latency target"
+    assert _OUTPUT_INLINE_CAP == 32000
+
+    # completion caps are model-aware: reasoning-heavy families and UNKNOWN models never get the 8k cap
+    assert capability("claude-sonnet-5").completion_tokens_default == 32768
+    assert capability("kimi-k2.7").completion_tokens_default == 32768
+    assert capability("mystery-new-model-x").completion_tokens_default == 16384
+    assert capability("deepseek-v4-flash").completion_tokens_default == 8192  # known chat model keeps 8k
+
+    # context preflight estimates tokens (~3 bytes/token + margin), no longer bytes==tokens
+    text = "def handler(request):\n    return service.dispatch(request)\n" * 200
+    est = _byte_upper_bound(text)
+    raw = len(_json.dumps(text).encode())
+    assert est < raw * 0.5, "estimate must not treat every byte as a token (quarter-sized windows, #33)"
+    assert est > raw * 0.2, "estimate must stay conservative — margin over ~4 bytes/token reality"
+
+    # convergence is a soft checkpoint at evidence-plausible counts, not an early guillotine
+    assert regions.STOP_NUDGE_AFTER == 4 and regions.READONLY_NUDGE_AFTER == 8
+    assert regions.EXPLORE_NUDGE_AFTER == 10
+
+    # units are algebraically consistent: tokens_to_chars is the exact inverse of the estimator ratio,
+    # so a token deficit converts to the character tightening that closes it in one projection pass
+    from sliceagent.execution import tokens_to_chars
+    sample = "y" * 3000
+    assert abs(tokens_to_chars(_byte_upper_bound(sample)) - len(_json.dumps(sample))) <= 8
+
+    # execute_code's NESTED run() helper (inside the generated script) must match the outer 120s —
+    # otherwise a build inside a script still dies at the old 60s while the script itself survives
+    import sliceagent.tools as _tools_mod
+    src = inspect.getsource(_tools_mod)
+    assert "def run(cmd, timeout=120):" in src and "def run(cmd, timeout=60):" not in src
+
+
+@check
+def negative_completion_cap_falls_back_to_model_aware_default():
+    import os
+
+    from sliceagent.llm import OpenAILLM
+    prior = os.environ.get("AGENT_COMPLETION_TOKENS")
+    try:
+        os.environ["AGENT_COMPLETION_TOKENS"] = "-5"
+        llm = OpenAILLM(model="claude-sonnet-5", api_key="test-key")
+        assert llm.max_tokens == 32768, \
+            "a negative cap must not reach the provider; model-aware default applies (#33)"
+        os.environ["AGENT_COMPLETION_TOKENS"] = "0"
+        llm = OpenAILLM(model="claude-sonnet-5", api_key="test-key")
+        assert llm.max_tokens == 0, "0 keeps its documented provider-default meaning"
+    finally:
+        os.environ.pop("AGENT_COMPLETION_TOKENS", None)
+        if prior is not None:
+            os.environ["AGENT_COMPLETION_TOKENS"] = prior
+
+
 # ── BUG: `/cost` crashed without the [tui] extra — _cost_lines imported tui (→ rich) for savings math ─
 @check
 def slash_cost_needs_no_tui_extra():

@@ -11,10 +11,10 @@ sliceagent reads **59** environment variables across **6** groups; every value i
 | `AGENT_ADVANCED_TOOLS` | — | Expose persistent process and interactive terminal tools; off by default in the demo kernel. |
 | `AGENT_ALLOW_PLUGINS` | — | Set truthy to load project/user plugins. |
 | `AGENT_BACKGROUND_REVIEW` | — | Set truthy to run an off-thread reviewer that consolidates lessons after each turn. |
-| `AGENT_COMPLETION_TOKENS` | `model-aware` | Per-REQUEST completion cap (max output tokens); distinct from the AGENT_MAX_TOKENS turn budget. Unset = model-aware default (8192; 32768 for reasoning-output models, whose chain-of-thought spends this same budget). 0 = provider default. |
+| `AGENT_COMPLETION_TOKENS` | `model-aware` | Per-REQUEST completion cap (max output tokens); distinct from the AGENT_MAX_TOKENS turn budget. Unset = model-aware default (32768 for reasoning families incl. claude/kimi, 16384 for unknown models, 8192 for known chat models). 0 = provider default. |
 | `AGENT_CONTEXT_WINDOW` | — | Provider context window used for strict per-call capacity preflight when the model catalog cannot supply one (0/unset = explicit compatibility mode). |
 | `AGENT_DELEGATION_TIMEOUT` | `900` | Hard ceiling for a child-agent wave in seconds; invalid/non-positive values use 900. |
-| `AGENT_MAX_STEPS` | `60` | Per-turn step ceiling (runaway backstop, NOT a work meter — the budget and the user are); raise for deep analysis. |
+| `AGENT_MAX_STEPS` | `120` | Per-turn step ceiling (runaway backstop, NOT a work meter — the budget and the user are); raise for deep analysis. |
 | `AGENT_MAX_TOKENS` | — | Per-turn task token budget, including delegated child usage (parks when exhausted). |
 | `AGENT_MINE` | `off` | Opt-in lesson/skill-candidate mining mode for end-of-session consolidation: deterministic, llm, or off. Automatic skill candidates stay inactive. |
 | `AGENT_MODEL` | — | LLM model id to drive the agent. REQUIRED — no default; set it here or pick a provider+model via `sliceagent init`. |
@@ -29,7 +29,7 @@ sliceagent reads **59** environment variables across **6** groups; every value i
 | `AGENT_TOOL_TIMEOUT` | — | Outer deadline for declared pure-read tools in seconds (0/unset = off). |
 | `AGENT_TOPIC_TOOLS` | — | Expose model-callable topic switching (off by default; host routing and slash commands remain available). |
 | `AGENT_VERIFY_CMD` | — | Oracle verify command run after a turn (e.g. 'pytest -q'). |
-| `AGENT_VERIFY_TIMEOUT` | `600` | Deadline in seconds for an acceptance check (a work item's verify command, or the oracle); clamped to the 600s shell ceiling. A check that overruns is INDETERMINATE, never failed. |
+| `AGENT_VERIFY_TIMEOUT` | `600` | Deadline in seconds for an acceptance check (a work item's verify command, or the oracle); default 600s, operator-raisable to 3600s. A check that overruns is INDETERMINATE, never failed. |
 | `AGENT_WEB` | `1` | Enable the web tools (fetch_url + web_search, DuckDuckGo, no key); set 0/off to disable network egress from the agent. |
 | `SLICEAGENT_BASH` | — | Windows only: bash.exe that runs shell commands (default: auto-detect Git Bash). |
 

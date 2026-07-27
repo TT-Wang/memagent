@@ -144,9 +144,14 @@ def capability(model: str, base_url: str = "") -> ModelCapability:
         return ModelCapability("deepseek", supports_vision=vis,
                                completion_tokens_default=32768 if "reasoner" in m or "thinking" in m else 8192)
     if "kimi" in m or "moonshot" in b:
-        return ModelCapability("moonshot", supports_vision=vis)
+        # Kimi K2+ models are reasoning/agentic-tool models: chain-of-thought and structured tool calls
+        # spend the completion budget, so the 8k chat-era cap parked long steps mid-response (#33 review).
+        return ModelCapability("moonshot", supports_vision=vis, completion_tokens_default=32768)
     if "claude" in m or "anthropic" in b:
-        return ModelCapability("anthropic", supports_vision=vis)
+        # Anthropic recommends large max_tokens for high-effort reasoning; 8k truncated tool-heavy steps.
+        return ModelCapability("anthropic", supports_vision=vis, completion_tokens_default=32768)
     if m.startswith("gpt-") or "openai" in b:
         return ModelCapability("openai", supports_vision=vis)
-    return ModelCapability(supports_vision=vis)
+    # UNKNOWN model: compatibility mode, NOT an automatic chat-sized cap — an unrecognized name is more
+    # likely a new (reasoning-capable) model than an old chat one, and 8k silently guillotined it (#33).
+    return ModelCapability(supports_vision=vis, completion_tokens_default=16384)

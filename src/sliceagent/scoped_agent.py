@@ -285,7 +285,7 @@ class ScopedResult:
 
 
 def run_scoped_agent(task: str, *, tools, llm, retriever, memory, allowed_tools=READ_ONLY_TOOLS,
-                     model_id: str = "", max_steps: int = 40, signal=None,
+                     model_id: str = "", max_steps: int = 100, signal=None,
                      reasoning: str = "", system_extra: str = "", on_event=None) -> ScopedResult:
     """Run one scoped turn and return a ScopedResult.
 

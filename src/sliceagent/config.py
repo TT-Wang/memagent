@@ -207,14 +207,15 @@ class Config:
 
     @property
     def max_steps(self) -> int:
-        # Per-turn step ceiling (runaway backstop). Default raised above the old hard 40 so deep
-        # analysis/review turns aren't guillotined; overridable for heavier work.
+        # Per-turn step ceiling (runaway backstop, NOT a work meter — token spend, repetition detection,
+        # and the user are the real controls). 120 per the #33 limits review: no peer ships a step
+        # ceiling at all, and 60 guillotined repo-wide review/migration turns; overridable either way.
         v = self._get("budget", "max_steps", "AGENT_MAX_STEPS", None)
         try:
             n = int(v) if v not in (None, "") else None
         except (TypeError, ValueError):
-            return 60
-        return n if (n is not None and n >= 1) else 60   # <=0 (incl. the env STRING "0") → default, consistent across env/TOML
+            return 120
+        return n if (n is not None and n >= 1) else 120   # <=0 (incl. the env STRING "0") → default, consistent across env/TOML
 
     # --- extension surfaces ---
     @property

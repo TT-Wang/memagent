@@ -47,15 +47,15 @@ REGISTRY: list[EnvVar] = [
     EnvVar("AGENT_VERIFY_CMD", "agent", "Oracle verify command run after a turn (e.g. 'pytest -q').", ""),
     EnvVar("AGENT_VERIFY_TIMEOUT", "agent",
            "Deadline in seconds for an acceptance check (a work item's verify command, or the oracle); "
-           "clamped to the 600s shell ceiling. A check that overruns is INDETERMINATE, never failed.",
+           "default 600s, operator-raisable to 3600s. A check that overruns is INDETERMINATE, never failed.",
            "600"),
     EnvVar("AGENT_MAX_TOKENS", "agent", "Per-turn task token budget, including delegated child usage (parks when exhausted).", ""),
     EnvVar("AGENT_COMPLETION_TOKENS", "agent", "Per-REQUEST completion cap (max output tokens); distinct from "
-           "the AGENT_MAX_TOKENS turn budget. Unset = model-aware default (8192; 32768 for reasoning-output "
-           "models, whose chain-of-thought spends this same budget). 0 = provider default.", "model-aware"),
+           "the AGENT_MAX_TOKENS turn budget. Unset = model-aware default (32768 for reasoning families incl. "
+           "claude/kimi, 16384 for unknown models, 8192 for known chat models). 0 = provider default.", "model-aware"),
     EnvVar("AGENT_CONTEXT_WINDOW", "agent", "Provider context window used for strict per-call capacity "
            "preflight when the model catalog cannot supply one (0/unset = explicit compatibility mode).", ""),
-    EnvVar("AGENT_MAX_STEPS", "agent", "Per-turn step ceiling (runaway backstop, NOT a work meter — the budget and the user are); raise for deep analysis.", "60"),
+    EnvVar("AGENT_MAX_STEPS", "agent", "Per-turn step ceiling (runaway backstop, NOT a work meter — the budget and the user are); raise for deep analysis.", "120"),
     EnvVar("AGENT_TOOL_TIMEOUT", "agent",
            "Outer deadline for declared pure-read tools in seconds (0/unset = off).", ""),
     EnvVar("AGENT_DELEGATION_TIMEOUT", "agent",
