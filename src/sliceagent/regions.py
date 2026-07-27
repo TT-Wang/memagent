@@ -1129,26 +1129,51 @@ def render_closure(s) -> str:
 
 
 def _repeat_pressure(s) -> int:
-    """Re-observation count: how many tool calls REPEATED an already-settled observation (action_log
-    signature seen before). This is the honest 'no new evidence' signal (#33 P0): a raw call count
-    cannot distinguish gathering evidence from re-checking it, and the count-only escalation caused
-    more premature completion than the step ceiling. Failing signatures don't count — a red check is
-    active fixing, and the ACTION HISTORY block already pressures exact repeats of failures."""
-    log = getattr(s, "action_log", None) or {}
-    return sum(max(0, int(a.get("count", 0)) - 1) for a in log.values() if not a.get("failing"))
+    """TURN-LOCAL re-observation count: how many tool calls this turn repeated an earlier call's
+    signature AND saw the same observation. This is the honest 'no new evidence' signal (#33 P0): a
+    raw call count cannot distinguish gathering evidence from re-checking it. Deliberately NOT the
+    durable cross-turn action_log — historical repeats must not escalate a later turn's fresh
+    investigation — and same-signature-with-CHANGED-output is new evidence, not a repeat. Failing
+    calls don't count: a red check is active fixing (ACTION HISTORY pressures failure repeats)."""
+    calls = getattr(getattr(s, "runtime", None), "recent_calls", None) or []
+    seen: dict[tuple, str] = {}
+    repeats = 0
+    for call in calls:
+        if not isinstance(call, dict) or str(call.get("status") or "") == "failed":
+            continue
+        digest = call.get("obs_digest")
+        if not digest:
+            continue   # no recorded observation → cannot claim "no new evidence"
+        key = (call.get("name"), json.dumps(call.get("args"), sort_keys=True, default=str))
+        if seen.get(key) == digest:
+            repeats += 1
+        else:
+            seen[key] = digest
+    return repeats
 
 
-def _unfinished_frontier(s) -> tuple[int, int]:
-    """(open-ish, ready-unverified) Active Work item counts — the receipt-aware completion signal.
-    ``ready`` items are exactly the ones whose host verify has not yet run: pressuring the model to
-    'write the final summary' while they exist invites an unverified done-claim (Applied ≠ Verified)."""
+def _unfinished_frontier(s) -> tuple[int, int, int]:
+    """(open-ish, ready-unverified, waiting-on-user) Active Work counts for the CURRENT request root —
+    the receipt-aware completion signal. Scoped to the latest unresolved request root so a stale item
+    under an older, already-answered request cannot hijack this turn's convergence. ``ready`` items are
+    exactly the ones whose host verify has not run: pressuring 'final summary' past them invites an
+    unverified done-claim (Applied ≠ Verified); ``waiting_user`` is a parked human dependency, never an
+    'advance now' target."""
     graph = getattr(s, "active_work", None)
-    items = getattr(graph, "items", None) or ()
-    open_ish = sum(1 for item in items
-                   if getattr(item, "kind", "") != "request"
-                   and getattr(item, "status", "") in ("open", "in_progress", "waiting_user"))
-    ready = sum(1 for item in items if getattr(item, "status", "") == "ready")
-    return open_ish, ready
+    items = list(getattr(graph, "items", None) or ())
+    unresolved = list(getattr(graph, "unresolved_roots", None) or ())
+    root_id = getattr(unresolved[-1], "id", None) if unresolved else None
+    scoped = [item for item in items
+              if getattr(item, "kind", "") != "request"
+              and (root_id is None or getattr(item, "root_id", None) == root_id)]
+    open_ish = sum(1 for item in scoped if getattr(item, "status", "") in ("open", "in_progress"))
+    ready = sum(1 for item in scoped if getattr(item, "status", "") == "ready")
+    waiting = sum(1 for item in scoped if getattr(item, "status", "") == "waiting_user")
+    # A normal parked turn often has the REQUEST ROOT itself at waiting_user with no waiting child —
+    # the root's own parked state must count, or the ordinary completion nudge fires over it.
+    if unresolved and getattr(unresolved[-1], "status", "") == "waiting_user":
+        waiting += 1
+    return open_ish, ready, waiting
 
 
 def render_convergence(s) -> str:
@@ -1191,7 +1216,7 @@ def render_convergence(s) -> str:
         return ""
     if render_closure(s):           # an unreached dependent outranks the done-nudge (targeted > frequency):
         return ""                   # show CLOSURE instead of STOP so the model finishes the refactor first
-    open_ish, ready = _unfinished_frontier(s)
+    open_ish, ready, waiting = _unfinished_frontier(s)
     if ready:
         # Receipt-aware (#33 P0): 'ready' items are awaiting HOST verification — the completion pressure
         # must point at earning the receipts, never at summarizing past them (Applied ≠ Verified).
@@ -1208,6 +1233,13 @@ def render_convergence(s) -> str:
             f"tool calls since your last edit, but {open_ish} Active Work item(s) are still open/in "
             f"progress. Either advance them now or, if they no longer apply, close them with a reason — "
             f"do not finish leaving the frontier ambiguous.\n\n")
+    if waiting:
+        # A parked human dependency: the ball is with the user, not the model. Summarize state and end
+        # the turn cleanly — do NOT close the item, re-ask in a loop, or claim completion over it.
+        return (
+            f"# CONVERGENCE CHECK\n{waiting} Active Work item(s) are waiting on the USER. If the "
+            f"question is already posed, summarize the current state and end the turn — the item stays "
+            f"open until the user answers; do not close it or claim the work complete.\n\n")
     strong = ("STOP NOW — "
               if s.since_edit >= STOP_NUDGE_AFTER + 4 and _repeat_pressure(s) >= 2 else "")
     return (

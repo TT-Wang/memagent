@@ -16,19 +16,26 @@ inactivity reset by streamed tokens/tool events; Kimi: 30-minute subagent ceilin
 **Metric change:** the 900 s default becomes an **inactivity window** reset by child activity, plus an
 absolute leak guard.
 
-1. **Activity source.** `ScopedSpawnHost._ProgressEmitter._publish` already observes every child
-   lifecycle event (StepBegin / ModelCallPrepared / AssistantText / ToolStarted / StepEnd). Add a
-   monotonic `touch()` on a shared per-invocation activity cell there. Transport-level liveness
-   (`LLM_STREAM_HEARTBEAT_SEC` events) may also touch it, covering a child inside one long model call.
+1. **Activity source.** `ScopedSpawnHost._ProgressEmitter` observes every child lifecycle event
+   (StepBegin / ModelCallPrepared / AssistantText / ToolStarted / StepEnd). `touch()` the activity
+   cell at the TOP of `__call__`, **before** the identical-(phase, detail) dedup in `_publish` — a
+   child steadily working inside one phase still proves liveness even when no new UI row is emitted.
+   Transport-level liveness is **mandatory, not optional**: the child's LLM view currently clears
+   `transport_activity`, so a child inside one long model call would look dead — the scoped child's
+   transport must wire its `LLM_STREAM_HEARTBEAT_SEC` events (or byte-level read activity) into the
+   same cell before this design ships.
 2. **Carrier.** Reuse the private-arg protocol (`execution.py` `CHILD_*_ARG`): the loop injects a
    `__sliceagent_activity__` cell (a small object with `touch()`/`last`) into `spawn_agent` call args,
    exactly as `_ChildCancellationLease` is injected today. `ScheduledTool` gains an optional
-   `activity` reference to the same cell.
-3. **Scheduler check.** In the cutoff loop, replace the fixed comparison with an effective deadline:
-   `effective = min(absolute_guard, max(activity.last for lifecycle jobs) + inactivity_window)`;
-   `absolute_guard = wave_start + AGENT_DELEGATION_ABSOLUTE` (new env, default 3600 s, never
-   disableable — `0` invalid → default, same fail-closed posture as today). Ordinary read deadlines are
-   untouched.
+   `activity` reference to the same cell. The cell is **initialized to the admission time** at
+   injection, so a child hung before its first event still times out from admission, not from epoch.
+3. **Scheduler check — per child, never pooled.** Each lifecycle job's cutoff is computed from ITS OWN
+   cell: `job_deadline = min(wave_start + AGENT_DELEGATION_ABSOLUTE, job.activity.last +
+   inactivity_window)`. A `max(...)` across jobs would let one healthy child keep a hung sibling alive
+   until the absolute guard — the exact confusion this design removes. A job past its own deadline is
+   cancelled individually (same lease/grace path as today); the wave continues for live siblings.
+   `AGENT_DELEGATION_ABSOLUTE` is a new env (default 3600 s, never disableable — `0`/invalid → default,
+   the same fail-closed posture as today). Ordinary read deadlines are untouched.
 4. **Reporting.** The timeout classification text distinguishes "no activity for {window}s"
    (inactivity) from "absolute {guard}s ceiling" (leak guard), keeping INDETERMINATE semantics for
    writable children exactly as today.

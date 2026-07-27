@@ -283,6 +283,13 @@ class SliceReducer:
             s.runtime.recent_calls.append(call)
         call["status"] = event.status or ("failed" if event.failing else "succeeded")
         if accept_terminal_metadata:
+            # Compact observation identity for convergence (#33): "same call again" only counts as
+            # re-checking when the OBSERVATION is unchanged too — same command with changed output is
+            # new evidence. The FULL output is hashed (a truncated prefix would classify identical
+            # log prefixes with changed tails as "no new evidence"); only the digest is bounded.
+            import hashlib as _hashlib
+            call["obs_digest"] = _hashlib.blake2s(
+                str(event.output or "").encode("utf-8", "replace")).hexdigest()[:12]
             self._capture_child_artifact(call, event.name, effects)
             if (event.name in _DELEGATION_TOOLS and call.get("child_operational_status")
                     and not event.failing and str(event.output or "").strip()):
