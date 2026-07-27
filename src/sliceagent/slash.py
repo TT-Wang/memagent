@@ -7,7 +7,7 @@ PUBLIC_SLASH_COMMANDS = {
     "/model": "switch model + reasoning — menu lists YOUR configured providers (switches endpoint too)",
     "/cwd": "show the workspace; /cwd <path> switches with a clean runtime handoff",
     "/learn": "turn what you just did into a reusable SKILL (/learn [name])",
-    "/plan": "show open work items; /plan <objective> = read-only planning turn",
+    "/plan": "read-only plan mode: /plan <objective> (or leading 'plan <objective>') arms it · bare /plan shows work items · reply \"go\" to execute · /plan off exits",
     "/cost": "show session token totals + $ saved vs full-history",
     "/update": "show how to update safely at the process boundary",
     "/threads": "list open/parked topics",
@@ -33,5 +33,7 @@ SUPPORTED_SLASH_COMMANDS = frozenset(PUBLIC_SLASH_COMMANDS) | frozenset(HIDDEN_S
 
 
 def slash_help_line() -> str:
-    """The exact public command list displayed by ``/help``."""
-    return "commands: " + " · ".join(PUBLIC_SLASH_COMMANDS)
+    """The exact public command list displayed by ``/help`` — each command with what it does."""
+    lines = ["commands:"]
+    lines.extend(f"  {name} — {description}" for name, description in PUBLIC_SLASH_COMMANDS.items())
+    return "\n".join(lines)

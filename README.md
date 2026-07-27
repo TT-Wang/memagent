@@ -304,13 +304,22 @@ Attach a file or path to your message with `@`: `@src/errors.py explain the back
 | `/skills` · `/tools` · `/mcp` · `/plugins` · `/agents` | list what's available to the agent |
 | `/threads` · `/resume` | switch between, or resume, parked topics |
 | `/learn <note>` | save a durable lesson yourself |
-| `/plan` | show the current task plan |
+| `/plan` | show open work items · `/plan <objective>` starts read-only plan mode (below) |
 | `/update` | show the safe process-boundary update command |
 | `Ctrl-C` · `exit` | interrupt the turn · quit |
 
 Public `/` palette: `/config` · `/model` · `/cwd` · `/learn` · `/plan` · `/cost` · `/update` · `/threads` · `/resume` · `/plugins` · `/mcp` · `/skills` · `/tools` · `/agents` · `/help` · `/exit`.
 The typed compatibility aliases `/reasoning`, `/undo`, and `/switch` remain accepted, but stay out of the
 palette because `/model`, Esc, and `/resume` are their clearer public spellings.
+
+**Plan mode** is a sticky, host-enforced read-only planning regime. Start it with `/plan <objective>` — or
+with a leading `plan <objective>` and no slash (`plan refactor the cache layer`); commentary like "plan
+looks good" is guarded and never arms it. While armed, the agent explores with read-only tools and writes
+the plan as work items, each carrying its acceptance contract (`verify` + `done_when`). Plan mode stays on
+across turns until you approve or leave: reply with a whole-message approval — `go`, `go ahead`, `do it`,
+`execute`, `approved`, `lgtm` (开始 / 执行 also work) — to unlock full tools and execute, or type
+`/plan off` to exit without executing. `/plan on` arms the mode without a turn; bare `/plan` only shows the
+open work items.
 
 File mentions accept exact workspace paths such as `@app/jobs/[id]/page.tsx`; quote paths containing spaces,
 for example `@"docs/my guide.md"`.

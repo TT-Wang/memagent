@@ -98,7 +98,7 @@ relevant state before relying on it, but ordinary work, topic changes, and works
 Useful keys & commands:
 
 - **Enter** sends · **Ctrl-J** inserts a newline · **Ctrl-C** aborts the current turn · **Ctrl-D** quits.
-- `/help` lists slash commands · `/plan` shows the agent's plan · `/threads` lists topics · `/exit` quits.
+- `/help` lists slash commands with descriptions · `/plan <objective>` starts a sticky read-only plan mode (bare `/plan` shows open work items; reply `go` to execute, `/plan off` to exit) · `/threads` lists topics · `/exit` quits.
 - Start an unrelated task explicitly with `New task: ...`; the current task is parked for `/resume`.
 
 UI modes (via `AGENT_TUI`): `live` (default — the always-pinned rich TUI, streams above the box) ·
