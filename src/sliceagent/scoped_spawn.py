@@ -331,7 +331,13 @@ class ScopedSpawnHost:
         work_item_id = str(args.get("work_item_id") or "").strip()
         handle = self._seal(spec.name, brief, result, launch, work_item_id)
 
-        header = f"[child {launch} · {spec.name} · {result.status} · {result.steps} steps]"
+        # A non-clean outcome names its REASON in the header: "partial" alone tells the parent that
+        # something was cut short but not what to do about it (retry a token ceiling, don't retry a
+        # filter). The reason is already sealed; surfacing it costs one word.
+        detail = result.status
+        if result.status != "ok" and result.stop_reason and result.stop_reason != result.status:
+            detail = f"{result.status} · {result.stop_reason}"
+        header = f"[child {launch} · {spec.name} · {detail} · {result.steps} steps]"
         locator = f'\n\nsealed: read_file("subagents/{handle}.md")' if handle else ""
         if result.status == "cancelled":
             return ToolText(f"{header}\nNot run to completion: the delegation was cancelled before "

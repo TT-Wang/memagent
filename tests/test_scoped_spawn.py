@@ -343,6 +343,51 @@ def seal_failure_never_gates_the_inline_report():
 # ── typed error edges ────────────────────────────────────────────────────────────────────────────
 
 @check
+def a_child_that_produced_a_report_is_never_failed():
+    """FIELD REGRESSION: a 6-subagent review reported "1 failed" — child 4 had written a 5,689-char
+    review and then hit the provider's completion cap. `max_tokens` was absent from the status map,
+    so it fell to the `else: failed` default and its work was presented as a crash.
+
+    The fix is the INVARIANT, not the missing key: an outcome carrying a report is never `failed`.
+    That also covers `filtered` and any stop reason added upstream in future — the same latent bug
+    existed for every one of them.
+    """
+    from sliceagent.scoped_agent import classify_outcome
+    report = "## findings\n- a real, useful, truncated review"
+
+    assert classify_outcome("max_tokens", report) == "partial", "the exact field failure"
+    for unmapped in ("filtered", "blocked", "error", "a_reason_invented_next_year"):
+        assert classify_outcome(unmapped, report) == "partial", unmapped
+        assert classify_outcome(unmapped, "") == "failed", f"{unmapped} with NO report must fail"
+
+    # established semantics must not drift
+    assert classify_outcome("end_turn", report) == "ok"
+    assert classify_outcome("end_turn", "") == "failed"
+    assert classify_outcome("aborted", report) == "cancelled"
+    assert classify_outcome("max_steps", report) == "partial"
+    assert classify_outcome("indeterminate", report) == "indeterminate"
+
+
+@check
+def a_non_clean_child_names_its_stop_reason_to_the_parent():
+    """"partial" alone does not tell the parent whether retrying is sensible; the reason does."""
+    from sliceagent.scoped_agent import ScopedResult
+    import sliceagent.scoped_spawn as sp
+    host = _host(_workspace())
+    truncated = ScopedResult(report="findings so far", status="partial",
+                             stop_reason="max_tokens", steps=6)
+    orig = sp.run_scoped_agent
+    sp.run_scoped_agent = lambda *a, **k: truncated
+    try:
+        out = host.run("spawn_agent", {"agent": "explorer", "task": "review the TUI"})
+    finally:
+        sp.run_scoped_agent = orig
+    assert "partial · max_tokens" in str(out), out
+    assert "findings so far" in str(out), "partial work must still reach the parent"
+    assert out.ok is True, "partial is not a failure"
+
+
+@check
 def indeterminate_child_stays_distinct_from_failed():
     """An unconfirmed-close/timeout child has an UNKNOWN physical state; collapsing it into
     'failed' erases truth. The status survives the mapping and the parent envelope."""

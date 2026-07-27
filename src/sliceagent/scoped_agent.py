@@ -119,11 +119,32 @@ def _private_child_read(name: str, args, inner) -> bool:
 # Spec §5 acceptance vocabulary. Evidence is an informational label, never a gate.
 # ``indeterminate`` stays DISTINCT from ``failed``: an unconfirmed-close/timeout child has an unknown
 # physical state — collapsing it into "failed" would erase truth the UI and parent can act on.
+# This table holds only reasons whose status does NOT depend on what the child delivered. Provider
+# finish reasons like ``max_tokens``/``filtered`` deliberately stay OUT of it: whether being cut off
+# counts as partial work or as delivering nothing is exactly the content question below.
 _STOP_TO_STATUS = {
     "aborted": "cancelled",
     "max_steps": "partial", "token_budget": "partial", "overflow": "partial",
     "indeterminate": "indeterminate",
 }
+
+
+def classify_outcome(stop_reason: str, report: str) -> str:
+    """Map one scoped turn's stop reason to the acceptance vocabulary.
+
+    THE INVARIANT: an outcome that CARRIES A REPORT is never ``failed``. A child that wrote real
+    findings and then hit a ceiling — the provider's completion cap, a content filter, or a stop
+    reason this table has never seen — delivered partial work. Calling that "failed" throws the work
+    away and invites a pointless re-run, and it silently mis-fires on every stop reason added
+    upstream in future (that is exactly how a truncated 5.7k-char review got reported as a failure).
+    Only a genuinely empty outcome fails.
+    """
+    if stop_reason == "end_turn":
+        return "ok" if report else "failed"
+    mapped = _STOP_TO_STATUS.get(stop_reason)
+    if mapped is not None:
+        return mapped
+    return "partial" if report else "failed"
 
 
 class ScopedSurface:
@@ -267,8 +288,6 @@ def run_scoped_agent(task: str, *, tools, llm, retriever, memory, allowed_tools=
     result = run_turn(build_slice=build, llm=child_llm, tools=surface, dispatch=dispatch,
                       hooks=Hooks(), max_steps=max_steps, signal=signal)
     text = redact_text((report["text"] or "").strip())
-    status = _STOP_TO_STATUS.get(result.stop_reason,
-                                 ("ok" if text else "failed") if result.stop_reason == "end_turn"
-                                 else "failed")
+    status = classify_outcome(result.stop_reason, text)
     return ScopedResult(report=text, status=status, stop_reason=result.stop_reason,
                         steps=result.steps, elapsed=time.monotonic() - started, usage=usage)
