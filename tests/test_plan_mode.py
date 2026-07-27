@@ -497,6 +497,38 @@ def the_planning_discipline_never_impersonates_the_user_request():
 
 
 @check
+def talk_about_plan_mode_never_arms_it():
+    """FIELD REGRESSION (round 2): the first "plan mode" trigger matched the bare noun anywhere with
+    an OPTIONAL verb, so every message that merely DISCUSSED the feature armed it — including the
+    owner's own bug report about the trigger. Arming now requires an activation shape: a verb
+    ("use/enter/switch to … plan mode"), an edge-anchored preposition ("in plan mode, …" / "… in
+    plan mode"), or the bare leading noun as a switch / colon-objective. Mentions stay inert AND
+    must not fall through to the leading-`plan ` word trigger.
+    """
+    from sliceagent.plan_mode import plan_objective, plan_switch
+    for text in (
+        "i see now the trigger of plan mode is a bit rigid",   # the owner's own report sentence
+        "plan mode is rigid",
+        "why did plan mode not trigger?",
+        "the plan mode docs need work",
+        "I used plan mode yesterday",
+        "compare plan mode with normal mode",
+        "fix the plan mode trigger bug",
+        "what does plan mode do?",
+        "plan mode didn't arm for me",                         # leading noun + commentary: no fallthrough
+        "the plan mode chip disappeared",
+    ):
+        assert plan_objective(text) == "" and plan_switch(text) == "", (
+            text, plan_objective(text), plan_switch(text))
+
+    # the activation shapes the tightening must keep (beyond the positive cases above)
+    assert plan_objective("plan mode: refactor the cache") == "refactor the cache"
+    assert plan_objective("in plan mode, review the auth module") == "review the auth module"
+    for text in ("exit plan mode", "leave plan mode", "turn off plan mode"):
+        assert plan_switch(text) == "off", text
+
+
+@check
 def slashless_plan_trigger_ignores_talk_about_a_plan():
     """The slashless form must not fire on talk ABOUT a plan — the likeliest phrasing at the exact
     moment a plan is on screen and the agent has just asked for approval. Every rejected case below

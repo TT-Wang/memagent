@@ -51,24 +51,53 @@ PLAN_APPROVALS = frozenset({
 
 
 # "plan mode" / "planning mode" is a PRODUCT TERM — nobody writes it by accident, unlike the bare word
-# "plan". So it is recognised anywhere in the message and in the natural phrasings people actually use
-# ("use plan mode to review X", "review X in plan mode"). The narrow leading-`plan ` trigger silently
-# ignored all of these, and a request that looks like it armed the mode but did not is the worst
-# outcome available: the user believes writes are impossible while the full surface is live.
-_PLAN_MODE_RE = re.compile(
-    r"\b(?:please\s+)?(?:use|using|enter|entering|switch\s+to|go\s+into|start|activate|turn\s+on|in|with)?"
-    r"\s*plan(?:ning)?\s+mode\b(?:\s*[,:;-]*\s*(?:to|and|then|for|please)\b)?",
-    re.IGNORECASE,
-)
+# "plan". But the term is also how people TALK ABOUT the feature ("why did plan mode not trigger?",
+# "the plan mode docs need work"), and a bare anywhere-match armed on every one of those — so the
+# arming grammar requires an ACTIVATION shape, not just the noun:
+#   * an activation verb before the noun, anywhere:  "please use plan mode to review X"
+#   * a deactivation verb before the noun, anywhere: "exit plan mode"
+#   * the prepositional form anchored to an edge:    "in plan mode, review X" / "review X in plan mode"
+#   * the bare noun leading the message:             "plan mode" (switch) / "plan mode: review X"
+# Everything else that merely mentions the term is a MENTION: inert, and it also must not fall through
+# to the leading-`plan ` word trigger (a leading "plan mode is rigid" is commentary, not a request).
+_PLAN_MODE_NOUN = r"plan(?:ning)?\s+mode"
+_PLAN_MODE_TAIL = r"(?:\s*[,:;-]*\s*(?:to|and|then|for|please)\b)?"
+_PLAN_MODE_VERBED_RE = re.compile(
+    r"\b(?:please\s+)?(?:use|using|enter|entering|switch\s+to|go\s+into|start|activate|turn\s+on)\s+"
+    + _PLAN_MODE_NOUN + r"\b" + _PLAN_MODE_TAIL, re.IGNORECASE)
+_PLAN_MODE_OFF_RE = re.compile(
+    r"\b(?:please\s+)?(?:exit|leave|quit|stop|end|cancel|turn\s+off)\s+" + _PLAN_MODE_NOUN + r"\b\s*[.!?]?\s*$",
+    re.IGNORECASE)
+_PLAN_MODE_PREP_START_RE = re.compile(
+    r"^(?:please\s+)?(?:in|with)\s+" + _PLAN_MODE_NOUN + r"\b" + _PLAN_MODE_TAIL, re.IGNORECASE)
+_PLAN_MODE_PREP_END_RE = re.compile(
+    r"\b(?:in|with)\s+" + _PLAN_MODE_NOUN + r"\s*[.!?]?\s*$", re.IGNORECASE)
+_PLAN_MODE_LEADING_RE = re.compile(r"^" + _PLAN_MODE_NOUN + r"\b\s*(:)?\s*", re.IGNORECASE)
+_PLAN_MODE_MENTION_RE = re.compile(r"\b" + _PLAN_MODE_NOUN + r"\b", re.IGNORECASE)
 
 
-def _strip_plan_mode_phrase(text: str) -> tuple[bool, str]:
-    """(matched, remaining objective) for the explicit "plan mode" phrasing."""
+def _plan_mode_request(text: str) -> tuple[str, str]:
+    """Classify the product-term phrasing: ("objective", obj) | ("switch", "on"/"off") | ("mention", "")
+    | ("", "") when the term does not appear at all."""
     raw = " ".join(str(text or "").split())
-    if not _PLAN_MODE_RE.search(raw):
-        return False, ""
-    rest = _PLAN_MODE_RE.sub(" ", raw, count=1)
-    return True, " ".join(rest.split()).strip(" ,:;.-—")
+    if _PLAN_MODE_OFF_RE.search(raw):
+        return "switch", "off"
+    for pattern in (_PLAN_MODE_VERBED_RE, _PLAN_MODE_PREP_START_RE, _PLAN_MODE_PREP_END_RE):
+        match = pattern.search(raw)
+        if match:
+            rest = " ".join((raw[:match.start()] + " " + raw[match.end():]).split()).strip(" ,:;.-—")
+            return ("objective", rest) if rest else ("switch", "on")
+    match = _PLAN_MODE_LEADING_RE.match(raw)
+    if match:
+        rest = raw[match.end():].strip(" ,;.-—")
+        if not rest:
+            return "switch", "on"
+        if match.group(1):                 # colon-introduced objective: "plan mode: refactor X"
+            return "objective", rest
+        return "mention", ""               # leading commentary: "plan mode is rigid" — inert
+    if _PLAN_MODE_MENTION_RE.search(raw):
+        return "mention", ""               # talk ABOUT the mode, anywhere else — inert
+    return "", ""
 
 
 def _plan_body(text: str) -> str | None:
@@ -96,11 +125,14 @@ def plan_objective(text: str, *, armed: bool = False) -> str:
         planning turn, not to a fresh re-plan. Explicit ``/plan <objective>`` still re-plans.
     """
     raw = " ".join(str(text or "").split())
-    matched, phrased = _strip_plan_mode_phrase(raw)
-    if matched:
-        # Unambiguous product term: honour it wherever it appears, armed or not. An empty remainder
-        # is a bare "enter plan mode" — a switch, handled by plan_switch, not an empty objective.
-        return phrased
+    kind, value = _plan_mode_request(raw)
+    if kind == "objective":
+        # Unambiguous activation phrasing: honour it wherever it appears, armed or not.
+        return value
+    if kind in ("switch", "mention"):
+        # A switch belongs to plan_switch; a mention is talk ABOUT the mode and must not fall
+        # through to the leading-`plan ` trigger ("plan mode is rigid" is commentary, not a request).
+        return ""
     body = _plan_body(raw)
     if not body or body.lower() in _PLAN_SWITCHES:
         return ""
@@ -119,13 +151,13 @@ def plan_objective(text: str, *, armed: bool = False) -> str:
 
 def plan_switch(text: str) -> str:
     """`"on"` / `"off"` for an explicit mode switch (`/plan off`, "enter plan mode"), else `""`."""
-    matched, phrased = _strip_plan_mode_phrase(text)
-    if matched:
-        # "enter plan mode" with nothing else to do = arm the surface, no turn. With an objective it
-        # is a planning REQUEST, so plan_objective owns it.
-        if not phrased:
-            return "on"
-        return "off" if phrased.lower() in ("off", "stop", "end", "exit", "cancel", "done") else ""
+    kind, value = _plan_mode_request(text)
+    if kind == "switch":
+        # "enter plan mode" with nothing else to do = arm the surface, no turn; "exit plan mode"
+        # disarms. With an objective it is a planning REQUEST, so plan_objective owns it.
+        return value
+    if kind in ("objective", "mention"):
+        return ""
     body = _plan_body(text)
     if body is None or body.lower() not in _PLAN_SWITCHES:
         return ""
