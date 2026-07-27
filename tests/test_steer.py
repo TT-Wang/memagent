@@ -112,6 +112,6 @@ def test_steer_admission_id_rides_the_delivery_receipt():
     receipts = [e for e in events if isinstance(e, SteerDelivered)]
     assert [e.admission_id for e in receipts] == ["adm-1", "adm-2"]
     assert all(e.content == "same words" for e in receipts)
-    second = llm.seen[1]
-    steered = [m for m in second if m["role"] == "user" and m["content"] == "same words"]
+    first = llm.seen[0]   # queued pre-turn → drained at the top of step 1
+    steered = [m for m in first if m["role"] == "user" and m["content"] == "same words"]
     assert len(steered) == 2, "both steers land in the trajectory as plain user text"
