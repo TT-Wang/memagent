@@ -1063,6 +1063,50 @@ def live_printing_never_uses_patch_stdout():
     assert "run_in_terminal" in router_src, "_LivePrintRouter must flush inside run_in_terminal"
 
 
+@check
+def live_status_line_keeps_the_planning_chip_visible_mid_turn():
+    # The sticky read-only mode's chip must ride the RUNNING status line, not only the idle toolbar:
+    # steers happen mid-turn, which is exactly when the idle toolbar is not rendered.
+    from sliceagent.tui import _live_status_line
+    armed = "".join(fragment[1] for fragment in _live_status_line(
+        "◌ Working", {"planning": True, "tokens": 12_345, "saved_cached_tok": 67_890}, 80,
+    ))
+    assert "◦ planning" in armed, armed
+    assert "12.3k tok" in armed, "the chip must not displace the cost meter at normal widths"
+    idle_off = "".join(fragment[1] for fragment in _live_status_line(
+        "◌ Working", {"tokens": 12_345}, 80,
+    ))
+    assert "◦ planning" not in idle_off, idle_off
+    narrow = "".join(fragment[1] for fragment in _live_status_line(
+        "◌ Working", {"planning": True, "tokens": 12_345}, 30,
+    ))
+    assert "◦ planning" in narrow, "the chip must survive the narrow (meterless) tier too"
+
+
+@check
+def live_app_idle_escape_requires_a_second_escape_to_undo():
+    # /undo reverts the last file edit — a single reflexive Esc on an empty idle composer must only
+    # ARM it (with a visible hint); the second Esc inside the window confirms.
+    seen = []
+    state, _ = _drive_live("\x1b\x04", lambda *a: None, handle_slash=seen.append)
+    assert "/undo" not in seen, f"one idle Esc must not run /undo: {seen}"
+    assert float(state.get("undo_armed_at") or 0.0) > 0.0, "the first Esc must arm the confirm window"
+    seen2 = []
+    state2, _ = _drive_live("\x1b\x1b\x04", lambda *a: None, handle_slash=seen2.append)
+    assert seen2.count("/undo") == 1, f"the second Esc must confirm exactly one /undo: {seen2}"
+    assert float(state2.get("undo_armed_at") or 0.0) == 0.0, "a confirmed undo must disarm the window"
+
+
+@check
+def live_app_typed_text_escape_clears_the_line_not_undo():
+    # Esc with text in the composer clears the line (and disarms any pending undo confirm) — it must
+    # never count toward the double-Esc undo confirmation.
+    seen = []
+    state, _ = _drive_live("\x1bdraft\x1b\x1b\x04", lambda *a: None, handle_slash=seen.append)
+    # Esc #1 arms; typing "draft" then Esc #2 clears the text and disarms; Esc #3 re-arms only.
+    assert "/undo" not in seen, f"clearing typed text must reset the undo confirmation: {seen}"
+
+
 def main():
     failed = 0
     for fn in CHECKS:

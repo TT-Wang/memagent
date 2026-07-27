@@ -1688,13 +1688,19 @@ def _live_status_line(status: str, stats: dict, width: int) -> FormattedText:
         "!": "fg:ansiyellow bold", "✗": "fg:ansired bold", "✓": "fg:ansigreen bold",
     }.get(glyph, "fg:ansibrightcyan bold")
     width = max(12, int(width or 100))
+    # The sticky read-only mode must never be invisible (same rule as the idle toolbar chip): steers
+    # happen mid-turn, which is exactly when only THIS line is on screen — so the chip rides it too.
+    planning = [("fg:ansiyellow bold", "◦ planning"), ("fg:ansibrightblack", " · ")] \
+        if stats.get("planning") else []
+    plan_cells = sum(get_cwidth(text) for _, text in planning)
     tokens = f"{_compact_count(stats.get('tokens', 0))} tok"
     savings = _savings_label(stats)
     meter_cells = get_cwidth(tokens) + get_cwidth(savings) + 6
-    if width >= 52 and meter_cells <= width - 18:
-        body_width = max(10, width - 5 - meter_cells)
+    if width >= 52 and meter_cells + plan_cells <= width - 18:
+        body_width = max(10, width - 5 - meter_cells - plan_cells)
         return FormattedText([
             (glyph_style, f"  {glyph} "),
+            *planning,
             ("", _shorten_cells(body, body_width)),
             ("fg:ansibrightblack", " · "),
             ("fg:ansicyan", tokens),
@@ -1703,7 +1709,8 @@ def _live_status_line(status: str, stats: dict, width: int) -> FormattedText:
         ])
     return FormattedText([
         (glyph_style, f"  {glyph} "),
-        ("", _shorten_cells(body, max(8, width - 5))),
+        *planning,
+        ("", _shorten_cells(body, max(8, width - 5 - plan_cells))),
     ])
 
 
@@ -1738,10 +1745,11 @@ def build_live_app(*, console: Console, stats: dict, root: str | None, run_one_t
     from prompt_toolkit.layout.menus import MultiColumnCompletionsMenu
     from prompt_toolkit.widgets import Frame, TextArea
 
-    state = {"status": "", "status_override": False, "progress": None,
+    state = {"status": "", "status_override": False, "status_expires_at": 0.0, "progress": None,
              "running": False, "signal": None, "last": None, "threads": [],
              "input_request": None, "exit_when_idle": False, "closing": False,
-             "root": root, "suspended_slash": "", "status_owner": 0, "sink_generation": 0}
+             "root": root, "suspended_slash": "", "status_owner": 0, "sink_generation": 0,
+             "undo_armed_at": 0.0}
     state_lock = threading.RLock()
     app_ref = {"value": None}
     toolbar = _toolbar(stats, lambda: console.width)
@@ -1767,6 +1775,7 @@ def build_live_app(*, console: Console, stats: dict, root: str | None, run_one_t
         with state_lock:
             state["status"] = text or ""
             state["status_override"] = True
+            state["status_expires_at"] = 0.0   # only the Esc-undo hint sets an expiry, after this call
             # A host message may replace the headline, but active child truth remains visible below it.
             # Clearing this snapshot during Ctrl-C/input made a healthy fan-out appear to vanish until the
             # next child callback happened to repaint it.
@@ -1796,6 +1805,10 @@ def build_live_app(*, console: Console, stats: dict, root: str | None, run_one_t
 
     def _status_line():
         with state_lock:
+            expires = float(state.get("status_expires_at") or 0.0)
+            if state["status"] and expires and time.monotonic() > expires:
+                state["status"] = ""
+                state["status_expires_at"] = 0.0
             running, status, progress = state["running"], state["status"], state["progress"]
             status_override = state["status_override"]
         if running or status:
@@ -2166,8 +2179,26 @@ def build_live_app(*, console: Console, stats: dict, root: str | None, run_one_t
             return
         if ta.text.strip():
             ta.text = ""
+            with state_lock:
+                state["undo_armed_at"] = 0.0
         elif handle_slash is not None:
-            handle_slash("/undo")
+            # /undo reverts the last file edit — too destructive for one reflexive keypress on the
+            # most instinctive "cancel" key, so an idle Esc only ARMS it; a second Esc inside the
+            # window confirms. Anything else lets the window lapse harmlessly.
+            now = time.monotonic()
+            with state_lock:
+                armed_at = float(state.get("undo_armed_at") or 0.0)
+                confirmed = armed_at > 0.0 and now - armed_at <= 3.0
+                state["undo_armed_at"] = 0.0 if confirmed else now
+            if confirmed:
+                set_status("")
+                handle_slash("/undo")
+            else:
+                set_status("? Esc again within 3s to undo the last file edit")
+                with state_lock:
+                    # Self-expiring: without a deadline the hint would replace the idle toolbar until
+                    # the next status write, long after the confirm window lapsed.
+                    state["status_expires_at"] = now + 3.0
 
     app = Application(
         layout=Layout(FloatContainer(
