@@ -487,9 +487,9 @@ def _peer_wait_from_dict(value: Any) -> "PeerWait | None":
     if deadline is not None and (isinstance(deadline, bool) or not isinstance(deadline, (int, float))):
         raise GraphValidationError("peer_wait deadline_s must be a number or null")
     try:
-        return PeerWait(correlation_id=correlation, peer_id=peer,
-                        deadline_s=None if deadline is None else float(deadline))
-    except ValueError as exc:
+        deadline_f = None if deadline is None else float(deadline)
+        return PeerWait(correlation_id=correlation, peer_id=peer, deadline_s=deadline_f)
+    except (ValueError, OverflowError) as exc:
         raise GraphValidationError(f"invalid peer_wait: {exc}") from exc
 
 

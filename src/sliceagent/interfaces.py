@@ -230,9 +230,16 @@ class PeerWait:
         _validate_peer_identity(self.peer_id, "PeerWait.peer_id")
         if self.deadline_s is not None:
             import math as _math
-            if not isinstance(self.deadline_s, (int, float)) or isinstance(self.deadline_s, bool) \
-                    or not _math.isfinite(self.deadline_s) or self.deadline_s < 0:
-                raise ValueError("PeerWait.deadline_s must be a finite, non-negative number or None")
+            if not isinstance(self.deadline_s, (int, float)) or isinstance(self.deadline_s, bool):
+                raise ValueError("PeerWait.deadline_s must be a number or None")
+            try:
+                _d = float(self.deadline_s)
+            except (OverflowError, ValueError):
+                raise ValueError("PeerWait.deadline_s is out of representable range")
+            # Bounded so a hostile durable record cannot smuggle a non-finite/absurd value past
+            # recovery; ~317 years of seconds is far beyond any legitimate collaboration deadline.
+            if not _math.isfinite(_d) or _d < 0 or _d > 1e10:
+                raise ValueError("PeerWait.deadline_s must be finite, non-negative, and bounded")
 
 
 @dataclass(frozen=True)
