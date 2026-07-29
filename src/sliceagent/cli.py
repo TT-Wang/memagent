@@ -2449,6 +2449,14 @@ def main() -> None:
                 checkpoint=lambda m, s, _g=text: _rec.record(root, goal=_g, messages=m, step=s),
                 turn_id=local_store.active.artifact_id if local_store.active else "",
             )
+            # #49: the loop now sweeps retirement-window steers into the typed result instead of leaving
+            # them in the queue. The TUI's existing rescue reads the QUEUE after this returns (draft
+            # handoff), so put them back in their original item shape — they were never acked, and this
+            # keeps exactly one owner (the TUI rescue) for the user-facing recovery path.
+            _steer_q = getattr(sink, "steer_queue", None)
+            if _steer_q is not None:
+                for _text, _adm in getattr(result, "leftover_steers", ()) or ():
+                    _steer_q.put((_text, _adm) if _adm else _text)
             if _seal_local_turn(result.stop_reason, live_dispatch):
                 _rec.clear(root)                           # clear WAL only after this segment's required commit
             else:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import queue
 from types import SimpleNamespace as NS
 
-from sliceagent.events import SteerDelivered, TurnEnd
+from sliceagent.events import AssistantText, SteerDelivered, TurnEnd, TurnPhaseChanged
 from sliceagent.hooks import Hooks
 from sliceagent.loop import run_turn
 from sliceagent.registry import ToolText
@@ -94,6 +94,91 @@ def test_no_steer_queue_means_clean_single_pass():
         llm=llm, tools=_Host(), dispatch=lambda _e: None, hooks=Hooks(),
     )
     assert outcome.stop_reason == "end_turn" and len(llm.seen) == 1
+
+
+def test_budget_park_never_acks_undelivered_steers():
+    """#49 T1-1: a steer queued when a resource gate parks the turn must NOT get a SteerDelivered
+    receipt — the model never saw it. It returns unacked on leftover_steers for the next turn."""
+    class _Ceiling(Hooks):
+        def before_step(self, step):
+            return {"stop_turn": True, "reason": "over budget"}
+
+    q: queue.Queue = queue.Queue()
+    q.put(("too late", "adm-9"))
+    llm = _ScriptLLM([])                     # the model must never be called
+    events = []
+    outcome = run_turn(
+        build_slice=lambda: [{"role": "user", "content": "go"}],
+        llm=llm, tools=_Host(), dispatch=events.append, hooks=_Ceiling(), steer_queue=q,
+    )
+    assert outcome.stop_reason == "token_budget"
+    assert llm.seen == [], "no model call happened, so nothing can count as delivered"
+    assert not [e for e in events if isinstance(e, SteerDelivered)], \
+        "a park must never mint a false delivery receipt"
+    assert outcome.leftover_steers == (("too late", "adm-9"),)
+
+
+def test_retirement_window_steer_returns_unacked_on_leftovers():
+    """#49 T1-2: a steer landing between the loop's final drain and turn retirement was silently
+    stranded. It must come back on leftover_steers (unacked) while the turn still seals cleanly."""
+    q: queue.Queue = queue.Queue()
+
+    class _LateTyper(Hooks):
+        def should_continue_after_stop(self, stop_reason):
+            q.put(("typed during finalization", "adm-late"))   # deterministic: inside the window
+            return None
+
+    llm = _ScriptLLM([_done_response("answer")])
+    events = []
+    outcome = run_turn(
+        build_slice=lambda: [{"role": "user", "content": "go"}],
+        llm=llm, tools=_Host(), dispatch=events.append, hooks=_LateTyper(), steer_queue=q,
+    )
+    assert outcome.stop_reason == "end_turn"
+    assert any(isinstance(e, TurnEnd) for e in events)
+    assert not [e for e in events if isinstance(e, SteerDelivered)]
+    assert outcome.leftover_steers == (("typed during finalization", "adm-late"),)
+    assert q.empty(), "the kernel sweep owns the window; nothing is left dangling in the queue"
+
+
+def test_steered_final_candidate_is_observed_not_hidden():
+    """#49 T1-3: when a steer keeps the turn alive past a composed 'final' answer, that answer
+    stays in the trajectory and influences later calls — so it must be dispatched (non-final),
+    never silent hidden state."""
+    q: queue.Queue = queue.Queue()
+    llm = _ScriptLLM(
+        [_done_response("FIRST ANSWER"), _done_response("SECOND ANSWER")],
+        on_call=lambda n: q.put("keep going") if n == 1 else None,
+    )
+    events = []
+    outcome = run_turn(
+        build_slice=lambda: [{"role": "user", "content": "go"}],
+        llm=llm, tools=_Host(), dispatch=events.append, hooks=Hooks(), steer_queue=q,
+    )
+    assert outcome.stop_reason == "end_turn"
+    texts = [(e.content, e.final) for e in events if isinstance(e, AssistantText)]
+    assert ("FIRST ANSWER", False) in texts, \
+        "the superseded terminal candidate must be observable, not hidden model state"
+    assert texts[-1] == ("SECOND ANSWER", True)
+
+
+def test_broken_steer_queue_surfaces_and_never_kills_the_turn():
+    """#49 T1-4: a raising queue is a broken steering channel — surface it once as a typed phase
+    event and finish the turn; silence (the old behavior) masked dead steering from the host."""
+    class _BrokenQueue:
+        def get_nowait(self):
+            raise RuntimeError("durable queue offline")
+
+    llm = _ScriptLLM([_done_response("done")])
+    events = []
+    outcome = run_turn(
+        build_slice=lambda: [{"role": "user", "content": "go"}],
+        llm=llm, tools=_Host(), dispatch=events.append, hooks=Hooks(), steer_queue=_BrokenQueue(),
+    )
+    assert outcome.stop_reason == "end_turn"
+    broken = [e for e in events if isinstance(e, TurnPhaseChanged) and e.phase == "steer_channel_broken"]
+    assert len(broken) == 1, "exactly one typed surfacing of the broken channel"
+    assert outcome.leftover_steers == ()
 
 
 def test_steer_admission_id_rides_the_delivery_receipt():

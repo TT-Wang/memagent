@@ -16,6 +16,7 @@ import copy
 import hashlib
 import json
 import math
+import queue as _stdqueue
 import threading
 import time
 from collections import Counter, deque
@@ -1312,6 +1313,34 @@ def run_turn(*, build_slice, llm, tools, dispatch: Dispatcher, hooks: Hooks | No
     failure_origin = ""
     should_cancel = signal.is_set if signal is not None else None
 
+    steer_state = {"broken": False}
+
+    def _sweep_leftovers() -> tuple:
+        """Drain whatever is still queued at turn retirement WITHOUT delivering or acking it.
+
+        #49: the final drain and turn retirement are not atomic — a steer landing in that window
+        used to be silently stranded (unacked, invisible). The contract is now explicit: anything
+        swept here was never model-visible, gets NO SteerDelivered receipt, and is handed back on
+        ``TurnResult.leftover_steers`` for the caller to admit as the next turn's input. A steer
+        arriving after even this sweep simply stays in the queue — the caller owns the queue and
+        must inspect it after ``run_turn`` returns.
+        """
+        if steer_queue is None or steer_state["broken"]:
+            return ()
+        swept = []
+        while True:
+            try:
+                item = steer_queue.get_nowait()
+            except Exception:  # noqa: BLE001 — Empty OR broken: retirement never blocks on the queue
+                break
+            if isinstance(item, (tuple, list)) and len(item) == 2:
+                text, admission_id = str(item[0] or ""), str(item[1] or "")
+            else:
+                text, admission_id = str(item or ""), ""
+            if text.strip():
+                swept.append((text.strip(), admission_id))
+        return tuple(swept)
+
     def _drain_steers() -> int:
         """Append every queued user steer to the live trajectory; returns how many landed.
 
@@ -1322,13 +1351,23 @@ def run_turn(*, build_slice, llm, tools, dispatch: Dispatcher, hooks: Hooks | No
         between an assistant tool_calls message and its tool results would corrupt the sequence, so
         only the two call sites below (top of loop, pre-finalization) are allowed.
         """
-        if steer_queue is None:
+        if steer_queue is None or steer_state["broken"]:
             return 0
         landed = 0
         while True:
             try:
                 item = steer_queue.get_nowait()
-            except Exception:  # queue.Empty — drained; never let a UI queue break the turn
+            except _stdqueue.Empty:
+                break
+            except Exception as exc:  # noqa: BLE001
+                # #49: a raising queue is a BROKEN steering channel, not an empty one. Swallowing it
+                # silently disabled steering while the host believed it was live. Surface once, then
+                # stop polling this queue for the rest of the turn; the turn itself stays alive.
+                steer_state["broken"] = True
+                dispatch(TurnPhaseChanged(
+                    "steer_channel_broken",
+                    f"steer queue failed ({exc!r}); mid-turn steering disabled for this turn",
+                ))
                 break
             # Items are plain text, or (text, admission_id) from a host that must reconcile delivery
             # against a durable inbox (the Raft bridge): the id rides the SteerDelivered receipt so an
@@ -1395,6 +1434,7 @@ def run_turn(*, build_slice, llm, tools, dispatch: Dispatcher, hooks: Hooks | No
         # mutable Slice prose to distinguish a provider timeout from an ordinary stop.
         return TurnResult(
             reason, steps, total, message=msg, error_origin=error_origin, error_kind=error_kind,
+            leftover_steers=_sweep_leftovers(),
         )
 
     # The ENTIRE turn (seed build + loop) is wrapped so EVERY non-clean exit routes through _park — even
@@ -1416,7 +1456,6 @@ def run_turn(*, build_slice, llm, tools, dispatch: Dispatcher, hooks: Hooks | No
         while True:
             if signal is not None and signal.is_set():
                 return _park("aborted", None, closeout=False)
-            _drain_steers()          # user input queued mid-turn lands at this step boundary
             if steps >= max_steps:
                 # Parent turns keep the generic best-effort closeout by default. A staged explorer has a
                 # separately reserved, full-reasoning synthesis owner; its fast navigator opts out here so
@@ -1433,6 +1472,11 @@ def run_turn(*, build_slice, llm, tools, dispatch: Dispatcher, hooks: Hooks | No
                     "token_budget", before.get("reason") or BUDGET_EXHAUSTED("token_budget"),
                     closeout=False,
                 )
+            # #49: drain only AFTER the budget gates. Draining first acked steers (SteerDelivered) that a
+            # park would then never show to the model — a false delivery receipt at every no-closeout park,
+            # and a budget-exhausted closeout answer at the max_steps one. Post-gate, a drained steer is
+            # guaranteed a full model step; a steer arriving during a park returns on leftover_steers.
+            _drain_steers()          # user input queued mid-turn lands at this step boundary
             dispatch(StepBegin(steps))
             if checkpoint is not None:   # crash-recovery WAL: persist the in-flight turn BEFORE the LLM
                 _safe_advisory("checkpoint", lambda: checkpoint(messages, steps))   # call (best-effort)
@@ -1609,6 +1653,10 @@ def run_turn(*, build_slice, llm, tools, dispatch: Dispatcher, hooks: Hooks | No
                     if _drain_steers():
                         # A steer typed WHILE the model composed its "final" answer keeps the SAME turn
                         # alive: the answer stands in the trajectory, the steer becomes the next input.
+                        # #49: that standing answer must be OBSERVED, not hidden — it will influence every
+                        # later model call, so callers/UI see it as a non-final update before the turn moves on.
+                        if candidate:
+                            dispatch(AssistantText(candidate, final=False))
                         continue
                     dispatch(TurnPhaseChanged("checking_completion", "checking whether the turn can finish"))
                     cont = _safe_advisory("should_continue_after_stop", lambda: hooks.should_continue_after_stop(stop))
@@ -1630,8 +1678,11 @@ def run_turn(*, build_slice, llm, tools, dispatch: Dispatcher, hooks: Hooks | No
                         candidate or "Done — no summary to add.", final=True,
                         synthetic=not bool(candidate),
                     ))
+                    # #49: sweep BEFORE the clean-exit event so a steer that landed between the final drain
+                    # and retirement is never silently stranded — it returns unacked on leftover_steers.
+                    leftovers = _sweep_leftovers()
                     dispatch(TurnEnd(stop, steps, total.as_dict()))   # the ONE clean-exit event
-                    return TurnResult(stop, steps, total)
+                    return TurnResult(stop, steps, total, leftover_steers=leftovers)
 
                 # tool_use: accumulate the assistant turn (with tool_calls), run, accumulate the tool results
                 if candidate:
