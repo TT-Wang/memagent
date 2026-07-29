@@ -475,6 +475,36 @@ def probe_c2_typed_peer_steer() -> None:
         and getattr(ordinary_deliveries[0], "wake", None) == "none", \
         "ordinary peer delivery was conflated with correlated resume"
 
+    disguised_peer = (peer, "")
+    malformed_admission = ("not end-user prose", None)
+    invalid_shape_inbox: queue.Queue = queue.Queue()
+    invalid_shape_inbox.put(disguised_peer)
+    invalid_shape_inbox.put(malformed_admission)
+    invalid_shape_events = []
+    invalid_shape_llm = _ScriptLLM([_done("ignored invalid admission shapes")])
+    invalid_shape_result = run_turn(
+        build_slice=lambda: [{"role": "user", "content": "test invalid admission shapes"}],
+        llm=invalid_shape_llm,
+        tools=_Host(),
+        dispatch=invalid_shape_events.append,
+        hooks=Hooks(),
+        steer_queue=invalid_shape_inbox,
+    )
+    assert not any(
+        isinstance(event, (events_module.SteerDelivered, PeerMessageDelivered))
+        for event in invalid_shape_events
+    ), "a malformed steer pair received a human or peer delivery receipt"
+    provider_contents = [
+        str(message.get("content") or "")
+        for prepared in invalid_shape_llm.seen
+        for message in prepared
+    ]
+    assert str(peer) not in provider_contents and "not end-user prose" not in provider_contents, \
+        "a malformed steer pair was coerced into provider-visible end-user authority"
+    invalid_leftovers = tuple(getattr(invalid_shape_result, "leftover_steers", ()) or ())
+    assert disguised_peer in invalid_leftovers and malformed_admission in invalid_leftovers, \
+        "malformed steer pairs were not preserved intact for host-owned reconciliation"
+
     step_inbox: queue.Queue = queue.Queue()
     step_llm = _ScriptLLM(
         [
@@ -595,6 +625,33 @@ def probe_c2_typed_peer_steer() -> None:
         "a retirement-race peer message received a false delivered receipt"
     assert peer in tuple(getattr(retirement, "leftover_steers", ()) or ()), \
         "a peer message arriving between final drain and retirement was stranded"
+
+    class _MalformedRetirementQueue:
+        def __init__(self):
+            self.calls = 0
+
+        def get_nowait(self):
+            self.calls += 1
+            if self.calls <= 2:
+                raise queue.Empty
+            if self.calls == 3:
+                return disguised_peer
+            if self.calls == 4:
+                return malformed_admission
+            raise queue.Empty
+
+    malformed_retirement = run_turn(
+        build_slice=lambda: [{"role": "user", "content": "finish without coercion"}],
+        llm=_ScriptLLM([_done("done")]),
+        tools=_Host(),
+        dispatch=lambda _event: None,
+        hooks=Hooks(),
+        steer_queue=_MalformedRetirementQueue(),
+    )
+    assert tuple(getattr(malformed_retirement, "leftover_steers", ()) or ()) == (
+        disguised_peer,
+        malformed_admission,
+    ), "retirement sweep coerced malformed admission shapes into user text"
 
 
 def probe_c4_correlated_delegation_return() -> None:
