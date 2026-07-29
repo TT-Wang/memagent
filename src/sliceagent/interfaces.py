@@ -328,3 +328,60 @@ class PeerMessage:
         # on the RAW value, not `.strip()`, so blank strings reach the identity validator (linglong).
         if self.correlation_id:
             _validate_peer_identity(self.correlation_id, "PeerMessage.correlation_id")
+
+
+@dataclass(frozen=True)
+class PeerDelegation:
+    """A horizontal delegation request to a peer, awaiting a correlated typed result.
+
+    The correlation/deadline analogue of a vertical scoped-child spawn: ``correlation_id``
+    binds exactly one expected ``PeerResult``; ``deadline_s`` bounds how long the result
+    stays acceptable. Unlike a scoped child (keyed by invocation identity), this is a
+    peer-to-peer request/result with its own reply correlation and expiry.
+    """
+
+    correlation_id: str
+    peer_id: str
+    task: str
+    deadline_s: float | None = None
+
+    def __post_init__(self) -> None:
+        _validate_peer_identity(self.correlation_id, "PeerDelegation.correlation_id")
+        _validate_peer_identity(self.peer_id, "PeerDelegation.peer_id")
+        if not isinstance(self.task, str) or not self.task.strip() or len(self.task) > 8000:
+            raise ValueError("PeerDelegation.task must be a non-empty string (<=8000 chars)")
+        if self.deadline_s is not None:
+            import math as _math
+            if not isinstance(self.deadline_s, (int, float)) or isinstance(self.deadline_s, bool):
+                raise ValueError("PeerDelegation.deadline_s must be a number or None")
+            try:
+                _d = float(self.deadline_s)
+            except (OverflowError, ValueError):
+                raise ValueError("PeerDelegation.deadline_s is out of representable range")
+            if not _math.isfinite(_d) or _d < 0 or _d > 1e10:
+                raise ValueError("PeerDelegation.deadline_s must be finite, non-negative, and bounded")
+
+
+def correlate_peer_result(
+    delegation: PeerDelegation,
+    result: PeerResult,
+    *,
+    elapsed_s: float = 0.0,
+) -> "PeerResult | None":
+    """Return the peer result iff it correlates to the delegation and is not expired.
+
+    Correlation requires BOTH a matching ``correlation_id`` AND the expected ``peer_id`` —
+    a matching correlation from a different peer never satisfies a delegation. A result
+    arriving after ``deadline_s`` (measured by ``elapsed_s``) is rejected: an expired
+    delegation cannot be resurrected. Returns ``None`` on any mismatch/expiry (never raises
+    for an ordinary non-match), so callers get an addressable typed outcome, not parsed prose.
+    """
+    if not isinstance(delegation, PeerDelegation) or not isinstance(result, PeerResult):
+        raise ValueError("correlate_peer_result requires typed PeerDelegation and PeerResult")
+    if not result.correlation_id or result.correlation_id != delegation.correlation_id:
+        return None
+    if result.peer_id != delegation.peer_id:
+        return None
+    if delegation.deadline_s is not None and float(elapsed_s) > float(delegation.deadline_s):
+        return None
+    return result
