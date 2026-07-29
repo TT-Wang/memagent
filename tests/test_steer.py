@@ -278,11 +278,14 @@ def test_step_drain_rejects_malformed_items_without_coercion():
     from sliceagent.interfaces import PeerMessage
 
     peer = PeerMessage(message_id="m-9", peer_id="peer-x", content="peer says ship")
+    disguised = (peer, "")
+    bad_admission = ("text", None)
+    hostile = {"hostile": "dict"}
     q: queue.Queue = queue.Queue()
     q.put("real user steer")
-    q.put((peer, ""))            # malformed pair — must NOT become str(peer) user text
-    q.put(("text", None))        # non-string admission id — must NOT coerce to ("text", "")
-    q.put({"hostile": "dict"})
+    q.put(disguised)             # malformed pair — must NOT become str(peer) user text
+    q.put(bad_admission)         # non-string admission id — must NOT coerce to ("text", "")
+    q.put(hostile)
     llm = _ScriptLLM([_done_response("ok"), _done_response("done")])
     events = []
     outcome = run_turn(
@@ -301,6 +304,10 @@ def test_step_drain_rejects_malformed_items_without_coercion():
     assert "real user steer" in users
     assert not any("PeerMessage(" in c or "hostile" in c for c in users), \
         "no coerced object repr lands in the provider trajectory"
+    # Rejection is not disappearance: ownership transfers INTACT to leftover_steers (drain order)
+    # so a durable host can still reconcile the malformed admissions.
+    assert list(outcome.leftover_steers) == [disguised, bad_admission, hostile]
+    assert outcome.leftover_steers[0] is disguised
 
 
 def test_retirement_sweep_preserves_malformed_items_as_is():

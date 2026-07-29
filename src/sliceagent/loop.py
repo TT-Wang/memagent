@@ -1499,8 +1499,10 @@ def run_turn(*, build_slice, llm, tools, dispatch: Dispatcher, hooks: Hooks | No
                 # clem's end-to-end authority finding: NEVER str()-coerce a malformed item into a
                 # user-role message — a (PeerMessage, "") pair used to become the peer's repr as
                 # END-USER text with a SteerDelivered receipt. Reject typed and drop it from the
-                # trajectory: no user message, no receipt.
+                # trajectory: no user message, no receipt. Ownership transfers INTACT to
+                # deferred_leftovers so it still returns on leftover_steers for host reconciliation.
                 dispatch(SteerRejected(shape=value))
+                deferred_leftovers.append(item)
                 continue
             # Items are plain text, or an exact (str, str) (text, admission_id) pair from a host that
             # must reconcile delivery against a durable inbox (the Raft bridge): the id rides the
