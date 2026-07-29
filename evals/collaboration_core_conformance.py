@@ -112,6 +112,10 @@ def probe_c1_waiting_peer() -> None:
         "a non-finite peer-wait deadline",
         lambda: PeerWait(correlation_id="review-42", peer_id="reviewer", deadline_s=float("nan")),
     )
+    _assert_rejected(
+        "an oversized peer-wait deadline",
+        lambda: PeerWait(correlation_id="review-42", peer_id="reviewer", deadline_s=10**400),
+    )
     graph = active_work.WorkGraph().open_request(
         "peer-wait-request", "wait for an independent peer review",
         logical_id="peer-wait-logical",
@@ -168,6 +172,7 @@ def probe_c1_waiting_peer() -> None:
         ("correlation_id", 123),
         ("peer_id", 123),
         ("deadline_s", True),
+        ("deadline_s", 10**400),
     ):
         hostile = json.loads(json.dumps(parked.to_dict(), sort_keys=True))
         hostile_root = next(item for item in hostile["items"] if item["id"] == root.id)
