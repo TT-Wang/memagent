@@ -504,6 +504,32 @@ def probe_c2_typed_peer_steer() -> None:
     ]
     assert len(broken) == 1, "a broken peer admission channel was silently treated as an empty queue"
 
+    class _RetirementBrokenQueue:
+        def __init__(self):
+            self.calls = 0
+
+        def get_nowait(self):
+            self.calls += 1
+            if self.calls <= 2:
+                raise queue.Empty
+            raise RuntimeError("peer admission channel failed at retirement")
+
+    retirement_broken_events = []
+    run_turn(
+        build_slice=lambda: [{"role": "user", "content": "retirement channel failure"}],
+        llm=_ScriptLLM([_done("done")]),
+        tools=_Host(),
+        dispatch=retirement_broken_events.append,
+        hooks=Hooks(),
+        steer_queue=_RetirementBrokenQueue(),
+    )
+    retirement_broken = [
+        event for event in retirement_broken_events
+        if isinstance(event, TurnPhaseChanged) and event.phase == "steer_channel_broken"
+    ]
+    assert len(retirement_broken) == 1, \
+        "a peer admission channel failing only at retirement was silently treated as empty"
+
     class _RetirementRaceQueue:
         def __init__(self):
             self.calls = 0
