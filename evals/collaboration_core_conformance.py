@@ -116,6 +116,19 @@ def probe_c1_waiting_peer() -> None:
         pass
     else:
         raise AssertionError("a mismatched peer result resumed the parked request")
+    matching = _construct(
+        PeerResult,
+        correlation_id="review-42",
+        peer_id="reviewer",
+        status="ok",
+        report="independently verified",
+    )
+    resumed = resume(parked, matching, logical_id="peer-wait-logical")
+    resumed_root = resumed.get(root.id)
+    assert resumed_root is not None and resumed_root.status == "in_progress", \
+        "a matching peer result did not resume the parked request"
+    assert getattr(resumed_root, "peer_wait", None) is None, \
+        "a matching peer result resumed work without clearing the durable wait"
 
 
 class _ScriptLLM:
