@@ -92,6 +92,16 @@ def probe_c1_waiting_peer() -> None:
         "waiting_peer with progress output was delivered instead of parked"
     assert getattr(root, "peer_wait", None) == wait, \
         "the durable work item lost its typed peer correlation"
+    restored = active_work.WorkGraph.from_dict(
+        json.loads(json.dumps(parked.to_dict(), sort_keys=True))
+    )
+    restored_root = restored.get(root.id)
+    assert restored_root is not None and restored_root.status == "waiting_peer", \
+        "waiting_peer did not survive the durable WorkGraph wire round-trip"
+    assert getattr(restored_root, "peer_wait", None) == wait, \
+        "peer correlation did not survive the durable WorkGraph wire round-trip"
+    parked = restored
+    root = restored_root
 
     state = pfc.Slice()
     state.active_work = parked
