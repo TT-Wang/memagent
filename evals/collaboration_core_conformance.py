@@ -55,6 +55,14 @@ def _construct(cls, **values):
         ) from exc
 
 
+def _assert_rejected(label: str, operation: Callable[[], Any]) -> None:
+    try:
+        operation()
+    except (TypeError, ValueError):
+        return
+    raise AssertionError(f"{label} was accepted instead of failing closed")
+
+
 def probe_c1_waiting_peer() -> None:
     active_work = importlib.import_module("sliceagent.active_work")
     regions = importlib.import_module("sliceagent.regions")
@@ -72,9 +80,49 @@ def probe_c1_waiting_peer() -> None:
         peer_id="reviewer",
         deadline_s=30.0,
     )
+    _assert_rejected(
+        "an empty peer-wait correlation",
+        lambda: PeerWait(correlation_id="", peer_id="reviewer", deadline_s=30.0),
+    )
+    _assert_rejected(
+        "a peer wait without a target peer",
+        lambda: PeerWait(correlation_id="review-42", peer_id="", deadline_s=30.0),
+    )
+    _assert_rejected(
+        "a negative peer-wait deadline",
+        lambda: PeerWait(correlation_id="review-42", peer_id="reviewer", deadline_s=-1.0),
+    )
+    _assert_rejected(
+        "a non-finite peer-wait deadline",
+        lambda: PeerWait(correlation_id="review-42", peer_id="reviewer", deadline_s=float("nan")),
+    )
     graph = active_work.WorkGraph().open_request(
         "peer-wait-request", "wait for an independent peer review",
         logical_id="peer-wait-logical",
+    )
+    graph_root = graph.unresolved_roots[-1]
+    _assert_rejected(
+        "waiting_peer without typed correlation state",
+        lambda: active_work.WorkItem(
+            id=graph_root.id,
+            root_id=graph_root.root_id,
+            source_refs=graph_root.source_refs,
+            status="waiting_peer",
+            kind="request",
+            logical_id=graph_root.logical_id,
+        ),
+    )
+    _assert_rejected(
+        "peer-wait metadata on a non-waiting item",
+        lambda: active_work.WorkItem(
+            id=graph_root.id,
+            root_id=graph_root.root_id,
+            source_refs=graph_root.source_refs,
+            status="open",
+            kind="request",
+            logical_id=graph_root.logical_id,
+            peer_wait=wait,
+        ),
     )
     try:
         parked = graph.seal_current(
@@ -126,6 +174,19 @@ def probe_c1_waiting_peer() -> None:
         pass
     else:
         raise AssertionError("a mismatched peer result resumed the parked request")
+    wrong_peer = _construct(
+        PeerResult,
+        correlation_id="review-42",
+        peer_id="different-peer",
+        status="ok",
+        report="forged result",
+    )
+    try:
+        resume(parked, wrong_peer, logical_id="peer-wait-logical")
+    except (ValueError, active_work.ActiveWorkError):
+        pass
+    else:
+        raise AssertionError("a result from the wrong peer resumed the parked request")
     matching = _construct(
         PeerResult,
         correlation_id="review-42",
