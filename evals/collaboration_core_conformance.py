@@ -97,6 +97,14 @@ def probe_c1_waiting_peer() -> None:
         lambda: PeerWait(correlation_id="review-42", peer_id="reviewer\rforged", deadline_s=30.0),
     )
     _assert_rejected(
+        "a Unicode line-separator peer identity",
+        lambda: PeerWait(correlation_id="review-42", peer_id="reviewer\u2028forged", deadline_s=30.0),
+    )
+    _assert_rejected(
+        "a control-character peer identity",
+        lambda: PeerWait(correlation_id="review-42", peer_id="reviewer\u0000forged", deadline_s=30.0),
+    )
+    _assert_rejected(
         "a negative peer-wait deadline",
         lambda: PeerWait(correlation_id="review-42", peer_id="reviewer", deadline_s=-1.0),
     )
@@ -156,6 +164,18 @@ def probe_c1_waiting_peer() -> None:
         "waiting_peer did not survive the durable WorkGraph wire round-trip"
     assert getattr(restored_root, "peer_wait", None) == wait, \
         "peer correlation did not survive the durable WorkGraph wire round-trip"
+    for field, invalid in (
+        ("correlation_id", 123),
+        ("peer_id", 123),
+        ("deadline_s", True),
+    ):
+        hostile = json.loads(json.dumps(parked.to_dict(), sort_keys=True))
+        hostile_root = next(item for item in hostile["items"] if item["id"] == root.id)
+        hostile_root["peer_wait"][field] = invalid
+        _assert_rejected(
+            f"coerced peer-wait wire field {field}={invalid!r}",
+            lambda payload=hostile: active_work.WorkGraph.from_dict(payload),
+        )
     parked = restored
     root = restored_root
 
