@@ -27,12 +27,16 @@ def readonly_spin_nudges_to_answer():
 
 
 @check
-def readonly_nudge_quiet_below_threshold_and_on_error():
+def readonly_nudge_fires_exactly_at_threshold_and_error_gates_it():
+    # #55: pin the BOUNDARY, not arbitrary below-values — raising the constant silently made the
+    # old fixture (2 and 9) vacuous. One-below is quiet, at-threshold fires, error gates above it.
     s = Slice(); s.reset("t")
-    s.turn_actions = 2                                            # below EXPLORE_NUDGE_AFTER → no nudge yet
-    assert render_convergence(s) == ""
-    s.turn_actions = 9; s.last_error = "boom"                     # an error gates the nudge even when explored a lot
-    assert render_convergence(s) == ""
+    s.turn_actions = EXPLORE_NUDGE_AFTER - 1
+    assert render_convergence(s) == "", "one below the threshold must stay quiet"
+    s.turn_actions = EXPLORE_NUDGE_AFTER
+    assert render_convergence(s) != "", "at the threshold the checkpoint must fire"
+    s.turn_actions = EXPLORE_NUDGE_AFTER + 5; s.last_error = "boom"
+    assert render_convergence(s) == "", "a live error gates the nudge at any count"
 
 
 @check
@@ -89,6 +93,24 @@ def strong_escalation_requires_reobservation_not_raw_count():
         {"id": "r2", "name": "run_command", "args": {"path": "f1"}, "status": "succeeded", "obs_digest": "d1"},
     ]
     assert "STOP NOW" in render_convergence(s)
+
+
+@check
+def model_authored_note_never_breaks_repeat_identity():
+    # #55: 113ec74 switched repeat identity to canonical_tool_args (which drops the commentary
+    # `note`) without a direct pin. Three byte-identical calls where one adds a note are the SAME
+    # physical observation — annotating must not disarm the STOP escalation.
+    from sliceagent.regions import _repeat_pressure
+    s = Slice(); s.reset("t")
+    base = {"path": "a.py"}
+    s.runtime.recent_calls = [
+        {"id": "c1", "name": "read_file", "args": dict(base), "status": "succeeded", "obs_digest": "d"},
+        {"id": "c2", "name": "read_file", "args": {**base, "note": "re-checking the guard"},
+         "status": "succeeded", "obs_digest": "d"},
+        {"id": "c3", "name": "read_file", "args": dict(base), "status": "succeeded", "obs_digest": "d"},
+    ]
+    assert _repeat_pressure(s) == 2, \
+        "a model-authored note on one of three identical calls broke the repeat chain"
 
 
 @check

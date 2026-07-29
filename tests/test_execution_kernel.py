@@ -452,11 +452,41 @@ def wedged_children_over_the_wave_ceiling_cannot_freeze_the_parent_turn():
     )
     outcomes = box["outcomes"]
     assert len(outcomes) == total, outcomes
-    # every provider invocation still gets exactly one typed reply, and NO VERDICT != FAILED holds:
-    # a reaped-but-unconfirmed child is indeterminate; one that never started is cancelled.
-    assert all(o.status in (ToolStatus.INDETERMINATE, ToolStatus.CANCELLED, ToolStatus.FAILED)
-               for o in outcomes), [o.status for o in outcomes]
+    # EXACT statuses (#55): a reaped-but-unconfirmed child is INDETERMINATE — never FAILED, which
+    # would fabricate a verdict about work whose physical state is unknown (NO VERDICT != FAILED).
+    # The earlier `in (INDETERMINATE, CANCELLED, FAILED)` tolerance let that mutation pass green.
+    assert all(o.status is ToolStatus.INDETERMINATE for o in outcomes[:-1]), \
+        [o.status for o in outcomes]
     assert outcomes[-1].status is ToolStatus.CANCELLED, "the queued tail never ran"
+    # ...and the reap is TYPED, not prose: every wedged child's effects carry its timeout_kind.
+    for out in outcomes[:-1]:
+        kinds = [e.payload.get("timeout_kind") for e in out.effects
+                 if isinstance(getattr(e, "payload", None), dict) and "timeout_kind" in e.payload]
+        assert kinds and all(k in ("inactivity", "absolute") for k in kinds), \
+            f"wedged child lost its typed timeout_kind: {out.text[:80]!r} {kinds}"
+
+
+@check
+def production_loop_forwards_the_absolute_guard_to_the_scheduler():
+    """#55: deleting the production `lifecycle_absolute=_delegation_absolute()` wiring kept the
+    suite green — every test passed the guard by hand. Pin the forwarding and the guard's
+    fail-closed parsing so the leak guard cannot silently vanish from the production path."""
+    import inspect as _inspect
+    import os as _os
+
+    from sliceagent import loop as _loop
+    src = _inspect.getsource(_loop.run_tool_batch)
+    assert "lifecycle_absolute=_delegation_absolute()" in src, \
+        "run_tool_batch no longer forwards the absolute leak guard to run_ordered"
+    prior = _os.environ.get("AGENT_DELEGATION_ABSOLUTE")
+    try:
+        for raw, want in (("junk", 3600.0), ("0", 3600.0), ("-5", 3600.0), ("1800", 1800.0)):
+            _os.environ["AGENT_DELEGATION_ABSOLUTE"] = raw
+            assert _loop._delegation_absolute() == want, (raw, _loop._delegation_absolute())
+    finally:
+        _os.environ.pop("AGENT_DELEGATION_ABSOLUTE", None)
+        if prior is not None:
+            _os.environ["AGENT_DELEGATION_ABSOLUTE"] = prior
 
 
 @check

@@ -807,6 +807,23 @@ def _run_read_wave(
                     ToolStatus.INDETERMINATE,
                     f"Error: subagent {detail} and is still running after the bounded grace period; "
                     "its final outcome is indeterminate",
+                    # The reap must be TYPED, not prose-only (#55): a still-running child's physical
+                    # state is unknown, so every field says indeterminate — but the cause and its
+                    # timeout_kind are recorded facts, same schema as the settled-path effects.
+                    (ToolEffect(
+                        f"{job.task.invocation.id}:delegation-timeout",
+                        "child_outcome",
+                        {
+                            "artifact_id": "",
+                            "kind": str(job.task.invocation.args.get("agent") or ""),
+                            "status": "indeterminate",
+                            "operational_status": "indeterminate",
+                            "stop_reason": "indeterminate",
+                            "stop_cause": "delegation_timeout",
+                            "timeout_kind": kind,
+                            "partial": False,
+                        },
+                    ),),
                 ))
             else:
                 outcomes.append(_indeterminate_read(
