@@ -7,6 +7,7 @@ Verification, budgets, and the catastrophic-command floor are supplied via hooks
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import unicodedata as _unicodedata
 from typing import Protocol, runtime_checkable
 
 
@@ -198,9 +199,16 @@ class Oracle(Protocol):
 
 
 def _validate_peer_identity(value: str, field_name: str) -> None:
-    """Peer correlation/identity must be a non-empty, single-line, bounded token."""
-    if not isinstance(value, str) or not value.strip() or "\n" in value or "\r" in value or len(value) > 200:
-        raise ValueError(f"{field_name} must be a non-empty single-line string (<=200 chars)")
+    """Peer correlation/identity must be a non-empty, single-line, bounded token.
+
+    Rejects EVERY control character (Unicode category C*) and line/paragraph separator
+    (U+2028/U+2029) rather than a specific newline byte, so no one-character variant
+    (CR, LF, NEL, LS, PS, NUL, ...) can reopen the single-line durable-boundary invariant.
+    """
+    if not isinstance(value, str) or not value.strip() or len(value) > 200:
+        raise ValueError(f"{field_name} must be a non-empty string (<=200 chars)")
+    if any(_unicodedata.category(ch)[0] == "C" or ch in "\u2028\u2029" for ch in value):
+        raise ValueError(f"{field_name} must be single-line (no control or separator characters)")
 
 
 @dataclass(frozen=True)

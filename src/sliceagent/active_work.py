@@ -476,12 +476,21 @@ def _peer_wait_from_dict(value: Any) -> "PeerWait | None":
         return None
     if not isinstance(value, Mapping):
         raise GraphValidationError("work_item.peer_wait must be an object or null")
+    correlation = value.get("correlation_id")
+    peer = value.get("peer_id")
     deadline = value.get("deadline_s")
-    return PeerWait(
-        correlation_id=str(value.get("correlation_id") or ""),
-        peer_id=str(value.get("peer_id") or ""),
-        deadline_s=None if deadline is None else float(deadline),
-    )
+    # Type-check raw wire fields BEFORE construction — never coerce. A malformed recovery
+    # record (e.g. deadline_s: true, peer_id: 123) must fail closed, not be silently repaired
+    # into a plausible-but-fabricated typed value.
+    if not isinstance(correlation, str) or not isinstance(peer, str):
+        raise GraphValidationError("peer_wait correlation_id/peer_id must be strings")
+    if deadline is not None and (isinstance(deadline, bool) or not isinstance(deadline, (int, float))):
+        raise GraphValidationError("peer_wait deadline_s must be a number or null")
+    try:
+        return PeerWait(correlation_id=correlation, peer_id=peer,
+                        deadline_s=None if deadline is None else float(deadline))
+    except ValueError as exc:
+        raise GraphValidationError(f"invalid peer_wait: {exc}") from exc
 
 
 @dataclass(frozen=True)
