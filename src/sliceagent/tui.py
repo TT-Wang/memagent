@@ -45,6 +45,7 @@ from prompt_toolkit.utils import get_cwidth
 from .events import (AssistantText, ApiRetry, Event, LessonSaved, SteerDelivered, StepBegin, StepEnd,
                      SubagentProgress, ToolResult, ToolStarted, TurnCommitted, TurnEnd,
                      TurnInterrupted, TurnStarted)
+from .loop import _split_steer_handback
 from .mentions import completion_path
 from .plan_mode import plan_objective as _plan_objective
 from .plan_mode import plan_switch as _plan_switch
@@ -1868,31 +1869,6 @@ def _live_status_surface(status: str, snap, stats: dict, width: int,
     return FormattedText(fragments)
 
 
-def _split_steer_handback(leftover) -> tuple[list, list]:
-    """Split terminal leftover steers into (user-prose draft lines, host-owned typed items).
-
-    Only plain user text — a raw string, or a (text, "") pair — may become an input-box draft.
-    A (text, admission_id) pair belongs to a host reconciling a durable inbox, and a typed
-    PeerMessage (C2) is another AGENT's input: joining either into a draft both crashes the
-    string join and forges end-user authority over peer input. Typed items stay typed so the
-    caller can redrive them through the next turn's steer queue, where the loop admits them via
-    its own typed path (envelope + receipt).
-    """
-    draft_lines, typed = [], []
-    for item in leftover:
-        if isinstance(item, str):
-            if item.strip():
-                draft_lines.append(item)
-        elif (isinstance(item, (tuple, list)) and len(item) == 2
-              and not str(item[1] or "").strip()):
-            text = str(item[0] or "").strip()
-            if text:
-                draft_lines.append(text)
-        else:
-            typed.append(item)
-    return draft_lines, typed
-
-
 def build_live_app(*, console: Console, stats: dict, root: str | None, run_one_turn, handle_slash=None,
                    pt_input=None, pt_output=None):
     """Build the LIVE composer Application (split out from run_live so a test can drive it with a pipe input).
@@ -1913,6 +1889,7 @@ def build_live_app(*, console: Console, stats: dict, root: str | None, run_one_t
              "root": root, "suspended_slash": "", "status_owner": 0, "sink_generation": 0,
              "undo_armed_at": 0.0}
     state_lock = threading.RLock()
+    state["lock"] = state_lock           # exposed so a test can hold the composer barrier directly
     app_ref = {"value": None}
     toolbar = _toolbar(stats, lambda: console.width)
 
@@ -2149,16 +2126,21 @@ def build_live_app(*, console: Console, stats: dict, root: str | None, run_one_t
             set_running_status("◌ Continuing · applying your answer", owner=owner, signal=signal)
             ev.app.invalidate()
             return
+        text = ta.text.strip()
         with state_lock:
             running, steer_q = state["running"], state.get("steer_queue")
             owner, signal = state.get("status_owner", 0), state.get("signal")
+            steered = bool(running and text and steer_q is not None)
+            if steered:
+                # Enqueue UNDER the lock (clem's barrier finding): the put must be atomic with the
+                # (running, queue) snapshot — after release, _work.finally could drain and detach
+                # the queue, stranding an already-authorized steer in it.
+                steer_q.put(text)
         if running:
             # Mid-turn input is a STEER, not a new turn: queue it for the running loop's next step
             # boundary (was: silently swallowed). The queue lives exactly one turn; empty input is a no-op.
-            text = ta.text.strip()
-            if text and steer_q is not None:
+            if steered:
                 ta.text = ""
-                steer_q.put(text)
                 set_running_status("◌ steer queued · lands after the current step",
                                    owner=owner, signal=signal)
                 ev.app.invalidate()
@@ -2273,16 +2255,26 @@ def build_live_app(*, console: Console, stats: dict, root: str | None, run_one_t
                 sink.retire()
                 # Steers that arrived after the loop's final drain must not vanish: user prose goes
                 # back to the input box as a draft; host-owned typed items stay typed for redrive
-                # (see _split_steer_handback) instead of dropping them silently.
-                leftover = []
-                while True:
-                    try:
-                        leftover.append(steer_q.get_nowait())
-                    except queue.Empty:
-                        break
+                # (see _split_steer_handback) instead of dropping them silently. Everything through
+                # the detach happens under ONE state_lock (clem's barrier findings): detach the
+                # queue, drain+split it, stash typed pending, and only THEN expose running=False —
+                # a new turn must observe the stash, and a concurrent Enter enqueue (also under the
+                # lock) either lands in this drain or takes the new-turn path, never a detached queue.
                 with state_lock:
                     if state.get("steer_queue") is steer_q:
                         state["steer_queue"] = None
+                    leftover = []
+                    while True:
+                        try:
+                            leftover.append(steer_q.get_nowait())
+                        except queue.Empty:
+                            break
+                    draft_lines, typed = _split_steer_handback(leftover)
+                    if typed:
+                        # Host-owned typed items (durable (text, admission_id) pairs, PeerMessage)
+                        # are NOT user prose: keep them typed and redrive them through the NEXT
+                        # turn's steer queue — admitted there by the loop's own typed path.
+                        state.setdefault("pending_typed_steers", []).extend(typed)
                     if state.get("status_owner") == owner:
                         state["status_owner"] = 0
                         state["status"] = ""
@@ -2292,20 +2284,12 @@ def build_live_app(*, console: Console, stats: dict, root: str | None, run_one_t
                     # This is deliberately last: Enter cannot start a new owner in
                     # the old sink's clear-status window.
                     state["running"] = False
-                if leftover:
-                    draft_lines, typed = _split_steer_handback(leftover)
-                    if typed:
-                        # Host-owned typed items (durable (text, admission_id) pairs, PeerMessage)
-                        # are NOT user prose: keep them typed and redrive them through the NEXT
-                        # turn's steer queue — admitted there by the loop's own typed path.
-                        with state_lock:
-                            state.setdefault("pending_typed_steers", []).extend(typed)
-                    if draft_lines:
-                        draft = "\n".join(draft_lines)
-                        def restore_steer(text=draft):
-                            if not ta.text:
-                                ta.text = text
-                        _on_ui_thread(restore_steer)
+                if draft_lines:
+                    draft = "\n".join(draft_lines)
+                    def restore_steer(text=draft):
+                        if not ta.text:
+                            ta.text = text
+                    _on_ui_thread(restore_steer)
                 try:
                     app.invalidate()
                 except Exception:

@@ -506,6 +506,107 @@ def live_composer_round_trips_mid_turn_input_without_a_second_turn():
 
 
 @check
+def live_enter_steer_enqueue_holds_the_state_lock():
+    """clem's barrier finding: Enter used to snapshot (running, queue) under state_lock but put AFTER
+    releasing it — a concurrent _work.finally could drain+detach the queue and strand the steer. The
+    enqueue now happens under the lock, so holding the lock externally must BLOCK the put."""
+    import threading
+    import time
+
+    from prompt_toolkit.input.defaults import create_pipe_input
+    from prompt_toolkit.output import DummyOutput
+    from sliceagent.tui import build_live_app
+
+    console, _buf = _rec_console()
+    release_turn = threading.Event()
+    queues, errors = [], []
+
+    def fake_turn(_text, sink, _signal):
+        queues.append(sink.steer_queue)
+        release_turn.wait(timeout=8)
+
+    with create_pipe_input() as pinp:
+        app, state = build_live_app(
+            console=console, stats={"model": "test-model", "topic": "demo"}, root=None,
+            run_one_turn=fake_turn, pt_input=pinp, pt_output=DummyOutput(),
+        )
+        pinp.send_text("first turn\r")
+
+        def hold_and_steer():
+            try:
+                deadline = time.monotonic() + 5
+                while not queues and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                with state["lock"]:
+                    pinp.send_text("blocked steer\r")
+                    time.sleep(0.3)
+                    assert queues and queues[0].qsize() == 0, \
+                        "the Enter enqueue must block on state_lock, never race the detach"
+                deadline = time.monotonic() + 5
+                while queues and queues[0].qsize() == 0 and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                assert queues[0].qsize() == 1 and queues[0].get_nowait() == "blocked steer"
+            except AssertionError as exc:
+                errors.append(exc)
+            finally:
+                release_turn.set()
+                pinp.send_text("\x04")
+
+        racer = threading.Thread(target=hold_and_steer)
+        racer.start()
+        app.run()
+        racer.join(timeout=8)
+    for thread in state.get("threads", []):
+        thread.join(timeout=2)
+    assert not errors, errors
+
+
+@check
+def live_typed_leftover_redrives_into_the_next_turns_queue():
+    """A typed leftover from the previous turn's terminal handback (a durable (text, admission_id)
+    pair) must be stashed BEFORE running=False and redriven FIRST through the next turn's steer
+    queue — never joined into a user draft, never waiting an extra turn."""
+    import threading
+
+    from prompt_toolkit.input.defaults import create_pipe_input
+    from prompt_toolkit.output import DummyOutput
+    from sliceagent.tui import build_live_app
+
+    console, _buf = _rec_console()
+    seen, errors = [], []
+
+    def fake_turn(_text, sink, _signal):
+        try:
+            if not seen:
+                # a host-admitted steer swept at retirement and restored ahead of the queue
+                sink.steer_queue.put(("inbox item", "adm-7"))
+                seen.append("first")
+            else:
+                assert sink.steer_queue.get_nowait() == ("inbox item", "adm-7"), \
+                    "the typed leftover must redrive ahead of this turn, still typed"
+                seen.append("second")
+        except AssertionError as exc:
+            errors.append(exc)
+
+    with create_pipe_input() as pinp:
+        app, state = build_live_app(
+            console=console, stats={"model": "test-model", "topic": "demo"}, root=None,
+            run_one_turn=fake_turn, pt_input=pinp, pt_output=DummyOutput(),
+        )
+        pinp.send_text("one\r")
+        second = threading.Timer(0.4, lambda: pinp.send_text("two\r"))
+        quit_ = threading.Timer(0.8, lambda: pinp.send_text("\x04"))
+        second.start(); quit_.start()
+        app.run()
+        second.join(timeout=1); quit_.join(timeout=1)
+    for thread in state.get("threads", []):
+        thread.join(timeout=2)
+    assert not errors, errors
+    assert seen == ["first", "second"], seen
+    assert not state.get("pending_typed_steers"), "the stash must be consumed by the redrive"
+
+
+@check
 def live_ctrl_d_releases_pending_input_and_waits_for_the_worker():
     import threading
     from prompt_toolkit.input.defaults import create_pipe_input

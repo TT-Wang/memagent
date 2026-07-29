@@ -1036,15 +1036,18 @@ def _prepend_leftover_steers(steer_q, swept) -> None:
     restored prefix ([C, A, B] — linglong's finding). CPython's queue.Queue is deque-backed, so an
     extendleft under the queue's own mutex is the ONE critical section that preserves global
     ingress order. Items pass through AS-IS — plain text, (text, admission_id) pairs, and typed
-    PeerMessage objects (C2) — never destructured or stringified here. Mirrors stdlib put():
-    bump unfinished_tasks and wake ALL waiters, since a multi-item prepend can feed more than one.
+    PeerMessage objects (C2) — never destructured or stringified here.
+
+    ``unfinished_tasks`` is deliberately NOT incremented: ``swept`` must be items previously
+    get()-ed from THIS queue without task_done(), and get() never decrements the counter — the
+    items retain their original unfinished ownership, so re-counting them here would double-count
+    and make join() uncompletable (linglong). Only the physical reinsert + waiter wakeup happen.
     """
     items = tuple(swept or ())
     if steer_q is None or not items:
         return
     with steer_q.mutex:
         steer_q.queue.extendleft(reversed(items))
-        steer_q.unfinished_tasks += len(items)
         steer_q.not_empty.notify_all()
 
 

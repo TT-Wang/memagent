@@ -205,17 +205,26 @@ def test_steer_admission_id_rides_the_delivery_receipt():
 def test_prepend_leftover_steers_restores_ingress_order_as_is():
     """The TUI handback restores swept leftovers AHEAD of turn-time arrivals (they are older), and
     every item shape passes through unstringified — (text, admission_id) pairs and typed peer
-    messages intact."""
+    messages intact. unfinished_tasks is NOT re-counted: the sweep get()-ed the items without
+    task_done(), so they retain their original unfinished ownership and join() stays completable."""
     from sliceagent.cli import _prepend_leftover_steers
     from sliceagent.interfaces import PeerMessage
 
     peer = PeerMessage(message_id="m-1", peer_id="peer-a", content="review ready")
     q: queue.Queue = queue.Queue()
+    q.put(("A", "adm-1"))
+    q.put(peer)
+    swept = (q.get_nowait(), q.get_nowait())     # the core sweep: get() leaves ownership outstanding
     q.put("B")                                   # typed DURING the turn, after the sweep
-    _prepend_leftover_steers(q, (("A", "adm-1"), peer))
+    outstanding = q.unfinished_tasks
+    _prepend_leftover_steers(q, swept)
+    assert q.unfinished_tasks == outstanding, "swept items must not be re-counted (linglong)"
     assert q.get_nowait() == ("A", "adm-1")
     assert q.get_nowait() is peer
     assert q.get_nowait() == "B"
+    for _ in range(3):
+        q.task_done()
+    assert q.unfinished_tasks == 0, "one task_done per redriven item drains the counter to zero"
 
 
 def test_prepend_leftover_steers_is_atomic_against_concurrent_put():
@@ -227,9 +236,12 @@ def test_prepend_leftover_steers_is_atomic_against_concurrent_put():
     from sliceagent.cli import _prepend_leftover_steers
 
     q: queue.Queue = queue.Queue()
+    q.put("A1")
+    q.put("A2")
+    swept = (q.get_nowait(), q.get_nowait())
     q.put("B")                                   # arrived during the turn, after the sweep
     with q.mutex:                                # force both contenders to pend until we release
-        prepender = threading.Thread(target=_prepend_leftover_steers, args=(q, ("A1", "A2")))
+        prepender = threading.Thread(target=_prepend_leftover_steers, args=(q, swept))
         producer = threading.Thread(target=q.put, args=("C",))   # the still-newer concurrent steer
         prepender.start()
         producer.start()
@@ -241,13 +253,17 @@ def test_prepend_leftover_steers_is_atomic_against_concurrent_put():
 def test_terminal_handback_splits_user_prose_from_typed_items():
     """clem's finding: the terminal handback joined leftover items into a draft with "\\n".join —
     a TypeError on any typed item, and user-authority forgery had it coerced. Only plain user text
-    becomes a draft; (text, admission_id) pairs and peer messages stay typed for redrive."""
+    becomes a draft, classified EXACT-SHAPE (raw str or (str, "")): a non-string first element or
+    a blank/non-string admission id stays typed, never coerced into end-user prose (linglong)."""
     from sliceagent.interfaces import PeerMessage
-    from sliceagent.tui import _split_steer_handback
+    from sliceagent.loop import _split_steer_handback
 
     peer = PeerMessage(message_id="m-2", peer_id="peer-b", content="ship it")
-    draft, typed = _split_steer_handback(
-        ["keep typing", ("note", ""), ("inbox item", "adm-9"), peer, ("   ", "")]
-    )
-    assert draft == ["keep typing", "note"]
-    assert typed == [("inbox item", "adm-9"), peer]
+    draft, typed = _split_steer_handback([
+        "keep typing", ("note", ""), ["list pair", ""],      # exact user-prose shapes → draft
+        ("inbox item", "adm-9"), peer,                        # durable pair + peer message → typed
+        ("   ", ""),                                          # blank text → dropped entirely
+        ("blank adm", " "), (None, ""), ("text", None),       # non-exact shapes → typed, not coerced
+    ])
+    assert draft == ["keep typing", "note", "list pair"]
+    assert typed == [("inbox item", "adm-9"), peer, ("blank adm", " "), (None, ""), ("text", None)]

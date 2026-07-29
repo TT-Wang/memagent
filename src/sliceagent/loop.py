@@ -1297,6 +1297,33 @@ def _peer_envelope(peer: PeerMessage) -> str:
     return f"{_PEER_ENVELOPE_MARKER}\n{payload}"
 
 
+def _split_steer_handback(leftover) -> tuple[list, list]:
+    """Split terminal leftover steers into (user-prose draft lines, host-owned typed items).
+
+    Only plain user text — a raw string, or an exact (str, "") pair — may become an input-box
+    draft. A (text, admission_id) pair belongs to a host reconciling a durable inbox, and a typed
+    PeerMessage (C2) is another AGENT's input: joining either into a draft both crashes the
+    string join and forges end-user authority over peer input. Classification is EXACT-SHAPE, no
+    coercion: a non-string first element or a non-empty/non-string admission id stays typed.
+    Typed items stay typed so the caller can redrive them through the next turn's steer queue,
+    where the loop admits them via its own typed path (envelope + receipt). Kept in THIS module
+    (dependency-free) so the core steer suite can pin it without the optional TUI stack.
+    """
+    draft_lines, typed = [], []
+    for item in leftover:
+        if isinstance(item, str):
+            if item.strip():
+                draft_lines.append(item)
+        elif (isinstance(item, (tuple, list)) and len(item) == 2
+              and isinstance(item[0], str) and isinstance(item[1], str) and item[1] == ""):
+            if item[0].strip():
+                draft_lines.append(item[0].strip())
+            # blank user text with no admission id carries nothing — drop it, don't redrive
+        else:
+            typed.append(item)
+    return draft_lines, typed
+
+
 def run_turn(*, build_slice, llm, tools, dispatch: Dispatcher, hooks: Hooks | None = None,
              max_steps: int = 40, signal=None, checkpoint=None, consolidate=None,
              turn_id: str = "", call_namespace: str = "", transport_activity=None,
