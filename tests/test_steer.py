@@ -200,3 +200,54 @@ def test_steer_admission_id_rides_the_delivery_receipt():
     first = llm.seen[0]   # queued pre-turn → drained at the top of step 1
     steered = [m for m in first if m["role"] == "user" and m["content"] == "same words"]
     assert len(steered) == 2, "both steers land in the trajectory as plain user text"
+
+
+def test_prepend_leftover_steers_restores_ingress_order_as_is():
+    """The TUI handback restores swept leftovers AHEAD of turn-time arrivals (they are older), and
+    every item shape passes through unstringified — (text, admission_id) pairs and typed peer
+    messages intact."""
+    from sliceagent.cli import _prepend_leftover_steers
+    from sliceagent.interfaces import PeerMessage
+
+    peer = PeerMessage(message_id="m-1", peer_id="peer-a", content="review ready")
+    q: queue.Queue = queue.Queue()
+    q.put("B")                                   # typed DURING the turn, after the sweep
+    _prepend_leftover_steers(q, (("A", "adm-1"), peer))
+    assert q.get_nowait() == ("A", "adm-1")
+    assert q.get_nowait() is peer
+    assert q.get_nowait() == "B"
+
+
+def test_prepend_leftover_steers_is_atomic_against_concurrent_put():
+    """linglong's [C, A, B] race: drain-then-restore released the queue between the drain and the
+    restore, so a steer enqueued mid-restore landed AHEAD of the swept prefix. The prepend is one
+    critical section, so the prefix can never be split or overtaken — final order is deterministic."""
+    import threading
+
+    from sliceagent.cli import _prepend_leftover_steers
+
+    q: queue.Queue = queue.Queue()
+    q.put("B")                                   # arrived during the turn, after the sweep
+    with q.mutex:                                # force both contenders to pend until we release
+        prepender = threading.Thread(target=_prepend_leftover_steers, args=(q, ("A1", "A2")))
+        producer = threading.Thread(target=q.put, args=("C",))   # the still-newer concurrent steer
+        prepender.start()
+        producer.start()
+    prepender.join()
+    producer.join()
+    assert [q.get_nowait() for _ in range(4)] == ["A1", "A2", "B", "C"]
+
+
+def test_terminal_handback_splits_user_prose_from_typed_items():
+    """clem's finding: the terminal handback joined leftover items into a draft with "\\n".join —
+    a TypeError on any typed item, and user-authority forgery had it coerced. Only plain user text
+    becomes a draft; (text, admission_id) pairs and peer messages stay typed for redrive."""
+    from sliceagent.interfaces import PeerMessage
+    from sliceagent.tui import _split_steer_handback
+
+    peer = PeerMessage(message_id="m-2", peer_id="peer-b", content="ship it")
+    draft, typed = _split_steer_handback(
+        ["keep typing", ("note", ""), ("inbox item", "adm-9"), peer, ("   ", "")]
+    )
+    assert draft == ["keep typing", "note"]
+    assert typed == [("inbox item", "adm-9"), peer]

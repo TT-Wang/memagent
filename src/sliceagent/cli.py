@@ -1028,6 +1028,26 @@ def _env_from_config(c, pid: str | None = None) -> None:
             os.environ[_env] = _val
 
 
+def _prepend_leftover_steers(steer_q, swept) -> None:
+    """Prepend swept leftover steers AHEAD of the queue's current contents, atomically.
+
+    Swept items are OLDER than anything enqueued during the turn, so they must land ahead of it.
+    A drain-then-restore only moves the race: a steer enqueued mid-restore ends up ahead of the
+    restored prefix ([C, A, B] — linglong's finding). CPython's queue.Queue is deque-backed, so an
+    extendleft under the queue's own mutex is the ONE critical section that preserves global
+    ingress order. Items pass through AS-IS — plain text, (text, admission_id) pairs, and typed
+    PeerMessage objects (C2) — never destructured or stringified here. Mirrors stdlib put():
+    bump unfinished_tasks and wake ALL waiters, since a multi-item prepend can feed more than one.
+    """
+    items = tuple(swept or ())
+    if steer_q is None or not items:
+        return
+    with steer_q.mutex:
+        steer_q.queue.extendleft(reversed(items))
+        steer_q.unfinished_tasks += len(items)
+        steer_q.not_empty.notify_all()
+
+
 def main() -> None:
     # Host subcommands are handled BEFORE .env, the key gate, workspace leases, plugins, or MCP. In particular,
     # `sliceagent update` must never ingest repository configuration or accidentally boot an agent session.
@@ -2453,22 +2473,11 @@ def main() -> None:
             # them in the queue. The TUI's existing rescue reads the QUEUE after this returns (draft
             # handoff), so put them back in their original item shape — they were never acked, and this
             # keeps exactly one owner (the TUI rescue) for the user-facing recovery path.
-            _steer_q = getattr(sink, "steer_queue", None)
-            if _steer_q is not None:
-                # ORDER (linglong's finding): steers that arrived DURING the turn (after the sweep)
-                # are newer than the swept leftovers. Putting swept items back at the tail behind
-                # them inverts ingress order ([B, A]). Drain current arrivals first, then restore as
-                # swept + arrivals in original order. Items are preserved AS-IS: plain text,
-                # (text, admission_id) pairs, and typed PeerMessage objects (C2) all pass through
-                # unstringified.
-                _arrivals = []
-                while True:
-                    try:
-                        _arrivals.append(_steer_q.get_nowait())
-                    except Exception:  # queue.Empty — nothing newer arrived
-                        break
-                for _item in tuple(getattr(result, "leftover_steers", ()) or ()) + tuple(_arrivals):
-                    _steer_q.put(_item)
+            # ORDER (linglong's finding): the restore must be an ATOMIC PREPEND — swept items are older
+            # than anything enqueued during the turn, and a drain-then-restore lets a concurrent steer
+            # land ahead of the prefix ([C, A, B]).
+            _prepend_leftover_steers(getattr(sink, "steer_queue", None),
+                                     getattr(result, "leftover_steers", ()))
             if _seal_local_turn(result.stop_reason, live_dispatch):
                 _rec.clear(root)                           # clear WAL only after this segment's required commit
             else:
