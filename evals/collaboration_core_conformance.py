@@ -89,6 +89,14 @@ def probe_c1_waiting_peer() -> None:
         lambda: PeerWait(correlation_id="review-42", peer_id="", deadline_s=30.0),
     )
     _assert_rejected(
+        "a carriage-return peer-wait correlation",
+        lambda: PeerWait(correlation_id="review-42\rforged", peer_id="reviewer", deadline_s=30.0),
+    )
+    _assert_rejected(
+        "a carriage-return peer identity",
+        lambda: PeerWait(correlation_id="review-42", peer_id="reviewer\rforged", deadline_s=30.0),
+    )
+    _assert_rejected(
         "a negative peer-wait deadline",
         lambda: PeerWait(correlation_id="review-42", peer_id="reviewer", deadline_s=-1.0),
     )
