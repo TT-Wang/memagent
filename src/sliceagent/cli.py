@@ -2455,8 +2455,20 @@ def main() -> None:
             # keeps exactly one owner (the TUI rescue) for the user-facing recovery path.
             _steer_q = getattr(sink, "steer_queue", None)
             if _steer_q is not None:
-                for _text, _adm in getattr(result, "leftover_steers", ()) or ():
-                    _steer_q.put((_text, _adm) if _adm else _text)
+                # ORDER (linglong's finding): steers that arrived DURING the turn (after the sweep)
+                # are newer than the swept leftovers. Putting swept items back at the tail behind
+                # them inverts ingress order ([B, A]). Drain current arrivals first, then restore as
+                # swept + arrivals in original order. Items are preserved AS-IS: plain text,
+                # (text, admission_id) pairs, and typed PeerMessage objects (C2) all pass through
+                # unstringified.
+                _arrivals = []
+                while True:
+                    try:
+                        _arrivals.append(_steer_q.get_nowait())
+                    except Exception:  # queue.Empty — nothing newer arrived
+                        break
+                for _item in tuple(getattr(result, "leftover_steers", ()) or ()) + tuple(_arrivals):
+                    _steer_q.put(_item)
             if _seal_local_turn(result.stop_reason, live_dispatch):
                 _rec.clear(root)                           # clear WAL only after this segment's required commit
             else:
