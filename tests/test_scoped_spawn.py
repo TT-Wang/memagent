@@ -14,20 +14,21 @@ import os
 import sys
 import tempfile
 import threading
+import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from sliceagent.access import AllAccess, ReadAllAccess            # noqa: E402
 from sliceagent.agents import BUILTIN_AGENTS                       # noqa: E402
-from sliceagent.events import SubagentProgress                     # noqa: E402
-from sliceagent.execution import ToolStatus                        # noqa: E402
+from sliceagent.events import StepBegin, SubagentProgress           # noqa: E402
+from sliceagent.execution import ChildActivity, ToolStatus          # noqa: E402
 from sliceagent.hooks import Hooks                                 # noqa: E402
 from sliceagent.llm import AssistantMessage, ToolCall              # noqa: E402
 from sliceagent.loop import run_tool_batch                         # noqa: E402
 from sliceagent.memory import NullMemory                           # noqa: E402
 from sliceagent.retriever import NullRetriever                     # noqa: E402
 from sliceagent.scoped_agent import ScopedSurface, allowed_for     # noqa: E402
-from sliceagent.scoped_spawn import ScopedSpawnHost                # noqa: E402
+from sliceagent.scoped_spawn import ScopedSpawnHost, _ProgressEmitter  # noqa: E402
 from sliceagent.tools import LocalToolHost                         # noqa: E402
 
 CHECKS = []
@@ -190,6 +191,114 @@ def matrix_truth_progress_phases_and_identities():
     assert seqs == sorted(seqs) and len(set(seqs)) == len(seqs), "sequence must be monotonic"
     assert all(u.parent_turn_id == "t-1" and u.agent_id for u in ups)
     assert all(u.kind == "explorer" for u in ups)
+
+
+@check
+def child_activity_touches_before_progress_dedup_and_wires_transport_heartbeats():
+    activity = ChildActivity(1.0)
+    seen = []
+    emitter = _ProgressEmitter(seen.append, activity=activity, agent_id="a", parent_turn_id="t",
+                               launch_ordinal=1, kind="explorer", name="explorer", depth=1,
+                               session_id="s", invocation_id="i", request_ordinal=1, objective="x")
+    emitter(StepBegin(1))
+    first = activity.last
+    time.sleep(0.001)
+    emitter(StepBegin(1))  # same visible row: deduplicated for presentation, still liveness
+    assert activity.last > first
+    assert len(seen) == 1
+    emitter.settling()
+    settling = activity.last
+    time.sleep(0.001)
+    emitter.settling()
+    assert activity.last > settling, "sealing activity must refresh even when its UI row is deduplicated"
+    assert len(seen) == 2
+
+    heartbeats = []
+
+    class HeartbeatLLM(_ScriptedLLM):
+        def set_transport_activity(self, sink):
+            self._activity = sink
+
+        def complete_with_control(self, messages, tools, *, should_cancel=None,
+                                  transport_activity=None):
+            sink = transport_activity if transport_activity is not None else self._activity
+            assert sink is not None, "the scoped child cleared its mandatory transport observer"
+            sink("stream_heartbeat", {"chunks": 1})
+            heartbeats.append(True)
+            return self.complete(messages, tools)
+
+    host = _host(_workspace(), llm=HeartbeatLLM())
+    run_tool_batch([_TC({"agent": "explorer", "task": "Read a.py."})],
+                   host, lambda _event: None, Hooks(), step=1, turn_id="t-1")
+    assert heartbeats, "child transport activity never reached the liveness cell"
+
+
+@check
+def both_production_touch_sites_actually_advance_the_child_liveness_cell():
+    """WIRING, not ends. The check above proves the emitter touches when handed a cell, and that the
+    transport sink is non-None — but a sink of `lambda *a, **k: None` and `activity=None` on the emitter
+    satisfy both. Negative control: no-op'ing BOTH production sites in scoped_spawn.py left the whole
+    suite green, so nothing pinned the premise of activity-based deadlines. With them neutered no real
+    child ever touches its cell, and the scheduler cuts off a healthy, actively-streaming child at
+    AGENT_DELEGATION_TIMEOUT — reinstating the fixed wave deadline the change existed to remove."""
+    import sliceagent.loop as loop_mod
+
+    cells: list = []
+    real_activity = loop_mod.ChildActivity
+
+    class Recording(real_activity):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            cells.append(self)
+
+    # -- transport path: the sink must move the cell the LOOP injected, not a private one -------
+    span: dict = {}
+
+    class TransportLLM(_ScriptedLLM):
+        def set_transport_activity(self, sink):
+            self._sink = sink
+
+        def complete_with_control(self, messages, tools, *, should_cancel=None,
+                                  transport_activity=None):
+            sink = transport_activity if transport_activity is not None else getattr(self, "_sink", None)
+            assert sink is not None, "the scoped child cleared its mandatory transport observer"
+            cell = cells[-1]
+            span["before"] = cell.last
+            time.sleep(0.002)
+            sink("stream_heartbeat", {"chunks": 1})
+            span["after"] = cell.last
+            return self.complete(messages, tools)
+
+    # -- progress path: child lifecycle events alone must move it, with NO heartbeat at all ------
+    quiet: dict = {}
+
+    class QuietLLM(_ScriptedLLM):
+        def complete_with_control(self, messages, tools, *, should_cancel=None,
+                                  transport_activity=None):
+            quiet.setdefault("at_model_call", cells[-1].last)
+            time.sleep(0.002)
+            return self.complete(messages, tools)
+
+    loop_mod.ChildActivity = Recording
+    try:
+        run_tool_batch([_TC({"agent": "explorer", "task": "Read a.py."})],
+                       _host(_workspace(), llm=TransportLLM()), lambda _e: None, Hooks(),
+                       step=1, turn_id="t-transport")
+        assert span["after"] > span["before"], (
+            "the transport heartbeat did not advance the loop-injected liveness cell — the sink is "
+            "wired to something other than the child's activity"
+        )
+        cells.clear(); quiet.clear()
+        run_tool_batch([_TC({"agent": "explorer", "task": "Read a.py."})],
+                       _host(_workspace(), llm=QuietLLM()), lambda _e: None, Hooks(),
+                       step=1, turn_id="t-quiet")
+        assert cells, "no liveness cell was created for the child"
+        assert cells[-1].last > quiet["at_model_call"], (
+            "child lifecycle events did not advance the liveness cell — ScopedSpawnHost is not passing "
+            "the real activity into _ProgressEmitter, so a streaming child looks idle to the scheduler"
+        )
+    finally:
+        loop_mod.ChildActivity = real_activity
 
 
 @check

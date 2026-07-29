@@ -607,7 +607,7 @@ class ArtifactStore:
             raise ArtifactCorruptError(f"cannot read artifact {artifact_id!r}: {exc}") from exc
         try:
             artifact = Artifact.from_dict(json.loads(raw.decode("utf-8")))
-        except (UnicodeError, ValueError, TypeError, PersistenceError) as exc:
+        except (UnicodeError, ValueError, TypeError, OverflowError, PersistenceError) as exc:
             raise ArtifactCorruptError(f"artifact {artifact_id!r} is corrupt: {exc}") from exc
         if artifact.id != artifact_id:
             raise ArtifactCorruptError(f"artifact path {artifact_id!r} contains id {artifact.id!r}")
@@ -764,7 +764,7 @@ class CheckpointStore:
             raise CheckpointCorruptError(f"cannot read checkpoint {path}: {exc}") from exc
         try:
             return Checkpoint.from_dict(json.loads(raw.decode("utf-8")))
-        except (UnicodeError, ValueError, TypeError, PersistenceError) as exc:
+        except (UnicodeError, ValueError, TypeError, OverflowError, PersistenceError) as exc:
             raise CheckpointCorruptError(f"checkpoint {path} is corrupt: {exc}") from exc
 
     def load(self, workspace_id: str, task_id: str) -> Checkpoint | None:

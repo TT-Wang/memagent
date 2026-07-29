@@ -53,13 +53,13 @@ from .guidance import BUDGET_EXHAUSTED
 from .hooks import Hooks, ToolPreflight
 from .errors import IndeterminateModelCallError, RetryCancelledError
 from .model_runner import complete_model_call
-from .execution import (CHILD_CANCEL_SIGNAL_ARG, CHILD_INVOCATION_ID_ARG,
-                        CHILD_REQUEST_ORDINAL_ARG,
+from .execution import (CHILD_ACTIVITY_ARG, CHILD_CANCEL_SIGNAL_ARG, CHILD_INVOCATION_ID_ARG,
+                        CHILD_REQUEST_ORDINAL_ARG, ChildActivity,
                         ToolInvocation, ToolOutcome, ToolPurity,
                         PreflightOverflow, ToolStatus, TurnOutcome, Usage,
-                        available_content_capacity, estimate_model_call)
+                        available_content_capacity, estimate_model_call, is_delegation_tool)
 from .registry import ToolAdmission, ToolText, finalize_tool_outcome, tool_result_text
-from .scheduler import ScheduledTool, run_ordered
+from .scheduler import (DEFAULT_LIFECYCLE_ABSOLUTE, ScheduledTool, run_ordered)
 
 
 def _as_text(out):
@@ -158,14 +158,13 @@ def _tool_timeout() -> float | None:
 
 
 def _delegation_timeout() -> float:
-    """Wall-clock CEILING (seconds) for a delegation/lifecycle read-wave, from AGENT_DELEGATION_TIMEOUT.
+    """Per-child INACTIVITY window for delegation, from AGENT_DELEGATION_TIMEOUT.
     Defaults NON-None (900s) and, unlike _tool_timeout, cannot be turned off: a spawned child is exempt
     from the SHORT per-tool reader deadline (it must be allowed to SEAL its report rather than be abandoned
     mid-write), but a child whose loop never terminates would otherwise freeze the parent turn forever —
-    the wave's own deadline machinery marks a still-running child INDETERMINATE at this ceiling and the turn
-    continues. Default is generous (a real child, bounded by max_steps and its per-call watchdog, seals in
-    well under it); 0/invalid → the default. To tolerate a slow proxy, RAISE it — there is deliberately no
-    disable, since disabling reinstates the freeze."""
+    the scheduler marks a child INDETERMINATE only after this much silence. Child loop events and transport
+    heartbeats refresh its own activity cell, so a healthy long-running sibling cannot mask a hung child and
+    active work is not cancelled merely for crossing a wave-wide wall clock. 0/invalid → the default."""
     import os
     raw = os.environ.get("AGENT_DELEGATION_TIMEOUT", "").strip()
     try:
@@ -173,6 +172,17 @@ def _delegation_timeout() -> float:
         return v if math.isfinite(v) and v > 0 else 900.0
     except ValueError:
         return 900.0
+
+
+def _delegation_absolute() -> float:
+    """Non-disableable absolute leak guard for a delegation wave (default 3600 seconds)."""
+    import os
+    raw = os.environ.get("AGENT_DELEGATION_ABSOLUTE", "").strip()
+    try:
+        v = float(raw)
+        return v if math.isfinite(v) and v > 0 else DEFAULT_LIFECYCLE_ABSOLUTE
+    except ValueError:
+        return DEFAULT_LIFECYCLE_ABSOLUTE
 
 
 def _delegation_cancel_grace() -> float:
@@ -440,7 +450,11 @@ def _project_request_seed(plan: SeedPlan, trajectory: list[dict], llm, schemas: 
         report = estimate_model_call(llm, candidate, schemas)
         if report.required_tokens <= report.context_window:
             return projected
-        capacity = max(0, capacity - max(1, report.required_tokens - report.context_window))
+        # The deficit is in TOKENS; capacity is a CHAR budget — convert with the exact estimator
+        # inverse so one pass closes the gap (a raw token subtraction under-tightens ~2.6× and can
+        # exhaust the bounded attempts, #33 review).
+        from .execution import tokens_to_chars as _t2c
+        capacity = max(0, capacity - max(1, _t2c(report.required_tokens - report.context_window)))
     raise ContextOverflow(ValueError("elastic seed could not converge on a provider-fit representation"))
 
 
@@ -553,7 +567,9 @@ def _prepare_model_messages(
         selected = seed_plan.last_selection
         used = int(getattr(selected, "used_chars", 0) or 0)
         current_capacity = seed_plan._fixed_user_chars(seed_plan.last_request_copies) + used
-        deficit = max(1, report.required_tokens - report.context_window)
+        # Token deficit → char tightening via the exact estimator inverse (see _project_request_seed).
+        from .execution import tokens_to_chars as _t2c
+        deficit = max(1, _t2c(report.required_tokens - report.context_window))
         tighter_capacity = max(0, current_capacity - deficit)
         try:
             tighter_seed = _project_request_seed(
@@ -830,7 +846,6 @@ def run_tool_batch(tool_calls, tools, dispatch: Dispatcher, hooks: Hooks, *, ste
     # cap plus the scheduler-owned delegation deadline; a parent-level budget still applies through usage
     # accounting on the parent side. The metadata below is host-private: preflight, events, journals, and
     # provider-visible args retain only the model's original call.
-    spawn_names = frozenset({"spawn_agent"})
     invocations = []
     for provider_index, tc in enumerate(tool_calls):
         raw_args = tc.args if isinstance(getattr(tc, "args", None), dict) else {}
@@ -847,16 +862,19 @@ def run_tool_batch(tool_calls, tools, dispatch: Dispatcher, hooks: Hooks, *, ste
         raw_args = tc.args if isinstance(getattr(tc, "args", None), dict) else {}
         invocation = invocations[provider_index]
         call_args = {k: v for k, v in raw_args.items()
-                     if k not in ("note", CHILD_CANCEL_SIGNAL_ARG,
+                     if k not in ("note", CHILD_ACTIVITY_ARG, CHILD_CANCEL_SIGNAL_ARG,
                                   CHILD_INVOCATION_ID_ARG, CHILD_REQUEST_ORDINAL_ARG)}
         child_cancel = None
-        if name in spawn_names:
+        child_activity = None
+        if is_delegation_tool(name):
             # Every physical child gets its own cancellation edge even when the parent has no signal. The
             # scheduler owns the delegation deadline; composition keeps parent Esc/Ctrl-C live as well.
             child_cancel = _ChildCancellationLease(signal)
+            child_activity = ChildActivity()
             call_args[CHILD_INVOCATION_ID_ARG] = invocation.id
             call_args[CHILD_REQUEST_ORDINAL_ARG] = provider_index + 1
             call_args[CHILD_CANCEL_SIGNAL_ARG] = child_cancel
+            call_args[CHILD_ACTIVITY_ARG] = child_activity
         entry = _entry_for(tools, name)
         purity = _purity_for(tools, name, call_args, entry)
         if purity is not ToolPurity.PURE_READ:
@@ -868,7 +886,7 @@ def run_tool_batch(tool_calls, tools, dispatch: Dispatcher, hooks: Hooks, *, ste
                 "preflight": ToolPreflight(), "entry": entry, "purity": purity,
                 "deduplicable": can_dedup,
                 "admission": None, "run_preflighted": None, "prepared_not_started": False,
-                "child_cancel": child_cancel}
+                "child_cancel": child_cancel, "child_activity": child_activity}
         descriptors.append(desc)
         if key is not None and key in wave_seen:
             dup_of[provider_index] = wave_seen[key]
@@ -1034,16 +1052,17 @@ def run_tool_batch(tool_calls, tools, dispatch: Dispatcher, hooks: Hooks, *, ste
             # Read-only children may overlap, but they finish by sealing artifacts and handing references to
             # the parent. A generic thread deadline must not abandon those lifecycle callbacks into a later
             # turn; the parent waits for settlement while still allowing sibling explorers to run in parallel.
-            timeout_safe=invocation.name != "spawn_agent",
+            timeout_safe=not is_delegation_tool(invocation.name),
             prepare=prepare,
             on_queued=(
                 (lambda reason, inv=invocation: dispatch(ToolQueued(
                     inv, reason, invocation_id=inv.id, request_ordinal=inv.provider_index + 1,
                 )))
-                if invocation.name in spawn_names else None
+                if is_delegation_tool(invocation.name) else None
             ),
             request_cancel=(child_cancel.request if child_cancel is not None else None),
             cancel_grace=(_delegation_cancel_grace() if child_cancel is not None else 0.0),
+            activity=desc.get("child_activity"),
         ))
 
     outcomes: list[ToolOutcome | None] = [None] * len(descriptors)
@@ -1134,6 +1153,7 @@ def run_tool_batch(tool_calls, tools, dispatch: Dispatcher, hooks: Hooks, *, ste
     try:
         run_ordered(
             scheduled, timeout=_tool_timeout(), lifecycle_timeout=_delegation_timeout(),
+            lifecycle_absolute=_delegation_absolute(),
             on_outcomes=publish,
             should_cancel=(signal.is_set if signal is not None else None),
         )
@@ -1352,7 +1372,7 @@ def _classify_steer_item(item):
 
 
 def run_turn(*, build_slice, llm, tools, dispatch: Dispatcher, hooks: Hooks | None = None,
-             max_steps: int = 40, signal=None, checkpoint=None, consolidate=None,
+             max_steps: int = 120, signal=None, checkpoint=None, consolidate=None,
              turn_id: str = "", call_namespace: str = "", transport_activity=None,
              allow_park_closeout: bool = True, steer_queue=None) -> TurnResult:
     """One per-LOOP working-memory turn. The slice is the SEED, built ONCE; within the while(true) working

@@ -162,7 +162,7 @@ def model_runner_reprojects_same_seed_as_trajectory_grows():
     )
 
     class LLM:
-        context_window = 700
+        context_window = 268   # 700-char-era fixture ÷ the exact token→char inverse (#33 units fix)
         max_tokens = 20
 
         def __init__(self):
@@ -223,7 +223,7 @@ def hook_injected_messages_participate_in_capacity_projection():
             return [*messages, {"role": "user", "content": "H" * 300}]
 
     class LLM:
-        context_window = 700
+        context_window = 268   # 700-char-era fixture ÷ the exact token→char inverse (#33 units fix)
         max_tokens = 20
 
         def __init__(self):
@@ -278,7 +278,7 @@ def in_place_runtime_note_survives_post_hook_elastic_tightening():
             return None
 
     class LLM:
-        context_window = 700
+        context_window = 268   # 700-char-era fixture ÷ the exact token→char inverse (#33 units fix)
         max_tokens = 20
 
         def __init__(self):
@@ -485,7 +485,8 @@ def closeout_reprojects_seed_for_its_own_trajectory():
     )
 
     class LLM:
-        context_window = 800
+        context_window = 400   # sized so the fixed closeout guidance (~324 tok) fits with room for
+        #                        the LOCATOR alternative but not the FULL block (#33 units fix)
         max_tokens = 20
 
         def __init__(self):

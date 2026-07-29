@@ -230,7 +230,7 @@ def _unesc_body(t: str) -> str:
 def _safe_int(v, default: int = 0) -> int:
     try:
         return int(v)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
 
 

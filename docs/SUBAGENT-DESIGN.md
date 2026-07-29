@@ -42,7 +42,8 @@ model/tool loop — the same turn machinery as the parent, with no staged naviga
 reserved final pass. It is bounded by:
 
 - the per-turn step ceiling (`AGENT_MAX_STEPS`);
-- the delegation wall-clock deadline `AGENT_DELEGATION_TIMEOUT` (default 900s);
+- the per-child inactivity window `AGENT_DELEGATION_TIMEOUT` (default 900s), reset by child/transport
+  activity, plus the absolute leak guard `AGENT_DELEGATION_ABSOLUTE` (default 3600s);
 - a concurrency cap: the scheduler admits children in waves under lifecycle slots and the process-wide
   provider inflight lease.
 

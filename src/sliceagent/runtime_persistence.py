@@ -371,7 +371,7 @@ class WorkspaceTransitionStore:
                 return WorkspaceTransition.from_dict(json.load(stream))
         except FileNotFoundError:
             raise PersistenceError(f"no workspace transition {transition_id!r}") from None
-        except (OSError, TypeError, ValueError) as exc:
+        except (OSError, TypeError, ValueError, OverflowError) as exc:
             raise PersistenceError(f"workspace transition {transition_id!r} is unreadable: {exc}") from exc
 
     def _advance(self, transition: WorkspaceTransition, status: str, **updates) -> WorkspaceTransition:
@@ -419,7 +419,7 @@ class WorkspaceTransitionStore:
             try:
                 with open(path, encoding="utf-8") as stream:
                     row = WorkspaceTransition.from_dict(json.load(stream))
-            except (OSError, TypeError, ValueError, PersistenceError) as exc:
+            except (OSError, TypeError, ValueError, OverflowError, PersistenceError) as exc:
                 raise PersistenceError(f"workspace transition record {name!r} is unreadable: {exc}") from exc
             if row.status not in self._LIVE:
                 continue

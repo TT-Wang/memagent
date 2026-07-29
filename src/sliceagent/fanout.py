@@ -33,7 +33,7 @@ class FanoutTask:
 
     task: str
     kind: str = "explorer"
-    max_steps: int = 40
+    max_steps: int = 100
 
 
 @dataclass

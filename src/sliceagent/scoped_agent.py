@@ -165,6 +165,9 @@ class ScopedSurface:
     def __init__(self, inner, allowed):
         self._inner = inner
         self._allowed = frozenset(allowed)
+        # Parent attachments belong to the parent's next provider call. Delegated children share the host
+        # surface for workspace reads, but must not race to consume or leak that private one-shot payload.
+        self.pending_images = []
 
     def __getattr__(self, name):
         return getattr(self._inner, name)
@@ -217,7 +220,7 @@ class ScopedSurface:
         return inner(name, args, admission) if callable(inner) else self._inner.run(name, args)
 
 
-def scoped_llm_view(llm, reasoning: str = ""):
+def scoped_llm_view(llm, reasoning: str = "", transport_activity=None):
     """The llm VIEW for a scoped child: a SHALLOW COPY (shares the thread-safe transport + gate),
     never the parent object. The parent's streaming delta/activity sinks are DISCONNECTED so
     concurrent children never write into the parent's renderer, and a child's model/_fellback
@@ -230,9 +233,9 @@ def scoped_llm_view(llm, reasoning: str = ""):
     else:
         view._on_delta = None
     if hasattr(view, "set_transport_activity"):
-        view.set_transport_activity(None)
+        view.set_transport_activity(transport_activity)
     else:
-        view._transport_activity = None
+        view._transport_activity = transport_activity
     return view
 
 
@@ -285,8 +288,9 @@ class ScopedResult:
 
 
 def run_scoped_agent(task: str, *, tools, llm, retriever, memory, allowed_tools=READ_ONLY_TOOLS,
-                     model_id: str = "", max_steps: int = 40, signal=None,
-                     reasoning: str = "", system_extra: str = "", on_event=None) -> ScopedResult:
+                     model_id: str = "", max_steps: int = 100, signal=None,
+                     reasoning: str = "", system_extra: str = "", on_event=None,
+                     transport_activity=None) -> ScopedResult:
     """Run one scoped turn and return a ScopedResult.
 
     The report is the child's last assistant text (mirrors the explorer's summary-is-deliverable). A
@@ -298,7 +302,7 @@ def run_scoped_agent(task: str, *, tools, llm, retriever, memory, allowed_tools=
     state.reset(task)
     record_user(state, task, source_event_id="scoped-1", logical_id="scoped-1")
     surface = ScopedSurface(tools, allowed_tools)
-    child_llm = scoped_llm_view(llm, reasoning)
+    child_llm = scoped_llm_view(llm, reasoning, transport_activity=transport_activity)
     build = make_build_slice(state, surface, retriever, memory, task, system_extra=system_extra,
                              model_id=model_id or getattr(child_llm, "model", ""))
 

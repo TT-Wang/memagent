@@ -7,8 +7,11 @@ an invocation succeeded once it has crossed the typed registry boundary.
 from __future__ import annotations
 
 import json
+import math
 import os
 import posixpath
+import threading
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from enum import Enum
@@ -24,6 +27,33 @@ CHILD_CANCEL_SIGNAL_ARG = "__sliceagent_cancel_signal"
 # invocation or a child brief; they let the progress reducer bind one physical spawn call to exactly one row.
 CHILD_INVOCATION_ID_ARG = "__sliceagent_invocation_id"
 CHILD_REQUEST_ORDINAL_ARG = "__sliceagent_request_ordinal"
+CHILD_ACTIVITY_ARG = "__sliceagent_activity"
+# Delegation is a lifecycle class, not four unrelated string comparisons. A host that introduces another
+# delegation tool registers its name here once; scheduling leases, reconciliation, and receipt accounting then
+# move together instead of silently disagreeing.
+DELEGATION_TOOL_NAMES = frozenset({"spawn_agent"})
+
+
+def is_delegation_tool(name: object) -> bool:
+    return str(name or "") in DELEGATION_TOOL_NAMES
+
+
+class ChildActivity:
+    """Thread-safe monotonic liveness cell shared by one parent scheduler and one child."""
+
+    def __init__(self, admitted_at: float | None = None):
+        self._lock = threading.Lock()
+        self._last = time.monotonic() if admitted_at is None else float(admitted_at)
+
+    @property
+    def last(self) -> float:
+        with self._lock:
+            return self._last
+
+    def touch(self, at: float | None = None) -> None:
+        observed = time.monotonic() if at is None else float(at)
+        with self._lock:
+            self._last = max(self._last, observed)
 
 
 class ToolStatus(str, Enum):
@@ -71,7 +101,7 @@ def reconciliation_targets(name: str, args: Mapping[str, object] | None) -> tupl
     """
     name = str(name or "")
     args = args if isinstance(args, Mapping) else {}
-    if name == "spawn_agent" and str(args.get("agent") or "").casefold() == "explorer":
+    if is_delegation_tool(name) and str(args.get("agent") or "").casefold() == "explorer":
         return ()
     if name.startswith("mcp__"):
         # MCP methods have no trustworthy common effect schema. A nominal database/network method may also
@@ -162,6 +192,25 @@ class Usage(Mapping[str, int | float]):
     cost_usd: float | None = None
 
     def __post_init__(self) -> None:
+        # Provider accounting is untrusted telemetry. Negative or malformed counters must never refund a
+        # turn's real usage and evade the host budget; non-finite cost values must not poison aggregation.
+        for name in (
+            "prompt_tokens", "completion_tokens", "input_other",
+            "input_cache_read", "input_cache_creation", "output",
+        ):
+            try:
+                value = max(0, int(getattr(self, name) or 0))
+            except (TypeError, ValueError, OverflowError):
+                value = 0
+            object.__setattr__(self, name, value)
+        try:
+            cost = float(self.cost_usd) if self.cost_usd is not None else None
+        except (TypeError, ValueError, OverflowError):
+            cost = None
+        object.__setattr__(
+            self, "cost_usd",
+            cost if cost is not None and math.isfinite(cost) and cost >= 0 else None,
+        )
         typed_input = self.input_other + self.input_cache_read + self.input_cache_creation
         if self.prompt_tokens == 0 and typed_input:
             object.__setattr__(self, "prompt_tokens", typed_input)
@@ -179,7 +228,7 @@ class Usage(Mapping[str, int | float]):
         def integer(key: str) -> int:
             try:
                 return int(data.get(key, 0) or 0)
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 return 0
 
         cost = data.get("cost_usd")
@@ -190,7 +239,7 @@ class Usage(Mapping[str, int | float]):
             input_cache_read=integer("input_cache_read"),
             input_cache_creation=integer("input_cache_creation"),
             output=integer("output"),
-            cost_usd=float(cost) if isinstance(cost, (int, float)) and cost >= 0 else None,
+            cost_usd=cost,
         )
 
     def as_dict(self) -> dict[str, int | float]:
@@ -292,7 +341,7 @@ def _positive_int(value: object) -> int:
     try:
         result = int(value or 0)
         return result if result > 0 else 0
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 0
 
 
@@ -317,10 +366,30 @@ def model_context_window(llm) -> int:
     return _context_window(llm)
 
 
+# Exact inverse pair (#33): _byte_upper_bound estimates bytes → tokens at this ratio, and
+# tokens_to_chars converts a token budget back to a character budget with the SAME ratio, so the
+# projection→estimate→check loop is algebraically consistent (a token deficit converts to exactly the
+# character tightening that closes it in one pass). Change one, change both.
+_TOKENS_PER_BYTE = 1.15 / 3
+
+
+def tokens_to_chars(tokens: float) -> int:
+    """Character-budget equivalent of a token count under ``_byte_upper_bound``'s estimate."""
+    return int(tokens / _TOKENS_PER_BYTE)
+
+
 def _byte_upper_bound(value: object) -> int:
-    """Conservative tokenizer-independent upper bound for text/JSON request material."""
+    """Tokenizer-independent token estimate for text/JSON request material.
+
+    Formerly bytes==tokens, which over-reserved ~3–4× (typical English/code runs ≈3–4 bytes per token),
+    so a configured 128k window behaved like ~32–50k and fired early compaction / false local overflows
+    (#33 review). Now ≈3 bytes/token with a 15% safety margin — still conservative (real ratios are
+    higher), and the provider-overflow fallback below remains the ground truth when the estimate or the
+    catalogued window is wrong. CJK-heavy content (≈1.5–2 bytes/token) is covered by the margin plus
+    that same fallback."""
     body = json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)
-    return len(body.encode("utf-8", "replace"))
+    raw = len(body.encode("utf-8", "replace"))
+    return int(raw * _TOKENS_PER_BYTE) + 1
 
 
 def preflight_model_call(
@@ -383,7 +452,13 @@ def available_content_capacity(llm, fixed_messages: list[dict], tools: list[dict
     report = estimate_model_call(llm, fixed_messages, tools)
     if not report.context_window:
         return None
-    return max(0, report.context_window - report.required_tokens)
+    # The window math above is in TOKENS; the seed projection this feeds (SeedPlan.project) budgets in
+    # CHARACTERS. Convert with the exact estimator inverse so the units are algebraically consistent —
+    # CJK-heavy content (fewer chars per token than ASCII) is corrected by the projection loop's exact
+    # re-check + reactive provider-overflow fallback, while an underfilled seed is never corrected
+    # (#33 review: the old bytes==tokens chain quarter-sized a 128k window; a token→char mismatch here
+    # would preserve exactly that bug).
+    return max(0, tokens_to_chars(report.context_window - report.required_tokens))
 
 
 def coerce_tool_status(value: object, *, legacy_text: str | None = None) -> ToolStatus:
@@ -407,10 +482,12 @@ def coerce_tool_status(value: object, *, legacy_text: str | None = None) -> Tool
 
 
 __all__ = [
-    "CHILD_CANCEL_SIGNAL_ARG", "CHILD_INVOCATION_ID_ARG", "CHILD_REQUEST_ORDINAL_ARG",
+    "CHILD_ACTIVITY_ARG", "CHILD_CANCEL_SIGNAL_ARG", "CHILD_INVOCATION_ID_ARG",
+    "CHILD_REQUEST_ORDINAL_ARG", "ChildActivity", "DELEGATION_TOOL_NAMES",
     "PreflightOverflow", "PreflightReport",
     "ToolEffect", "ToolInvocation", "ToolOutcome",
     "ToolPurity", "ToolStatus", "TurnOutcome", "TurnStatus", "UnknownContextWindow", "Usage",
-    "available_content_capacity", "coerce_tool_status", "estimate_model_call", "model_context_window",
+    "available_content_capacity", "coerce_tool_status", "estimate_model_call", "is_delegation_tool",
+    "model_context_window",
     "preflight_model_call",
 ]

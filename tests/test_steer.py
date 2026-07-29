@@ -200,8 +200,6 @@ def test_steer_admission_id_rides_the_delivery_receipt():
     first = llm.seen[0]   # queued pre-turn → drained at the top of step 1
     steered = [m for m in first if m["role"] == "user" and m["content"] == "same words"]
     assert len(steered) == 2, "both steers land in the trajectory as plain user text"
-
-
 def test_prepend_leftover_steers_restores_ingress_order_as_is():
     """The TUI handback restores swept leftovers AHEAD of turn-time arrivals (they are older), and
     every item shape passes through unstringified — (text, admission_id) pairs and typed peer

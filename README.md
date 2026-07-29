@@ -355,10 +355,11 @@ protects the integrity of the durable local store rather than interpreting user 
 |---|---|---|
 | `AGENT_MODEL` | *(required)* | the model id to run |
 | `AGENT_SANDBOX` | `local` | `local`, or `docker` on POSIX/WSL2 (native Windows: use `local` or run under WSL2) |
-| `AGENT_MAX_STEPS` | `60` | per-turn step ceiling |
+| `AGENT_MAX_STEPS` | `120` | per-turn step ceiling |
 | `AGENT_CONTEXT_WINDOW` | *(catalog or unset)* | explicit provider window for strict per-call preflight; unknown models otherwise use compatibility mode |
 | `AGENT_SUBAGENT_DEPTH` | `1` | delegation depth ceiling for `spawn_agent`; `0` disables delegation, raise to let children spawn children |
-| `AGENT_DELEGATION_TIMEOUT` | `900` | hard ceiling in seconds for one child agent; raise for unusually slow providers |
+| `AGENT_DELEGATION_TIMEOUT` | `900` | per-child inactivity window in seconds, reset by child and transport activity |
+| `AGENT_DELEGATION_ABSOLUTE` | `3600` | absolute child leak guard in seconds; cannot be disabled |
 | `LLM_HARD_TIMEOUT_SEC` | *(completion-budget derived)* | absolute per-call watchdog; provider-agnostic default allows the configured completion cap at a conservative generation rate (minimum 180s) |
 | `LLM_STREAM_CLOSE_GRACE_SEC` | `2` | bounded wait to prove a cancelled/timed-out SSE request physically closed before any retry |
 | `LLM_PROVIDER_MAX_INFLIGHT` | `4` | process-wide physical request cap per provider account; indeterminate calls hold their slot until the transport closes |

@@ -59,7 +59,7 @@ def page_out_with_control_chars_pages_back_as_text_not_hexdump():
 def page_out_never_fails_the_tool_on_write_error():
     host = LocalToolHost(root=tempfile.mkdtemp(prefix="po-err-"))
     host._mkparent = lambda *_a, **_k: (_ for _ in ()).throw(OSError("disk full"))   # force blob write to fail
-    big = "x" * 20000
+    big = "x" * 40000
     out = host._page_out(big, label="command output")
     assert len(out) < len(big) and "paged out" in out, "must still bound the inline view when paging fails"
 
@@ -91,15 +91,15 @@ def micro_compact_returns_false_when_nothing_to_clear():
 
 # ---- #76: configurable max_steps ------------------------------------------------------------
 @check
-def max_steps_is_configurable_default_60():
+def max_steps_is_configurable_default_120():
     from sliceagent.config import load_config
     os.environ.pop("AGENT_MAX_STEPS", None)
-    assert load_config().max_steps == 60, "default ceiling is 60 (raised from the old hard 40)"
-    os.environ["AGENT_MAX_STEPS"] = "120"
+    assert load_config().max_steps == 120, "default ceiling is 120"
+    os.environ["AGENT_MAX_STEPS"] = "240"
     try:
-        assert load_config().max_steps == 120
+        assert load_config().max_steps == 240
         os.environ["AGENT_MAX_STEPS"] = "not-a-number"
-        assert load_config().max_steps == 60, "a bad value falls back to the default, never crashes"
+        assert load_config().max_steps == 120, "a bad value falls back to the default, never crashes"
     finally:
         os.environ.pop("AGENT_MAX_STEPS", None)
 

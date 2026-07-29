@@ -203,6 +203,28 @@ def no_matches_is_quiet_non_failing():
     assert "no matches" in out and "Error" not in out and "BLOCKED" not in out
 
 
+# ── .gitignore must apply whether or not the workspace happens to be a git repo ─────────────────
+# ripgrep applies ignore rules ONLY inside a repo. A non-repo workspace therefore got node_modules
+# walked in full: measured 1,200,001 match lines vs 1 on the same tree — the flood is the bug, the
+# latency is only its symptom.
+@check
+def ignore_rules_apply_outside_a_git_repository():
+    if not _HAS_RG:
+        return
+    host = _Host(_workspace({
+        ".gitignore": "node_modules/\n",
+        "src/app.js": "const needle = 1;\n",
+        "node_modules/pkg/index.js": "needle needle needle\n",
+    }))
+    assert not os.path.exists(os.path.join(host.root(), ".git")), "fixture must NOT be a git repo"
+    out = make_grep_tool(host).handler({"pattern": "needle"})
+    assert "src/app.js" in out
+    assert "node_modules" not in out, f"ignored tree leaked into the slice:\n{out}"
+    # same rule for the filename tool, which walks the tree the same way
+    files = make_glob_tool(host).handler({"pattern": "*.js"})
+    assert "src/app.js" in files and "node_modules" not in files, files
+
+
 def main():
     failed = 0
     for fn in CHECKS:

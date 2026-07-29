@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Literal
 
+from .execution import is_delegation_tool
+
 
 TurnDisposition = Literal[
     "completed", "completed_with_warnings", "paused", "blocked", "interrupted", "indeterminate",
@@ -452,13 +454,10 @@ _COMPACT_COUNT_KEYS = (
     "succeeded", "steered", "steered_before_execution", "failed", "cancelled",
     "lifecycle_not_run", "indeterminate", "not_started",
 )
-_SPAWN_TOOLS = frozenset({"spawn_agent"})
-
-
 def _count(value: object) -> int:
     try:
         return max(0, int(value or 0))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 0
 
 
@@ -515,12 +514,12 @@ def compact_receipt_projection(receipt: Mapping[str, Any] | None) -> dict[str, A
     }
     agents = _operation_count_projection(
         operation for operation in operations
-        if str(operation.get("name") or "") in _SPAWN_TOOLS
+        if is_delegation_tool(operation.get("name"))
     )
     child_refs = {
         str(ref)
         for operation in operations
-        if str(operation.get("name") or "") in _SPAWN_TOOLS
+        if is_delegation_tool(operation.get("name"))
         for ref in (operation.get("artifact_refs")
                     if isinstance(operation.get("artifact_refs"), (list, tuple)) else ())
         if ref

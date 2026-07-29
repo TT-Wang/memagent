@@ -16,13 +16,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from sliceagent.events import (ApiRetry, AssistantText, ToolResult, TurnEnd,
                                TurnInterrupted)  # noqa: E402
-from sliceagent.execution import (CHILD_INVOCATION_ID_ARG, CHILD_REQUEST_ORDINAL_ARG,
-                                  PreflightOverflow, ToolEffect,
+from sliceagent.execution import (CHILD_ACTIVITY_ARG, CHILD_INVOCATION_ID_ARG,
+                                  CHILD_REQUEST_ORDINAL_ARG, ChildActivity, PreflightOverflow, ToolEffect,
                                   ToolInvocation, ToolOutcome, ToolPurity, ToolStatus, TurnOutcome,
                                   Usage, preflight_model_call, reconciliation_targets)  # noqa: E402
 from sliceagent.hooks import BudgetHook, Hooks  # noqa: E402
-from sliceagent.loop import (_assistant_message, _delegation_timeout, run_tool_batch,
-                             run_turn)  # noqa: E402
+from sliceagent.loop import (_assistant_message, _delegation_absolute, _delegation_timeout,
+                             run_tool_batch, run_turn)  # noqa: E402
 from sliceagent.model_runner import complete_model_call  # noqa: E402
 from sliceagent.registry import ToolEntry, ToolRegistry, ToolText  # noqa: E402
 from sliceagent.scheduler import ScheduledTool, run_ordered  # noqa: E402
@@ -334,6 +334,305 @@ def delegation_timeout_cannot_be_disabled_with_nonfinite_values():
             os.environ.pop("AGENT_DELEGATION_TIMEOUT", None)
         else:
             os.environ["AGENT_DELEGATION_TIMEOUT"] = old
+
+
+@check
+def delegation_absolute_cannot_be_disabled_with_nonfinite_values():
+    old = os.environ.get("AGENT_DELEGATION_ABSOLUTE")
+    try:
+        for raw in ("inf", "-inf", "nan", "1e309", "0", "-1", "invalid"):
+            os.environ["AGENT_DELEGATION_ABSOLUTE"] = raw
+            assert _delegation_absolute() == 3600.0, raw
+        os.environ["AGENT_DELEGATION_ABSOLUTE"] = "12.5"
+        assert _delegation_absolute() == 12.5
+    finally:
+        if old is None:
+            os.environ.pop("AGENT_DELEGATION_ABSOLUTE", None)
+        else:
+            os.environ["AGENT_DELEGATION_ABSOLUTE"] = old
+
+
+@check
+def child_inactivity_timeout_is_per_job_not_pooled_by_a_live_sibling():
+    inactive_cancel = threading.Event()
+    live_cancel = threading.Event()
+    inactive_activity = ChildActivity()
+    live_activity = ChildActivity()
+    inactive_inv = ToolInvocation("inactive-child", "spawn_agent", {}, 0)
+    live_inv = ToolInvocation("live-child", "spawn_agent", {}, 1)
+
+    def inactive():
+        assert inactive_cancel.wait(1)
+        return ToolOutcome(inactive_inv, ToolStatus.CANCELLED, "inactive child closed")
+
+    def live():
+        until = time.monotonic() + 0.18
+        while time.monotonic() < until:
+            assert not live_cancel.is_set(), "live child was cancelled by its sibling's inactivity"
+            live_activity.touch()
+            time.sleep(0.01)
+        return ToolOutcome(live_inv, ToolStatus.SUCCEEDED, "live child completed")
+
+    outcomes = run_ordered([
+        ScheduledTool(
+            inactive_inv, ToolPurity.PURE_READ, inactive, timeout_safe=False,
+            request_cancel=lambda _kind: inactive_cancel.set(), cancel_grace=0.2,
+            activity=inactive_activity,
+        ),
+        ScheduledTool(
+            live_inv, ToolPurity.PURE_READ, live, timeout_safe=False,
+            request_cancel=lambda _kind: live_cancel.set(), cancel_grace=0.2,
+            activity=live_activity,
+        ),
+    ], lifecycle_timeout=0.05, lifecycle_absolute=1.0)
+    assert [outcome.status for outcome in outcomes] == [
+        ToolStatus.FAILED, ToolStatus.SUCCEEDED,
+    ], outcomes
+    assert "no activity for 0.05s" in outcomes[0].text
+    assert not live_cancel.is_set()
+
+
+@check
+def active_child_still_stops_at_absolute_delegation_guard():
+    cancel = threading.Event()
+    activity = ChildActivity()
+    invocation = ToolInvocation("long-child", "spawn_agent", {}, 0)
+
+    def active():
+        while not cancel.wait(0.01):
+            activity.touch()
+        return ToolOutcome(invocation, ToolStatus.CANCELLED, "active child closed")
+
+    outcomes = run_ordered([
+        ScheduledTool(
+            invocation, ToolPurity.PURE_READ, active, timeout_safe=False,
+            request_cancel=lambda _kind: cancel.set(), cancel_grace=0.2, activity=activity,
+        ),
+    ], lifecycle_timeout=0.05, lifecycle_absolute=0.12)
+    assert outcomes[0].status is ToolStatus.FAILED
+    assert "0.12s absolute delegation leak guard" in outcomes[0].text
+
+
+@check
+def omitted_lifecycle_absolute_retains_the_scheduler_leak_guard():
+    """The public scheduler API must fail closed even when an embedder omits the override.
+
+    Before #59, ``run_ordered(..., lifecycle_timeout=...)`` forwarded ``None`` to the
+    per-job wave. A child that kept touching its activity cell could then run forever.
+    """
+    import sliceagent.scheduler as scheduler
+
+    cancel = threading.Event()
+    activity = ChildActivity()
+    invocation = ToolInvocation("default-absolute-child", "spawn_agent", {}, 0)
+
+    def active():
+        while not cancel.wait(0.01):
+            activity.touch()
+        return ToolOutcome(invocation, ToolStatus.CANCELLED, "active child closed")
+
+    prior = scheduler.DEFAULT_LIFECYCLE_ABSOLUTE
+    scheduler.DEFAULT_LIFECYCLE_ABSOLUTE = 0.12
+    try:
+        outcomes = run_ordered([
+            ScheduledTool(
+                invocation,
+                ToolPurity.PURE_READ,
+                active,
+                timeout_safe=False,
+                request_cancel=lambda _kind: cancel.set(),
+                cancel_grace=0.2,
+                activity=activity,
+            ),
+        ], lifecycle_timeout=0.05)
+    finally:
+        scheduler.DEFAULT_LIFECYCLE_ABSOLUTE = prior
+
+    assert outcomes[0].status is ToolStatus.FAILED
+    assert "0.12s absolute delegation leak guard" in outcomes[0].text
+
+
+@check
+def wedged_children_over_the_wave_ceiling_cannot_freeze_the_parent_turn():
+    """Every liveness test above uses 1-2 children, so none of them ever fills the wave ceiling —
+    which is exactly where the per-job path could hang. With more lifecycle children than
+    _MAX_PARALLEL_LIFECYCLE_WAVE, children that ignore their cancellation lease hold every worker
+    slot; the launch pointer then freezes below len(jobs). Gating the settlement exit on that pointer
+    made both exits unreachable and (since per_job_liveness sets the wave deadline to None) the wave
+    spun at the poll interval forever, past the absolute leak guard that exists to prevent precisely
+    this. Measured: >20s and still spinning before the fix, 0.71s after."""
+    from sliceagent.scheduler import _MAX_PARALLEL_LIFECYCLE_WAVE
+    total = _MAX_PARALLEL_LIFECYCLE_WAVE + 1
+    wedge = threading.Event()
+    tasks = []
+    for index in range(total):
+        invocation = ToolInvocation(f"wedged-{index}", "spawn_agent", {}, index)
+        tasks.append(ScheduledTool(
+            invocation, ToolPurity.PURE_READ,
+            lambda: (wedge.wait(30), "never")[1],      # never returns: slot.release() never runs
+            timeout_safe=False,
+            request_cancel=lambda _kind: None,          # accepts the lease, ignores it
+            cancel_grace=0.05, activity=ChildActivity(),
+        ))
+
+    box: dict = {}
+    runner = threading.Thread(
+        target=lambda: box.setdefault(
+            "outcomes", run_ordered(tasks, lifecycle_timeout=0.3, lifecycle_absolute=0.6)),
+        daemon=True,
+    )
+    runner.start()
+    runner.join(15.0)
+    frozen = runner.is_alive()
+    wedge.set()                                          # let the daemon threads unwind either way
+    assert not frozen, (
+        "the wave never returned: wedged children filling the ceiling froze the parent turn, and the "
+        "absolute leak guard could not break it"
+    )
+    outcomes = box["outcomes"]
+    assert len(outcomes) == total, outcomes
+    # EXACT statuses (#55): a reaped-but-unconfirmed child is INDETERMINATE — never FAILED, which
+    # would fabricate a verdict about work whose physical state is unknown (NO VERDICT != FAILED).
+    # The earlier `in (INDETERMINATE, CANCELLED, FAILED)` tolerance let that mutation pass green.
+    assert all(o.status is ToolStatus.INDETERMINATE for o in outcomes[:-1]), \
+        [o.status for o in outcomes]
+    assert outcomes[-1].status is ToolStatus.CANCELLED, "the queued tail never ran"
+    # ...and the reap is TYPED, not prose: every wedged child's effects carry its timeout_kind.
+    for out in outcomes[:-1]:
+        kinds = [e.payload.get("timeout_kind") for e in out.effects
+                 if isinstance(getattr(e, "payload", None), dict) and "timeout_kind" in e.payload]
+        assert kinds and all(k in ("inactivity", "absolute") for k in kinds), \
+            f"wedged child lost its typed timeout_kind: {out.text[:80]!r} {kinds}"
+
+
+@check
+def production_loop_forwards_the_absolute_guard_to_the_scheduler():
+    """#55: deleting the production `lifecycle_absolute=_delegation_absolute()` wiring kept the
+    suite green — every test passed the guard by hand. Pin the forwarding and the guard's
+    fail-closed parsing so the leak guard cannot silently vanish from the production path."""
+    import inspect as _inspect
+    import os as _os
+
+    from sliceagent import loop as _loop
+    src = _inspect.getsource(_loop.run_tool_batch)
+    assert "lifecycle_absolute=_delegation_absolute()" in src, \
+        "run_tool_batch no longer forwards the absolute leak guard to run_ordered"
+    prior = _os.environ.get("AGENT_DELEGATION_ABSOLUTE")
+    try:
+        for raw, want in (("junk", 3600.0), ("0", 3600.0), ("-5", 3600.0), ("1800", 1800.0)):
+            _os.environ["AGENT_DELEGATION_ABSOLUTE"] = raw
+            assert _loop._delegation_absolute() == want, (raw, _loop._delegation_absolute())
+    finally:
+        _os.environ.pop("AGENT_DELEGATION_ABSOLUTE", None)
+        if prior is not None:
+            _os.environ["AGENT_DELEGATION_ABSOLUTE"] = prior
+
+
+@check
+def per_job_reap_outranks_a_later_parent_cancel_in_assembly():
+    """Two-child race (lexie's counterexample on 113ec74): child A is reaped by its inactivity
+    window and then SETTLES while child B is still live; the parent then cancels the wave. A's
+    earlier per-job timeout is a recorded fact — assembly must keep its delegation-timeout
+    classification and typed timeout_kind, not overwrite it with plain parent-cancel just because
+    the wave-level cutoff_kind is 'cancel'."""
+    a_inv = ToolInvocation("reaped-then-settled", "spawn_agent", {}, 0)
+    b_inv = ToolInvocation("live-sibling", "spawn_agent", {}, 1)
+    a_activity, b_activity = ChildActivity(), ChildActivity()
+    cancel_at = time.monotonic() + 0.7
+
+    def child_a():
+        time.sleep(0.5)                      # silent past the 0.3s window -> reaped; settles inside grace
+        return ToolOutcome(a_inv, ToolStatus.SUCCEEDED, "late but present")
+
+    def child_b():
+        until = time.monotonic() + 1.4
+        while time.monotonic() < until:
+            b_activity.touch()               # provably live the whole time
+            time.sleep(0.02)
+        return ToolOutcome(b_inv, ToolStatus.SUCCEEDED, "b done")
+
+    tasks = [
+        ScheduledTool(a_inv, ToolPurity.PURE_READ, child_a, timeout_safe=False,
+                      request_cancel=lambda _k: None, cancel_grace=0.4, activity=a_activity),
+        ScheduledTool(b_inv, ToolPurity.PURE_READ, child_b, timeout_safe=False,
+                      request_cancel=lambda _k: None, cancel_grace=0.4, activity=b_activity),
+    ]
+    outcomes = run_ordered(tasks, lifecycle_timeout=0.3, lifecycle_absolute=5.0,
+                           should_cancel=lambda: time.monotonic() >= cancel_at)
+    assert len(outcomes) == 2
+    a_out = outcomes[0]
+    kinds = [e.payload.get("timeout_kind") for e in a_out.effects
+             if isinstance(getattr(e, "payload", None), dict) and "timeout_kind" in e.payload]
+    assert "inactivity" in kinds, (
+        f"A's recorded per-job reap was overwritten by the later wave cancel: status={a_out.status} "
+        f"text={a_out.text[:120]!r} effect_kinds={kinds}")
+    assert "no activity" in a_out.text, a_out.text[:160]
+
+
+@check
+def queued_child_inactivity_starts_at_physical_admission():
+    first_activity = ChildActivity()
+    second_activity = ChildActivity()
+    first_inv = ToolInvocation("first-child", "spawn_agent", {}, 0)
+    second_inv = ToolInvocation("queued-child", "spawn_agent", {}, 1)
+    second_started = []
+
+    def first():
+        until = time.monotonic() + 0.12
+        while time.monotonic() < until:
+            first_activity.touch()
+            time.sleep(0.01)
+        return ToolOutcome(first_inv, ToolStatus.SUCCEEDED, "first complete")
+
+    def second():
+        second_started.append(True)
+        time.sleep(0.02)
+        return ToolOutcome(second_inv, ToolStatus.SUCCEEDED, "queued child complete")
+
+    outcomes = run_ordered([
+        ScheduledTool(
+            first_inv, ToolPurity.PURE_READ, first, timeout_safe=False,
+            request_cancel=lambda _kind: None, activity=first_activity,
+        ),
+        ScheduledTool(
+            second_inv, ToolPurity.PURE_READ, second, timeout_safe=False,
+            request_cancel=lambda _kind: None, activity=second_activity,
+        ),
+    ], max_workers=1, lifecycle_timeout=0.05, lifecycle_absolute=1.0)
+    assert second_started == [True], "queue wait was incorrectly charged as child inactivity"
+    assert [outcome.status for outcome in outcomes] == [
+        ToolStatus.SUCCEEDED, ToolStatus.SUCCEEDED,
+    ]
+
+
+@check
+def parent_cancellation_outranks_child_liveness_cutoffs():
+    parent_cancel = threading.Event()
+    child_cancel = threading.Event()
+    activity = ChildActivity()
+    invocation = ToolInvocation("cancelled-child", "spawn_agent", {}, 0)
+    entered = threading.Event()
+    box = {}
+
+    def child():
+        entered.set()
+        assert child_cancel.wait(1)
+        return ToolOutcome(invocation, ToolStatus.CANCELLED, "child closed")
+
+    runner = threading.Thread(target=lambda: box.setdefault("outcomes", run_ordered([
+        ScheduledTool(
+            invocation, ToolPurity.PURE_READ, child, timeout_safe=False,
+            request_cancel=lambda _kind: child_cancel.set(), cancel_grace=0.2, activity=activity,
+        ),
+    ], lifecycle_timeout=0.5, lifecycle_absolute=1.0, should_cancel=parent_cancel.is_set)), daemon=True)
+    runner.start()
+    assert entered.wait(1)
+    parent_cancel.set()
+    runner.join(1)
+    assert not runner.is_alive()
+    assert box["outcomes"][0].status is ToolStatus.CANCELLED
+    assert "parent turn cancellation" in box["outcomes"][0].text
+    assert "inactivity" not in box["outcomes"][0].text
 
 
 @check
@@ -2232,15 +2531,18 @@ def parallel_children_receive_lifecycle_metadata_but_no_budget_share():
     ]
     _, results = run_tool_batch(calls, Host(), lambda _event: None, budget)
     assert len(seen) == 2
-    # Children are bounded by their step cap and the delegation deadline only. A parent-level budget
-    # applies through usage accounting on the parent side; it is never split into per-child shares.
+    # Children are bounded by their step cap and per-child liveness policy. A parent-level budget applies
+    # through usage accounting on the parent side; it is never split into per-child shares.
     assert all("__sliceagent_token_budget" not in args for args in seen)
     by_task = {args["task"]: args for args in seen}
     assert by_task["one"][CHILD_INVOCATION_ID_ARG] == "one"
     assert by_task["two"][CHILD_INVOCATION_ID_ARG] == "two"
     assert by_task["one"][CHILD_REQUEST_ORDINAL_ARG] == 1
     assert by_task["two"][CHILD_REQUEST_ORDINAL_ARG] == 2
-    private = {CHILD_INVOCATION_ID_ARG, CHILD_REQUEST_ORDINAL_ARG}
+    assert isinstance(by_task["one"][CHILD_ACTIVITY_ARG], ChildActivity)
+    assert isinstance(by_task["two"][CHILD_ACTIVITY_ARG], ChildActivity)
+    assert by_task["one"][CHILD_ACTIVITY_ARG] is not by_task["two"][CHILD_ACTIVITY_ARG]
+    private = {CHILD_ACTIVITY_ARG, CHILD_INVOCATION_ID_ARG, CHILD_REQUEST_ORDINAL_ARG}
     assert all(not private.intersection(result["args"]) for result in results), \
         "scheduler metadata must not leak into the canonical invocation"
 
@@ -2323,7 +2625,7 @@ def registry_rejected_child_does_not_block_a_valid_sibling_same_or_later_wave():
 
 @check
 def preflight_counts_schemas_and_output_reserve():
-    llm = NS(context_window=180, max_tokens=40)
+    llm = NS(context_window=70, max_tokens=40)   # 180-byte-era fixture scaled to token units (#33)
     messages = [{"role": "user", "content": "m" * 50}]
     schemas = [{"type": "function", "function": {"name": "x", "description": "s" * 80}}]
     try:

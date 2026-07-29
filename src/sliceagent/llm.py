@@ -100,7 +100,7 @@ def _int(x) -> int:
     report counts as strings or odd objects, and `x or 0` keeps a truthy non-number → arithmetic TypeError."""
     try:
         return int(x)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 0
 
 
@@ -1223,14 +1223,20 @@ class OpenAILLM:
         self._completion_tokens_pinned = False
         try:
             raw_cap = os.environ.get("AGENT_COMPLETION_TOKENS")
-            if raw_cap is not None and str(raw_cap).strip() != "":
+            if raw_cap is not None and str(raw_cap).strip() != "" and int(raw_cap) >= 0:
+                # 0 keeps its documented meaning (provider default / omit the cap); a NEGATIVE value is
+                # nonsense that previously stayed truthy all the way to the provider (#33 review) — it
+                # now falls through to the model-aware default instead.
                 self.max_tokens = int(raw_cap)
                 self._completion_tokens_pinned = True
             else:
                 from .model_catalog import capability as _capability
                 self.max_tokens = _capability(self.model, self._base_url).completion_tokens_default
         except (TypeError, ValueError):
-            self.max_tokens = 8192
+            # Malformed env value: fall back through the same model-aware default as "unset" — a stale
+            # 8192 literal here silently re-imposed the chat-era cap on reasoning models (#33 review).
+            from .model_catalog import capability as _capability
+            self.max_tokens = _capability(self.model, self._base_url).completion_tokens_default
         # The absolute stream ceiling and completion cap must be coherent. Derive it only after parsing the
         # cap so an allowed 8k-token reasoning response cannot be killed by a shorter historical wall timer.
         self._refresh_hard_timeout()

@@ -100,8 +100,6 @@ class SteerDelivered(Event):
 
     content: str
     admission_id: str = ""
-
-
 @dataclass
 class SteerRejected(Event):
     """A steer-queue item that is none of the legal shapes was REJECTED at the queue boundary.

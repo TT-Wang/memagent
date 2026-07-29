@@ -14,6 +14,7 @@ import os
 import posixpath
 import re
 import shlex
+import shutil
 import tempfile
 from dataclasses import replace
 
@@ -91,7 +92,7 @@ def _coerce_int(v):
     """Tolerant int() for model-supplied args (str/float/None) — never raises."""
     try:
         return int(v) if v is not None else None
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
@@ -162,7 +163,7 @@ def _kill_run_tree(process, force=False):
         try: process.kill() if force else process.terminate()
         except OSError: pass
 
-def run(cmd, timeout=60):
+def run(cmd, timeout=120):
     _p = _sp.Popen(cmd, shell=True, stdout=_sp.PIPE, stderr=_sp.PIPE, text=True,
                    **_run_group_kwargs())
     try:
@@ -243,7 +244,7 @@ _LIST_CAP = 600   # bound recursive output so a huge tree can't flood the slice
 # .sliceagent/blobs and replaced inline by a BOUNDED head+tail view + a read_file reference — L1→L2 paging,
 # NOT a cut (the full output is preserved on disk and recall-on-demand). Keeps one huge run_command /
 # execute_code / terminal_read result from flooding the within-turn transcript and forcing coarse overflow.
-_OUTPUT_INLINE_CAP = 16000
+_OUTPUT_INLINE_CAP = 32000
 _OUTPUT_HEAD = 10000
 _OUTPUT_TAIL = 4000
 
@@ -301,7 +302,8 @@ TOOL_SCHEMAS = [
         "file — it discards all current content.",
         {"path": {"type": "string"}, "content": {"type": "string"}}, ["path", "content"]),
     _fn("append_to_file",
-        "Append `content` verbatim to the END of a file (creates it + parent dirs if missing) — the only writer "
+        "Append `content` to the END of a file (creates it + parent dirs if missing), preserving an existing "
+        "file's dominant CRLF line endings — the only writer "
         "that ADDS without touching existing content. Use str_replace to modify text already in the file, "
         "edit_file to replace the whole file. No newline is added — include a leading '\\n' yourself if needed.",
         {"path": {"type": "string"}, "content": {"type": "string"}}, ["path", "content"]),
@@ -332,7 +334,7 @@ TOOL_SCHEMAS = [
         ["path", "old_string", "new_string"]),
     _fn("run_command",
         "Run a shell command (blocking, cwd=workspace root); returns combined stdout+stderr (exit code on "
-        "failure). Pass timeout (seconds, default 30, max 600) for slow builds. Use for one-shot commands that "
+        "failure). Pass timeout (seconds, default 120, max 600) for slow builds. Use for one-shot commands that "
         "finish; for a process that must STAY alive use proc_start, for an interactive REPL use terminal_open, "
         "to chain several edits + a test in one turn use execute_code. No cwd arg — prepend `cd DIR &&`. The "
         "host records grounded paths used outside the primary workspace so file tools can re-observe them. If a command could "
@@ -341,12 +343,15 @@ TOOL_SCHEMAS = [
         {"command": {"type": "string"}, "timeout": {"type": "number"}}, ["command"]),
     _fn("execute_code",
         "Run a Python script that does SEVERAL file/shell steps in ONE turn (e.g. multiple edits + a test). Use "
-        "over run_command when you'd chain many calls; over proc_start when it's one-shot (blocking, ~30s). "
+        "over run_command when you'd chain many calls; over proc_start when it's one-shot. Blocking: pass "
+        "timeout (seconds, default 120, max 600) when the script builds or runs a slow suite, since the "
+        "deadline can otherwise land BETWEEN two edits. "
         "Helpers (no imports): read_file(path), write_file(path, content), append_file(path, content), "
-        "str_replace(path, old, new), list_files(path='.'), run(shell_cmd). Workspace is cwd + on sys.path. ONLY "
+        "str_replace(path, old, new), list_files(path='.'), run(shell_cmd, timeout=120). Workspace is cwd + on "
+        "sys.path. ONLY "
         "what you print() is returned. The Python file helpers operate in the primary workspace; use the ordinary "
         "file tools for grounded focus roots, or run() for a shell step whose paths the host can surface afterward.",
-        {"code": {"type": "string"}}, ["code"]),
+        {"code": {"type": "string"}, "timeout": {"type": "number"}}, ["code"]),
     _fn("ask_user",
         "Ask the user a concise follow-up question and WAIT for their answer (returned to you). Use this "
         "whenever you are UNSURE or the request is AMBIGUOUS, or when you have FAILED / been blocked and don't "
@@ -468,6 +473,47 @@ _MODEL_WORK_STATUSES = frozenset({
 
 _VERIFY_OSCILLATION_WINDOW = 4     # identical failure signatures within this window => stop retrying
 
+# Shell words that name no executable, so `which` says nothing about whether the command can run.
+_SHELL_NONPROGRAMS = frozenset({
+    "cd", "export", "set", "unset", "source", ".", "exec", "eval", "echo", "true", "false", "test",
+    "[", "if", "then", "else", "elif", "fi", "for", "while", "do", "done", "case", "esac", "return",
+    "shift", "trap", "wait", "read", "local", "declare", "alias", "umask", "pushd", "popd", "time",
+})
+_SHELL_SPLIT = re.compile(r"&&|\|\||[;|\n]")
+
+
+def _unrunnable_verify_program(command: str) -> str:
+    """First bare program name in `command` that does not resolve on PATH, or "" if all of them do.
+
+    A verify command is the item's ACCEPTANCE CONTRACT, and it is authored during planning — when no
+    shell has run and nothing has checked that the contract is even executable. `which` is a pure read,
+    so it is legal inside a read-only planning turn, and catching `npm`/`pytest`/`cargo` missing HERE
+    costs one probe instead of a full implementation cycle that ends at an unrunnable ✓.
+
+    Deliberately conservative — it only reports a BARE name (no slash, no variable, not a shell word).
+    Anything it cannot resolve confidently is left to fail at run time rather than blocking a plan.
+    """
+    for segment in _SHELL_SPLIT.split(command):
+        segment = segment.strip()
+        if not segment:
+            continue
+        try:
+            words = shlex.split(segment)
+        except ValueError:                       # unbalanced quotes: not ours to adjudicate
+            continue
+        # step over leading VAR=value assignments (`CI=1 npm run build`)
+        while words and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[0]):
+            words = words[1:]
+        if not words:
+            continue
+        program = words[0]
+        if (program in _SHELL_NONPROGRAMS or "/" in program or "\\" in program
+                or "$" in program or program.startswith(("(", "{"))):
+            continue
+        if shutil.which(program) is None:
+            return program
+    return ""
+
 
 def _verify_failure_signature(command: str, output: str) -> str:
     """Stable signature of one failed check: the command + the normalized tail of its output."""
@@ -490,15 +536,31 @@ def run_item_verification(candidates, runner, attempts: dict) -> tuple[frozenset
     green = set()
     for item_id, commands in candidates:
         for command in commands:
-            ok, output = runner(command)
+            result = runner(command)
+            ok, output = result
             if ok:
                 continue
+            tail = " ".join(str(output or "").split())[-400:]
+            # A check that never RAN — deadline overrun, missing program — rendered no verdict. It must
+            # not promote the item (there is no evidence), but it is not proof of a defect either, and
+            # the two need opposite responses. Reported as red it said "fix the work", so the model
+            # re-edited correct code, set ready again, hit the same wall, and the oscillation detector
+            # escalated a build that simply needed more than the deadline. Indeterminate is kept out of
+            # the failure history for the same reason: no verdict is not a failure signature.
+            if getattr(result, "status", None) is ToolStatus.INDETERMINATE:
+                return frozenset(), (
+                    f"verify for {item_id!r} produced NO VERDICT: `{command}` -> "
+                    f"{tail or '(no output)'}. Nothing was checked, so this says nothing about the work "
+                    "— do NOT re-edit on the strength of it. Fix the CHECK: raise AGENT_VERIFY_TIMEOUT "
+                    "(600s by default, raisable to 3600s) if it needs longer, install what it needs, or "
+                    "give the item a check that completes here. You can also run it under proc_start "
+                    "and report what you see."
+                )
             history = attempts.setdefault(item_id, [])
             signature = _verify_failure_signature(command, output)
             oscillating = signature in history[-_VERIFY_OSCILLATION_WINDOW:]
             history.append(signature)
             del history[:-8]
-            tail = " ".join(str(output or "").split())[-400:]
             message = (
                 f"verify failed for {item_id!r}: `{command}` -> {tail or '(no output)'}. "
                 "The item stays unresolved (Applied is not Verified); fix the work and set it ready again."
@@ -747,7 +809,7 @@ def _numbered_window(text: str, start_line: int, end_line: int, *, ctx: int = 4,
 
 
 class LocalToolHost:
-    def __init__(self, root: str | None = None, *, sandbox=None, timeout: int = 30,
+    def __init__(self, root: str | None = None, *, sandbox=None, timeout: int = 120,
                  registry: ToolRegistry | None = None):
         # root=None → confine to the *current* working directory, resolved per call
         # (so the eval runner, which chdirs into a temp workdir after construction,
@@ -1462,14 +1524,17 @@ class LocalToolHost:
         full = self.resolve_read(args["path"])   # I2: append to the SAME file read_file shows; new files still land at the focus base
         self._mkparent(full)
         self._journal(args["path"], full)
+        content = args["content"]
+        if os.path.exists(full):
+            content = self._preserve_eol(content, self._detect_crlf(full))
         with open(full, "ab") as f:   # byte-exact (like write_file's "wb") — text mode would translate newlines, corrupting CRLF
-            f.write(args["content"].encode("utf-8"))
-        msg = f"Appended {len(args['content'])} bytes to {args['path']}"
+            f.write(content.encode("utf-8"))
+        msg = f"Appended {len(content.encode('utf-8'))} bytes to {args['path']}"
         try:                             # echo the file tail so the model sees the appended content in context
             with open(full, encoding="utf-8", errors="replace") as _f:
                 whole = _f.read()
             total = whole.replace("\r\n", "\n").rstrip("\n").count("\n") + 1
-            app = args["content"].replace("\r\n", "\n").rstrip("\n").count("\n") + 1
+            app = content.replace("\r\n", "\n").rstrip("\n").count("\n") + 1
             return f"{msg}. File tail:\n" + _numbered_window(whole, max(0, total - app), total - 1, ctx=2)
         except Exception:  # noqa: BLE001
             return msg
@@ -1720,20 +1785,40 @@ class LocalToolHost:
             return ToolText("No user answer was received.", status=ToolStatus.CANCELLED)
         return f"User answered: {answer}"
 
+    def _call_timeout(self, raw) -> float:
+        """Per-call blocking deadline: `raw` seconds, default self.timeout, hard ceiling 600s. Shared by
+        every blocking runner so a slow build never dies at the 30s default in one tool but not another."""
+        try:
+            t = float(raw or self.timeout)
+        except (TypeError, ValueError):
+            t = float(self.timeout)
+        return max(1.0, min(t, 600.0))
+
+    @staticmethod
+    def _timeout_escalation(t: float, ceiling_hit: bool) -> str:
+        """The remediation the model needs AT the failure. Without it a timeout reads as a dead end and the
+        next step is a blind retry at the same limit — the deadline is a TOOL CHOICE, not a verdict."""
+        return ("Exit code 124 — the {t:g}s deadline, not the command's own status. The process group was "
+                "reaped, so whatever it had already written is still on disk.\nNext: {escalate}").format(
+            t=t,
+            escalate=("this is the 600s ceiling — re-run it under proc_start, then proc_wait/proc_tail "
+                      "(background processes are not bounded by this deadline)"
+                      if ceiling_hit else
+                      "re-run with a larger timeout (up to 600), or for genuinely long work use proc_start "
+                      "+ proc_wait/proc_tail, which this deadline does not bound"),
+        )
+
     def _t_run_command(self, args: dict) -> str:
         # Optional per-call timeout (default self.timeout, hard ceiling 600s) so slow builds don't
         # die at the 30s default and come back as exit 124. Long-lived processes use proc_start.
-        try:
-            t = float(args.get("timeout") or self.timeout)
-        except (TypeError, ValueError):
-            t = float(self.timeout)
-        t = max(1.0, min(t, 600.0))
+        t = self._call_timeout(args.get("timeout"))
         code, out = self.sandbox.run(args["command"], cwd=self.root(), timeout=t)
         self._grant_shell_paths(args.get("command", ""))  # I2 reach=action: dirs the shell touched
         out = out.strip()
         if code == SANDBOX_TIMEOUT:
             return ToolText(
-                f"Exit code 124\n{self._page_out(out, label='command output') or '(no output)'}",
+                f"{self._timeout_escalation(t, t >= 600.0)}\n"
+                f"{self._page_out(out, label='command output') or '(no output)'}",
                 status="indeterminate",
             )
         if code != 0:
@@ -1875,9 +1960,17 @@ class LocalToolHost:
         runner = self._verify_runner
         if callable(runner):
             return runner(command)
-        from .oracle import CommandOracle
-        result = CommandOracle(command, root=self.root()).verify()
-        return result.ok, result.output
+        from .execution import ToolStatus as _TS
+        from .oracle import CommandOracle, OracleResult
+        # A command whose program is not on PATH answers 127, which is indistinguishable from a real red
+        # check — the host would tell the model to fix perfectly good work because `pytest` was never
+        # installed. Resolve it first and report the same NO-VERDICT class a deadline overrun reports.
+        missing = _unrunnable_verify_program(command)
+        if missing:
+            return OracleResult(_TS.INDETERMINATE, f"{missing!r} is not on PATH; the check never ran")
+        # Return the typed OracleResult, not a flattened (ok, output): it still unpacks as that pair, but
+        # it carries INDETERMINATE, which a bool cannot.
+        return CommandOracle(command, root=self.root()).verify()
 
     def _t_update_work(self, args: dict) -> str:
         self._item_verify_green = {}
@@ -1948,11 +2041,11 @@ class LocalToolHost:
         return result
 
     def _t_execute_code(self, args: dict) -> str:
-        out = self._execute_code(args["code"])
+        out = self._execute_code(args["code"], timeout=self._call_timeout(args.get("timeout")))
         self._grant_shell_paths(args.get("code", ""))  # I2 reach=action: dirs code-as-action touched
         return out
 
-    def _execute_code(self, code: str) -> str:
+    def _execute_code(self, code: str, *, timeout: float | None = None) -> str:
         """Code-as-action: run the model's script (prelude + code) in the sandbox, cwd=workspace.
         Only stdout returns. The script is written INSIDE the workspace as a hidden temp file
         (so it's mounted/available in every backend) and deleted right after; cwd is on sys.path
@@ -1964,13 +2057,18 @@ class LocalToolHost:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.write(script)
             cmd = f"{shlex.quote(self.sandbox.python_cmd)} {shlex.quote(os.path.basename(path))}"
-            code_n, out = self.sandbox.run(cmd, cwd=root, timeout=self.timeout)
+            t = self._call_timeout(timeout)
+            code_n, out = self.sandbox.run(cmd, cwd=root, timeout=t)
             out = out.strip()
             # 124 is reserved by the in-script run() helper after it reaps a timed-out process group.
             # Like an outer sandbox timeout, deliberate detachment cannot be disproved.
             if code_n in (SANDBOX_TIMEOUT, 124):
                 return ToolText(
-                    f"Exit code 124\n{self._page_out(out, label='execute_code output') or '(no output)'}",
+                    # A script is a BATCH of edits: the deadline can land between them, so say so — the
+                    # partial-write warning is the difference between re-running and re-running blind.
+                    f"{self._timeout_escalation(t, t >= 600.0)}\n"
+                    "Edits this script had already applied are on disk; re-read before re-running it.\n"
+                    f"{self._page_out(out, label='execute_code output') or '(no output)'}",
                     status="indeterminate",
                 )
             if code_n != 0:

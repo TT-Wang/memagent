@@ -14,6 +14,9 @@ from typing import Callable
 from .execution import (ToolEffect, ToolInvocation, ToolOutcome, ToolPurity, ToolStatus)
 
 
+DEFAULT_LIFECYCLE_ABSOLUTE = 3600.0
+
+
 @dataclass(frozen=True)
 class ScheduledTool:
     invocation: ToolInvocation
@@ -33,6 +36,9 @@ class ScheduledTool:
     # task-declared bounded close grace before deciding timed-out-vs-indeterminate truth.
     request_cancel: Callable[[str], None] | None = None
     cancel_grace: float = 0.0
+    # Per-child monotonic liveness cell. Only lifecycle waves interpret it; ordinary reads retain their
+    # existing fixed deadline semantics.
+    activity: object | None = None
 
 
 def _announce(task: ScheduledTool, abandoned: Callable[[], bool] | None = None) -> None:
@@ -114,7 +120,9 @@ def _indeterminate_read(task: ScheduledTool, timeout: float | None, *, cancelled
     )
 
 
-def _lifecycle_timeout_effects(task: ScheduledTool, settled: ToolOutcome) -> tuple[ToolEffect, ...]:
+def _lifecycle_timeout_effects(
+    task: ScheduledTool, settled: ToolOutcome, timeout_kind: str = "deadline",
+) -> tuple[ToolEffect, ...]:
     """Retain real child effects while refining the late lifecycle result with a typed timeout cause."""
     uncertain = task.purity is not ToolPurity.PURE_READ
     operational_status = "indeterminate" if uncertain else "failed"
@@ -131,6 +139,7 @@ def _lifecycle_timeout_effects(task: ScheduledTool, settled: ToolOutcome) -> tup
             "operational_status": operational_status,
             "stop_reason": "indeterminate" if uncertain else "error",
             "stop_cause": "delegation_timeout",
+            "timeout_kind": timeout_kind,
             "partial": bool(payload.get("partial") or payload.get("artifact_id")),
         })
         effects.append(ToolEffect(effect.id, effect.kind, payload))
@@ -145,6 +154,7 @@ def _lifecycle_timeout_effects(task: ScheduledTool, settled: ToolOutcome) -> tup
                 "operational_status": operational_status,
                 "stop_reason": "indeterminate" if uncertain else "error",
                 "stop_cause": "delegation_timeout",
+                "timeout_kind": timeout_kind,
                 "partial": False,
             },
         ))
@@ -175,6 +185,7 @@ def _has_direct_child_report(settled: ToolOutcome) -> bool:
 
 def _closed_lifecycle_timeout(
     task: ScheduledTool, settled: ToolOutcome, timeout: float | None,
+    timeout_kind: str = "deadline",
 ) -> ToolOutcome:
     """The deadline won, but the child/provider/tool stack proved physical closure during grace."""
     uncertain = task.purity is not ToolPurity.PURE_READ
@@ -182,14 +193,21 @@ def _closed_lifecycle_timeout(
         "; the writable child may have applied workspace effects before cancellation"
         if uncertain else ""
     )
+    limit = (
+        f"had no activity for {timeout:g}s"
+        if timeout_kind == "inactivity" else
+        f"reached its {timeout:g}s absolute delegation leak guard"
+        if timeout_kind == "absolute" else
+        f"exceeded its {timeout:g}s delegation deadline"
+    )
     timeout_text = (
-        f"Error: subagent exceeded its {timeout:g}s delegation deadline; cancellation closed the child "
+        f"Error: subagent {limit}; cancellation closed the child "
         f"before the bounded grace expired{suffix}"
     )
     if _has_direct_child_report(settled):
         classification = "indeterminate" if uncertain else "failed"
         timeout_text = (
-            f"{settled.text}\n\nLifecycle warning: the delegation exceeded its {timeout:g}s deadline and "
+            f"{settled.text}\n\nLifecycle warning: the subagent {limit} and "
             f"closed during bounded grace; the full safe child report above was retained, while the "
             f"delegation lifecycle is classified {classification}{suffix}."
         )
@@ -197,7 +215,7 @@ def _closed_lifecycle_timeout(
         task.invocation,
         ToolStatus.INDETERMINATE if uncertain else ToolStatus.FAILED,
         timeout_text,
-        _lifecycle_timeout_effects(task, settled),
+        _lifecycle_timeout_effects(task, settled, timeout_kind),
     )
 
 
@@ -286,6 +304,7 @@ def _run_read_wave(
     *,
     max_workers: int,
     timeout: float | None,
+    absolute_timeout: float | None = None,
     should_cancel: Callable[[], bool] | None,
     on_partial: Callable[[list[ToolOutcome]], None] | None = None,
 ) -> list[ToolOutcome]:
@@ -306,10 +325,23 @@ def _run_read_wave(
     next_lifecycle_launch_at = 0.0
     next_index = 0
     slot_wait_started: float | None = None
-    deadline = None if timeout is None else time.monotonic() + max(0.0, timeout)
+    wave_started = time.monotonic()
+    per_job_liveness = bool(
+        lifecycle_wave and timeout is not None and all(task.activity is not None for task in tasks)
+    )
+    deadline = (
+        None if per_job_liveness or timeout is None
+        else wave_started + max(0.0, timeout)
+    )
+    absolute_deadline = (
+        wave_started + max(0.0, absolute_timeout)
+        if per_job_liveness and absolute_timeout is not None else None
+    )
     cutoff_kind = "deadline"
     late: set[int] = set()
     unstarted: set[int] = set()
+    job_timeout_kind: dict[int, str] = {}
+    job_grace_deadline: dict[int, float] = {}
 
     def announce_queued(index: int, reason: str) -> None:
         job = jobs[index]
@@ -456,6 +488,10 @@ def _run_read_wave(
                 name=f"sliceagent-read-{job.task.invocation.id}",
                 daemon=True,
             )
+            if job.task.activity is not None:
+                # Physical scheduler admission: a queued child does not consume its inactivity budget.
+                # This touch also bounds a child hung before its first lifecycle/transport event.
+                job.task.activity.touch()
             job.launched = True
             thread.start()
         except BaseException:
@@ -479,7 +515,13 @@ def _run_read_wave(
     def establish_cutoff(kind: str, cutoff_at: float) -> None:
         nonlocal cutoff_kind, late, unstarted
         cutoff_kind = kind
-        late = {
+        # A per-job reap already recorded in `job_timeout_kind` must SURVIVE a later wave cutoff. This set
+        # was rebound from scratch, so a child cut off by its inactivity window that then settled before
+        # the cutoff instant (finished_at <= cutoff_at) silently dropped out of `late` — and out of the
+        # timeout classification below with it, so the parent saw its RAW outcome (a truncated partial
+        # report reported as SUCCEEDED) instead of a typed delegation timeout. Reaped is a fact about the
+        # child; a subsequent user cancellation cannot unmake it.
+        late = {index for index in job_timeout_kind if jobs[index].entered or jobs[index].announcing} | {
             index for index, job in enumerate(jobs)
             if (job.entered or job.announcing)
             and (job.finished_at is None or job.finished_at > cutoff_at)
@@ -502,6 +544,64 @@ def _run_read_wave(
                     pass  # cancellation notification cannot falsify the observed cutoff
         condition.notify_all()
 
+    def establish_job_timeout(index: int, kind: str, cutoff_at: float, now: float) -> None:
+        """Cut off one lifecycle child without cancelling live siblings in the same wave."""
+        if index in job_timeout_kind:
+            return
+        job = jobs[index]
+        if job.finished_at is not None and job.finished_at <= cutoff_at:
+            return
+        job_timeout_kind[index] = kind
+        if job.entered or job.announcing:
+            late.add(index)
+            if job.announcing:
+                job.abandoned = True
+            callback = job.task.request_cancel
+            if callback is not None:
+                try:
+                    callback("deadline")
+                except Exception:
+                    pass
+            grace = max(_TIMEOUT_GRACE_SECONDS, max(0.0, float(job.task.cancel_grace or 0.0)))
+            job_grace_deadline[index] = now + grace
+        else:
+            unstarted.add(index)
+            job.abandoned = True
+            job.done = True
+            job.finished_at = now
+        condition.notify_all()
+
+    def process_job_timeouts(now: float) -> None:
+        if not per_job_liveness:
+            return
+        for index, job in enumerate(jobs):
+            if index in job_timeout_kind:
+                continue
+            if job.done and job.finished_at is not None:
+                continue
+            if not job.launched:
+                if absolute_deadline is not None and now >= absolute_deadline:
+                    establish_job_timeout(index, "absolute", absolute_deadline, now)
+                continue
+            activity_last = float(getattr(job.task.activity, "last", wave_started))
+            inactivity_deadline = activity_last + max(0.0, float(timeout or 0.0))
+            if absolute_deadline is not None and absolute_deadline <= inactivity_deadline:
+                kind, cutoff_at = "absolute", absolute_deadline
+            else:
+                kind, cutoff_at = "inactivity", inactivity_deadline
+            if now >= cutoff_at:
+                establish_job_timeout(index, kind, cutoff_at, now)
+
+    def job_logically_settled(index: int, now: float) -> bool:
+        job = jobs[index]
+        if index in unstarted:
+            return True
+        if index in late:
+            if job.done and job.slot_released:
+                return True
+            return now >= job_grace_deadline.get(index, now)
+        return job.done and (not job.launched or job.slot_released)
+
     with condition:
         try:
             # A lifecycle wave intentionally admits only a bounded number of full model loops. Announce every
@@ -515,6 +615,8 @@ def _run_read_wave(
             while True:
                 cancelled = should_cancel is not None and should_cancel()
                 now = time.monotonic()
+                if not cancelled:
+                    process_job_timeouts(now)
                 expired = deadline is not None and now >= deadline
                 if cancelled or expired:
                     establish_cutoff("cancel" if cancelled else "deadline", now if cancelled else deadline)
@@ -582,7 +684,22 @@ def _run_read_wave(
                     break
                 if next_index == len(jobs) and all(
                         job.done and (not job.launched or job.slot_released) for job in jobs):
+                    if per_job_liveness and job_timeout_kind:
+                        break
                     return [_job_result(job) for job in jobs]
+                # SETTLEMENT, not the launch pointer, ends a per-job-liveness wave. `next_index` only
+                # advances inside the launch loop above, which is gated on `active_count() < worker_limit`
+                # — so children that ignore their cancellation lease hold every slot forever and freeze
+                # that pointer below len(jobs). Conjoining it here made both exits unreachable: with
+                # per_job_liveness the wave-level `deadline` is None, so a batch of more than
+                # _MAX_PARALLEL_LIFECYCLE_WAVE wedged children spun this loop at the poll interval
+                # indefinitely, past the absolute leak guard whose whole purpose is that no child can
+                # freeze the parent turn. `job_logically_settled` already accounts for the queued tail: a
+                # pending queued job is neither `unstarted` nor `late` and is not done, so it returns
+                # False and the wave still waits for genuinely outstanding work.
+                if per_job_liveness and all(
+                        job_logically_settled(index, now) for index in range(len(jobs))):
+                    break
 
                 # A slot held by another concurrent wave may become available before this wave's deadline.
                 # Poll rather than immediately fabricating a capacity cancellation.
@@ -595,29 +712,48 @@ def _run_read_wave(
                     wait_for = min(wait_for, max(0.0, next_lifecycle_launch_at - now))
                 if deadline is not None:
                     wait_for = min(wait_for, max(0.0, deadline - now))
+                if per_job_liveness:
+                    pending_deadlines = []
+                    for index, job in enumerate(jobs):
+                        if index in job_timeout_kind or (job.done and job.finished_at is not None):
+                            continue
+                        if job.launched:
+                            activity_last = float(getattr(job.task.activity, "last", wave_started))
+                            pending_deadlines.append(
+                                activity_last + max(0.0, float(timeout or 0.0))
+                            )
+                        if absolute_deadline is not None:
+                            pending_deadlines.append(absolute_deadline)
+                    pending_deadlines.extend(
+                        grace for index, grace in job_grace_deadline.items()
+                        if not job_logically_settled(index, now)
+                    )
+                    if pending_deadlines:
+                        wait_for = min(wait_for, max(0.0, min(pending_deadlines) - now))
                 condition.wait(timeout=wait_for)
 
             # Ordinary reads retain the short deadline grace. A lifecycle child advertises enough additional
             # time for its cancellable SSE/tool stack to prove closure. Parent cancellation uses the same lease:
             # returning immediately would recreate the late-provider/occupied-slot bug under a different cause.
-            lifecycle_graces = [
-                max(0.0, float(jobs[index].task.cancel_grace or 0.0))
-                for index in late if jobs[index].task.request_cancel is not None
-            ]
-            grace = (
-                max([_TIMEOUT_GRACE_SECONDS, *lifecycle_graces])
-                if cutoff_kind == "deadline" or lifecycle_graces else 0.0
-            )
-            if grace > 0:
-                grace_deadline = time.monotonic() + grace
-                while any(
-                    not jobs[index].done or not jobs[index].slot_released
-                    for index in late
-                ):
-                    remaining = grace_deadline - time.monotonic()
-                    if remaining <= 0:
-                        break
-                    condition.wait(timeout=min(_TIMEOUT_POLL_SECONDS, remaining))
+            if not per_job_liveness or cancelled or expired:
+                lifecycle_graces = [
+                    max(0.0, float(jobs[index].task.cancel_grace or 0.0))
+                    for index in late if jobs[index].task.request_cancel is not None
+                ]
+                grace = (
+                    max([_TIMEOUT_GRACE_SECONDS, *lifecycle_graces])
+                    if cutoff_kind == "deadline" or lifecycle_graces else 0.0
+                )
+                if grace > 0:
+                    grace_deadline = time.monotonic() + grace
+                    while any(
+                        not jobs[index].done or not jobs[index].slot_released
+                        for index in late
+                    ):
+                        remaining = grace_deadline - time.monotonic()
+                        if remaining <= 0:
+                            break
+                        condition.wait(timeout=min(_TIMEOUT_POLL_SECONDS, remaining))
             still_running = {
                 index for index in late
                 if not jobs[index].done or not jobs[index].slot_released
@@ -652,19 +788,65 @@ def _run_read_wave(
     outcomes: list[ToolOutcome] = []
     for index, job in enumerate(jobs):
         if index in unstarted:
-            outcomes.append(_cancelled(job.task, not_started_reason))
+            if index in job_timeout_kind:
+                reason = (
+                    "absolute delegation leak guard elapsed before execution started"
+                    if job_timeout_kind[index] == "absolute" else
+                    "delegation inactivity window elapsed before execution started"
+                )
+                outcomes.append(_cancelled(job.task, reason))
+            else:
+                outcomes.append(_cancelled(job.task, not_started_reason))
         elif index in still_running:
-            outcomes.append(_indeterminate_read(
-                job.task, timeout, cancelled=cutoff_kind == "cancel",
-            ))
+            if index in job_timeout_kind:
+                kind = job_timeout_kind[index]
+                detail = (
+                    f"reached its {absolute_timeout:g}s absolute delegation leak guard"
+                    if kind == "absolute" else
+                    f"had no activity for {timeout:g}s"
+                )
+                outcomes.append(ToolOutcome(
+                    job.task.invocation,
+                    ToolStatus.INDETERMINATE,
+                    f"Error: subagent {detail} and is still running after the bounded grace period; "
+                    "its final outcome is indeterminate",
+                    # The reap must be TYPED, not prose-only (#55): a still-running child's physical
+                    # state is unknown, so every field says indeterminate — but the cause and its
+                    # timeout_kind are recorded facts, same schema as the settled-path effects.
+                    (ToolEffect(
+                        f"{job.task.invocation.id}:delegation-timeout",
+                        "child_outcome",
+                        {
+                            "artifact_id": "",
+                            "kind": str(job.task.invocation.args.get("agent") or ""),
+                            "status": "indeterminate",
+                            "operational_status": "indeterminate",
+                            "stop_reason": "indeterminate",
+                            "stop_cause": "delegation_timeout",
+                            "timeout_kind": kind,
+                            "partial": False,
+                        },
+                    ),),
+                ))
+            else:
+                outcomes.append(_indeterminate_read(
+                    job.task, timeout, cancelled=cutoff_kind == "cancel",
+                ))
         elif index in late:
             # The deadline invalidates an otherwise ordinary late result, but it cannot erase stronger typed
             # uncertainty (or swallow an interrupt) reported by the execution boundary itself. In particular,
             # rewriting INDETERMINATE to FAILED would let a later mutation overtake an unresolved outcome.
             settled = _job_result(job)
             if settled.status is ToolStatus.INDETERMINATE:
+                limit = (
+                    "delegation inactivity window"
+                    if job_timeout_kind.get(index) == "inactivity" else
+                    "absolute delegation leak guard"
+                    if job_timeout_kind.get(index) == "absolute" else
+                    "delegation deadline"
+                )
                 outcomes.append(settled.with_text(
-                    f"{settled.text} (the {'delegation deadline' if cutoff_kind == 'deadline' else 'parent cancellation'} "
+                    f"{settled.text} (the {limit if cutoff_kind == 'deadline' else 'parent cancellation'} "
                     "also elapsed without a proven clean child result)"
                 ))
             elif _has_committed_child(settled):
@@ -673,9 +855,18 @@ def _run_read_wave(
                 # races with post-commit journal cleanup/mirroring therefore loses to the settled durable fact.
                 outcomes.append(settled)
             elif not job.task.timeout_safe and job.task.request_cancel is not None:
+                timeout_value = (
+                    absolute_timeout if job_timeout_kind.get(index) == "absolute" else timeout
+                )
                 outcomes.append(
-                    _closed_lifecycle_timeout(job.task, settled, timeout)
-                    if cutoff_kind == "deadline" else
+                    # An existing PER-JOB reap outranks a later wave-level cancel: the child's
+                    # inactivity/absolute cutoff is a recorded fact about the child, and assembling it
+                    # as plain parent-cancel discarded both the classification and the typed
+                    # timeout_kind (the reap→settle→sibling-live→parent-cancel race).
+                    _closed_lifecycle_timeout(
+                        job.task, settled, timeout_value, job_timeout_kind.get(index, "deadline"),
+                    )
+                    if cutoff_kind == "deadline" or index in job_timeout_kind else
                     _closed_lifecycle_cancel(job.task, settled)
                 )
             else:
@@ -692,6 +883,7 @@ def _run_wave(
     *,
     max_workers: int,
     timeout: float | None,
+    absolute_timeout: float | None = None,
     should_cancel: Callable[[], bool] | None = None,
     on_partial: Callable[[list[ToolOutcome]], None] | None = None,
 ) -> list[ToolOutcome]:
@@ -709,7 +901,8 @@ def _run_wave(
         if lifecycle_wave or any(not task.timeout_safe for task in tasks):
             wave_workers = min(wave_workers, _MAX_PARALLEL_LIFECYCLE_WAVE)
         return _run_read_wave(
-            tasks, max_workers=wave_workers, timeout=timeout, should_cancel=should_cancel,
+            tasks, max_workers=wave_workers, timeout=timeout, absolute_timeout=absolute_timeout,
+            should_cancel=should_cancel,
             on_partial=on_partial,
         )
     if len(tasks) != 1:
@@ -723,14 +916,22 @@ def run_ordered(
     max_workers: int = 8,
     timeout: float | None = None,
     lifecycle_timeout: float | None = None,
+    lifecycle_absolute: float | None = None,
     on_outcomes: Callable[[list[ToolOutcome]], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
 ) -> list[ToolOutcome]:
     """Run pure-read waves and ordered barriers, preserving provider result order.
 
     An indeterminate invocation stops all later waves. Calls that have not started receive
-    a proven ``cancelled`` outcome so every provider invocation still has one reply.
+    a proven ``cancelled`` outcome so every provider invocation still has one reply. Lifecycle
+    waves always retain a final absolute leak guard: callers that omit the optional override or
+    pass ``None`` receive the same fail-closed 3600-second default as the production host.
     """
+    effective_lifecycle_absolute = (
+        DEFAULT_LIFECYCLE_ABSOLUTE
+        if lifecycle_absolute is None
+        else lifecycle_absolute
+    )
     outcomes: list[ToolOutcome] = []
     i = 0
     while i < len(tasks):
@@ -806,7 +1007,11 @@ def run_ordered(
         wave_outcomes: list[ToolOutcome | None] | None = None
         try:
             executed = _run_wave(
-                ready, max_workers=max_workers, timeout=wave_timeout, should_cancel=should_cancel,
+                ready, max_workers=max_workers, timeout=wave_timeout,
+                absolute_timeout=(
+                    effective_lifecycle_absolute if lifecycle_ready else None
+                ),
+                should_cancel=should_cancel,
                 # Interrupt harvest: settled real outcomes inside an interrupted wave are surfaced through the
                 # ordinary publication callback before the interrupt propagates, so a finished sibling's sealed
                 # work is never re-labelled indeterminate by the caller's synthesizer.
