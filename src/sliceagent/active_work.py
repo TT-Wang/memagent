@@ -13,6 +13,8 @@ without giving either layer a second interpretation of the work.
 """
 from __future__ import annotations
 
+from .interfaces import PeerResult, PeerWait
+
 import hashlib
 import json
 from collections.abc import Iterable, Mapping
@@ -28,6 +30,7 @@ WorkStatus: TypeAlias = Literal[
     "open",
     "in_progress",
     "waiting_user",
+    "waiting_peer",
     "ready",
     "delivered",
     "verified",
@@ -37,10 +40,10 @@ WorkStatus: TypeAlias = Literal[
 WorkKind: TypeAlias = Literal["request", "task"]
 
 WORK_STATUSES = frozenset({
-    "open", "in_progress", "waiting_user", "ready", "delivered", "verified", "cancelled", "superseded",
+    "open", "in_progress", "waiting_user", "waiting_peer", "ready", "delivered", "verified", "cancelled", "superseded",
 })
 WORK_KINDS = frozenset({"request", "task"})
-UNRESOLVED_STATUSES = frozenset({"open", "in_progress", "waiting_user", "ready"})
+UNRESOLVED_STATUSES = frozenset({"open", "in_progress", "waiting_user", "waiting_peer", "ready"})
 _SHA256_LENGTH = 64
 
 
@@ -339,6 +342,9 @@ class WorkItem:
     # `done_when` = the human-readable acceptance criterion. Optional; absent on legacy records.
     verify: tuple[str, ...] = ()
     done_when: str = ""
+    # Typed peer-wait correlation for a ``waiting_peer`` park (None otherwise). Durable state,
+    # not prose in stop_reason: only a matching PeerResult.correlation_id may resume the request.
+    peer_wait: "PeerWait | None" = None
 
     def __post_init__(self) -> None:
         _text(self.id, "work_item.id")
@@ -353,6 +359,8 @@ class WorkItem:
             raise GraphValidationError("work_item.verify must be up to 8 non-empty commands (<=500 chars each)")
         if not isinstance(self.done_when, str) or len(self.done_when) > 500:
             raise GraphValidationError("work_item.done_when must be a string of at most 500 chars")
+        if self.peer_wait is not None and not isinstance(self.peer_wait, PeerWait):
+            raise GraphValidationError("work_item.peer_wait must be a PeerWait or None")
         if not self.logical_id and self.kind == "request":
             object.__setattr__(self, "logical_id", self.root_id)
         _text(self.logical_id, "work_item.logical_id", allow_empty=self.kind == "task")
@@ -408,6 +416,13 @@ class WorkItem:
             "stop_reason": self.stop_reason,
             "verify": list(self.verify),
             "done_when": self.done_when,
+            "peer_wait": (
+                None if self.peer_wait is None else {
+                    "correlation_id": self.peer_wait.correlation_id,
+                    "peer_id": self.peer_wait.peer_id,
+                    "deadline_s": self.peer_wait.deadline_s,
+                }
+            ),
         }
 
     @classmethod
@@ -444,7 +459,21 @@ class WorkItem:
             stop_reason=value.get("stop_reason", ""),
             verify=tuple(str(cmd) for cmd in (value.get("verify") or ()) if str(cmd).strip()),
             done_when=str(value.get("done_when") or ""),
+            peer_wait=_peer_wait_from_dict(value.get("peer_wait")),
         )
+
+
+def _peer_wait_from_dict(value: Any) -> "PeerWait | None":
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise GraphValidationError("work_item.peer_wait must be an object or null")
+    deadline = value.get("deadline_s")
+    return PeerWait(
+        correlation_id=str(value.get("correlation_id") or ""),
+        peer_id=str(value.get("peer_id") or ""),
+        deadline_s=None if deadline is None else float(deadline),
+    )
 
 
 @dataclass(frozen=True)
@@ -497,13 +526,18 @@ _ALLOWED_TRANSITIONS: dict[str, frozenset[str]] = {
     # build_work_delta rewrites a model-supplied 'ready' to 'verified' after the item's verify commands
     # ran green host-side (P2). The model itself can never submit 'verified' (intake guard), and a
     # verified item must carry its typed verification evidence/output refs (invariants above).
-    "open": frozenset({"open", "in_progress", "waiting_user", "ready", "delivered", "verified",
-                       "cancelled", "superseded"}),
+    "open": frozenset({"open", "in_progress", "waiting_user", "waiting_peer", "ready", "delivered",
+                       "verified", "cancelled", "superseded"}),
     "in_progress": frozenset({
-        "in_progress", "waiting_user", "ready", "delivered", "verified", "cancelled", "superseded",
+        "in_progress", "waiting_user", "waiting_peer", "ready", "delivered", "verified", "cancelled", "superseded",
     }),
     "waiting_user": frozenset({
         "waiting_user", "in_progress", "ready", "delivered", "verified", "cancelled", "superseded",
+    }),
+    # A peer-parked request resumes to in_progress on a correlated PeerResult (the horizontal
+    # analogue of waiting_user); it may also be delivered/cancelled/superseded like any wait.
+    "waiting_peer": frozenset({
+        "waiting_peer", "in_progress", "ready", "delivered", "verified", "cancelled", "superseded",
     }),
     # ``ready`` says a child contribution is prepared. It may be model-maintained for local work or derived
     # by the host from a bound child's successful immutable seal. Only the host can attach the real response
@@ -834,7 +868,8 @@ class WorkGraph:
 
     def seal_current(self, stop_reason: str, response_ref: OutputRef | None = None, *,
                      transitioned: bool = False, logical_id: str | None = None,
-                     expected_revision: int | None = None) -> "WorkGraph":
+                     expected_revision: int | None = None,
+                     peer_wait: "PeerWait | None" = None) -> "WorkGraph":
         """Seal one runtime segment without confusing transport with task completion.
 
         A context/workspace transition keeps the request ``in_progress`` even if a progress
@@ -850,7 +885,10 @@ class WorkGraph:
         if not candidates:
             raise GraphValidationError("there is no unresolved request root to seal")
         current = candidates[-1]
-        deliver_ready = bool(response_ref is not None and not transitioned and stop_reason != "waiting_user")
+        deliver_ready = bool(
+            response_ref is not None and not transitioned
+            and stop_reason not in ("waiting_user", "waiting_peer")
+        )
         ready_children = tuple(
             item for item in self.items
             if item.id != current.id and item.root_id == current.id and item.status == "ready"
@@ -866,6 +904,8 @@ class WorkGraph:
             status: WorkStatus = "in_progress"
         elif stop_reason == "waiting_user":
             status = "waiting_user"
+        elif stop_reason == "waiting_peer":
+            status = "waiting_peer"
         elif response_ref is not None and not unresolved_children:
             status = "delivered"
         else:
@@ -876,6 +916,7 @@ class WorkGraph:
             status=status,
             output_refs=tuple(dict.fromkeys(current.output_refs + outputs)),
             stop_reason=stop_reason,
+            peer_wait=peer_wait if status == "waiting_peer" else None,
         )
         updated_children = tuple(
             replace(
@@ -1004,3 +1045,42 @@ __all__ = [
     "WorkStatus",
     "request_root_item",
 ]
+
+
+def resume_waiting_peer(
+    graph: "WorkGraph",
+    result: PeerResult,
+    *,
+    logical_id: str | None = None,
+    expected_revision: int | None = None,
+) -> "WorkGraph":
+    """Resume a ``waiting_peer``-parked request on a correlated peer result.
+
+    Only a ``PeerResult`` whose ``correlation_id`` matches the park's ``PeerWait``
+    resumes the request (back to ``in_progress`` with the durable wait cleared). A
+    mismatch — or no parked request — raises rather than silently resuming unrelated
+    work, mirroring the exact-correlation discipline of the confidential lane.
+    """
+    if not isinstance(result, PeerResult):
+        raise ActiveWorkError("resume_waiting_peer requires a PeerResult")
+    parked = [
+        item for item in graph.unresolved_roots
+        if item.status == "waiting_peer"
+        and (logical_id is None or item.logical_id == logical_id)
+    ]
+    if not parked:
+        raise ActiveWorkError("no waiting_peer request is parked for this correlation")
+    current = parked[-1]
+    wait = current.peer_wait
+    if wait is None or not result.correlation_id or result.correlation_id != wait.correlation_id:
+        raise ActiveWorkError(
+            "peer result correlation does not match the parked request"
+        )
+    revision = graph.revision if expected_revision is None else expected_revision
+    resumed = replace(
+        current,
+        status="in_progress",
+        stop_reason="",
+        peer_wait=None,
+    )
+    return graph.apply_delta(WorkDelta(expected_revision=revision, updates=(resumed,)))

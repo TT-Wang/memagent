@@ -195,3 +195,32 @@ class Memory(Protocol):
 class Oracle(Protocol):
     """Ground-truth verification independent of retrieval. (backed by the project's test/lint runners)"""
     def verify(self) -> tuple[bool, str]: ...
+
+
+@dataclass(frozen=True)
+class PeerWait:
+    """A durable park on a peer's correlated response (the horizontal analogue of
+    waiting_user). Carried as typed Active-Work state, never scraped from prose.
+
+    ``correlation_id`` binds the park to exactly one expected peer result; only a
+    matching ``PeerResult.correlation_id`` may resume the request. ``deadline_s`` is
+    an optional wall bound after which the wait may be reaped as timed-out.
+    """
+
+    correlation_id: str
+    peer_id: str = ""
+    deadline_s: float | None = None
+
+
+@dataclass(frozen=True)
+class PeerResult:
+    """A correlated reply from a peer that may resume a ``PeerWait``-parked request.
+
+    Resumption is gated on ``correlation_id`` matching the park exactly; a mismatch
+    must never silently resume unrelated work.
+    """
+
+    correlation_id: str
+    peer_id: str = ""
+    status: str = "ok"
+    report: str = ""

@@ -1131,6 +1131,14 @@ def render_convergence(s) -> str:
     calls-since-edit), no task/tool/language assumptions. Fires ONLY post-edit and ONLY when nothing
     is broken, so it never cuts off active fixing (a failing check keeps last_error set → no nudge).
     This SHRINKS wasted steps/tokens/time; the model still decides (it may continue for a real edit)."""
+    # PEER-WAIT EXEMPTION (C1): a request parked on a correlated peer response is not idle and
+    # not over-verifying — it is legitimately blocked on a teammate. Convergence pressure must
+    # stay silent (the horizontal analogue of waiting_user); a matching PeerResult resumes it.
+    _aw = getattr(s, "active_work", None)
+    if _aw is not None:
+        _roots = getattr(_aw, "unresolved_roots", ())
+        if _roots and getattr(_roots[-1], "status", "") == "waiting_peer":
+            return ""
     if not s.edited_files:
         # EXPLORER children are SUPPOSED to do many read-only calls (their deliverable is the
         # investigation); the read-only nudge below is for the TOP-LEVEL agent over-exploring instead
