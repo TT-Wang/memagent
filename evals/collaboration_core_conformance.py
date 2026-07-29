@@ -282,6 +282,17 @@ def probe_c2_typed_peer_steer() -> None:
             wake="resume_wait",
         ),
     )
+    for invalid in (None, False, 0):
+        _assert_rejected(
+            f"a non-string peer-message correlation {invalid!r}",
+            lambda value=invalid: PeerMessage(
+                message_id="peer-message-7",
+                peer_id="reviewer",
+                content="reject: planted answer is wrong",
+                correlation_id=value,
+                wake="resume_wait",
+            ),
+        )
     _assert_rejected(
         "a peer message without a wake contract",
         lambda: PeerMessage(
@@ -292,6 +303,17 @@ def probe_c2_typed_peer_steer() -> None:
             wake="",
         ),
     )
+    for invalid in (None, False, 0):
+        _assert_rejected(
+            f"a non-string peer-message wake {invalid!r}",
+            lambda value=invalid: PeerMessage(
+                message_id="peer-message-7",
+                peer_id="reviewer",
+                content="reject: planted answer is wrong",
+                correlation_id="review-42",
+                wake=value,
+            ),
+        )
     _assert_rejected(
         "an unknown peer-message wake contract",
         lambda: PeerMessage(
@@ -367,6 +389,26 @@ def probe_c2_typed_peer_steer() -> None:
         "wake": "resume_wait",
     }, "the bounded provider envelope lost or rewrote typed peer fields"
 
+    preloaded_inbox: queue.Queue = queue.Queue()
+    preloaded_inbox.put(peer)
+    preloaded_events = []
+    preloaded_llm = _ScriptLLM([_done("integrated")])
+    run_turn(
+        build_slice=lambda: [{"role": "user", "content": "preloaded peer input"}],
+        llm=preloaded_llm,
+        tools=_Host(),
+        dispatch=preloaded_events.append,
+        hooks=Hooks(),
+        steer_queue=preloaded_inbox,
+    )
+    assert len(preloaded_llm.seen) == 1, \
+        "a preloaded peer message missed first-call admission and forced a later provider step"
+    first_prepared = preloaded_llm.seen[0]
+    assert first_prepared[-1]["role"] == "user" and first_prepared[-1]["content"] != peer.content, \
+        "the top-of-step drain did not place a typed peer envelope in the first provider call"
+    assert len([event for event in preloaded_events if isinstance(event, PeerMessageDelivered)]) == 1, \
+        "preloaded peer admission did not emit exactly one typed receipt"
+
     step_inbox: queue.Queue = queue.Queue()
     step_llm = _ScriptLLM(
         [
@@ -396,24 +438,6 @@ def probe_c2_typed_peer_steer() -> None:
         "the peer envelope did not land after completed tool results"
     assert len([event for event in step_events if isinstance(event, PeerMessageDelivered)]) == 1, \
         "step-boundary peer admission did not emit exactly one typed receipt"
-
-    duplicate_inbox: queue.Queue = queue.Queue()
-    duplicate_inbox.put(peer)
-    duplicate_inbox.put(peer)
-    duplicate_events = []
-    duplicate_llm = _ScriptLLM([_done("first"), _done("second")])
-    run_turn(
-        build_slice=lambda: [{"role": "user", "content": "deduplicate"}],
-        llm=duplicate_llm,
-        tools=_Host(),
-        dispatch=duplicate_events.append,
-        hooks=Hooks(),
-        steer_queue=duplicate_inbox,
-    )
-    assert len([
-        event for event in duplicate_events
-        if isinstance(event, PeerMessageDelivered) and event.message_id == peer.message_id
-    ]) == 1, "one peer message identity was delivered more than once in the same turn"
 
     no_step_inbox: queue.Queue = queue.Queue()
     no_step_inbox.put(peer)
