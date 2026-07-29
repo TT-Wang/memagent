@@ -199,7 +199,7 @@ class Oracle(Protocol):
 
 def _validate_peer_identity(value: str, field_name: str) -> None:
     """Peer correlation/identity must be a non-empty, single-line, bounded token."""
-    if not isinstance(value, str) or not value.strip() or "\n" in value or len(value) > 200:
+    if not isinstance(value, str) or not value.strip() or "\n" in value or "\r" in value or len(value) > 200:
         raise ValueError(f"{field_name} must be a non-empty single-line string (<=200 chars)")
 
 
