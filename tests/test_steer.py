@@ -267,3 +267,64 @@ def test_terminal_handback_splits_user_prose_from_typed_items():
     ])
     assert draft == ["keep typing", "note", "list pair"]
     assert typed == [("inbox item", "adm-9"), peer, ("blank adm", " "), (None, ""), ("text", None)]
+
+
+def test_step_drain_rejects_malformed_items_without_coercion():
+    """clem's end-to-end authority finding: a malformed pair like (PeerMessage, "") or
+    ("text", None) used to be str()-coerced into a user-role message with a SteerDelivered
+    receipt — peer input forged as END-USER authority. The queue boundary is now exact-shape:
+    malformed items get a typed SteerRejected and never reach the trajectory."""
+    from sliceagent.events import PeerMessageDelivered, SteerRejected
+    from sliceagent.interfaces import PeerMessage
+
+    peer = PeerMessage(message_id="m-9", peer_id="peer-x", content="peer says ship")
+    q: queue.Queue = queue.Queue()
+    q.put("real user steer")
+    q.put((peer, ""))            # malformed pair — must NOT become str(peer) user text
+    q.put(("text", None))        # non-string admission id — must NOT coerce to ("text", "")
+    q.put({"hostile": "dict"})
+    llm = _ScriptLLM([_done_response("ok"), _done_response("done")])
+    events = []
+    outcome = run_turn(
+        build_slice=lambda: [{"role": "user", "content": "go"}],
+        llm=llm, tools=_Host(), dispatch=events.append, hooks=Hooks(), steer_queue=q,
+    )
+    assert outcome.stop_reason == "end_turn"
+    delivered = [e for e in events if isinstance(e, SteerDelivered)]
+    assert [e.content for e in delivered] == ["real user steer"], "only the legal steer is delivered"
+    assert not [e for e in events if isinstance(e, PeerMessageDelivered)], \
+        "a malformed pair must not reach the peer lane either"
+    rejected = [e.shape for e in events if isinstance(e, SteerRejected)]
+    assert rejected == ["pair(PeerMessage,str)", "pair(str,NoneType)", "dict"], rejected
+    first = llm.seen[0]   # queued pre-turn → drained at the top of step 1
+    users = [m["content"] for m in first if m["role"] == "user"]
+    assert "real user steer" in users
+    assert not any("PeerMessage(" in c or "hostile" in c for c in users), \
+        "no coerced object repr lands in the provider trajectory"
+
+
+def test_retirement_sweep_preserves_malformed_items_as_is():
+    """The retirement sweep must return malformed items AS-IS (host-owned), never str()-coerced —
+    the caller's typed lane redrives them and the next step drain rejects them typed."""
+    from sliceagent.interfaces import PeerMessage
+
+    peer = PeerMessage(message_id="m-10", peer_id="peer-y", content="resume please")
+    malformed = (peer, "")
+    q: queue.Queue = queue.Queue()
+
+    class _LateTyper(Hooks):
+        def should_continue_after_stop(self, stop_reason):
+            q.put(malformed)       # lands in the retirement window, after the final drain
+            q.put(("text", None))
+            return None
+
+    llm = _ScriptLLM([_done_response("answer")])
+    events = []
+    outcome = run_turn(
+        build_slice=lambda: [{"role": "user", "content": "go"}],
+        llm=llm, tools=_Host(), dispatch=events.append, hooks=_LateTyper(), steer_queue=q,
+    )
+    assert outcome.stop_reason == "end_turn"
+    assert outcome.leftover_steers[0] is malformed, "malformed pair preserved intact, not stringified"
+    assert outcome.leftover_steers[1] == ("text", None)
+    assert not [e for e in events if isinstance(e, SteerDelivered)]

@@ -103,6 +103,21 @@ class SteerDelivered(Event):
 
 
 @dataclass
+class SteerRejected(Event):
+    """A steer-queue item that is none of the legal shapes was REJECTED at the queue boundary.
+
+    Legal shapes are: a typed ``PeerMessage`` (peer lane), a raw ``str`` (end-user text), or an
+    exact ``(str, str)`` admission pair. Anything else — a malformed pair like
+    ``(PeerMessage, "")`` or ``("text", None)``, or any other object — is never ``str()``-coerced
+    into a user-role message: that would forge end-user authority over non-user input. The item
+    is dropped from the trajectory (no user message, no ``SteerDelivered``) and this typed event
+    is the only surfacing. ``shape`` is a payload-free type description, never the item's data.
+    """
+
+    shape: str
+
+
+@dataclass
 class PeerMessageDelivered(Event):
     """A typed PEER message admitted into the running turn via the steer queue.
 

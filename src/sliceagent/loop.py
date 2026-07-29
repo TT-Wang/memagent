@@ -35,6 +35,7 @@ from .events import (
     StepBegin,
     StepEnd,
     SteerDelivered,
+    SteerRejected,
     ToolExecutionStarted,
     ToolRejected,
     ToolQueued,
@@ -1324,6 +1325,32 @@ def _split_steer_handback(leftover) -> tuple[list, list]:
     return draft_lines, typed
 
 
+def _classify_steer_item(item):
+    """Exact-shape classification at the steer-queue boundary. Returns one of:
+
+    - ``("peer", item)``      — a typed PeerMessage: the peer lane, admitted via envelope.
+    - ``("text", str)``       — raw end-user text (admission_id "").
+    - ``("pair", (text, id))``— an exact (str, str) admission pair from a durable host.
+    - ``("malformed", shape)``— anything else: NEVER str()-coerce it into user prose — that
+      forges end-user authority over non-user input (clem's end-to-end finding: (PeerMessage, "")
+      or ("text", None) used to stringify into a steer). The caller either preserves the item as
+      a host-owned leftover (retirement sweep) or rejects it typed (step drain). ``shape`` is a
+      payload-free type description for the rejection event.
+    """
+    if isinstance(item, PeerMessage):
+        return ("peer", item)
+    if isinstance(item, str):
+        return ("text", item)
+    if (isinstance(item, (tuple, list)) and len(item) == 2
+            and isinstance(item[0], str) and isinstance(item[1], str)):
+        return ("pair", (item[0], item[1]))
+    if isinstance(item, (tuple, list)):
+        shape = "pair(" + ",".join(type(part).__name__ for part in item) + ")"
+    else:
+        shape = type(item).__name__
+    return ("malformed", shape)
+
+
 def run_turn(*, build_slice, llm, tools, dispatch: Dispatcher, hooks: Hooks | None = None,
              max_steps: int = 40, signal=None, checkpoint=None, consolidate=None,
              turn_id: str = "", call_namespace: str = "", transport_activity=None,
@@ -1361,6 +1388,10 @@ def run_turn(*, build_slice, llm, tools, dispatch: Dispatcher, hooks: Hooks | No
     should_cancel = signal.is_set if signal is not None else None
 
     steer_state = {"broken": False}
+    # Malformed queue items encountered at a mid-turn drain (not a bare str / exact (str,str) pair /
+    # bare PeerMessage) are NEVER coerced into end-user authority; they are deferred here INTACT and
+    # returned on leftover_steers so a durable host can reconcile them. Oldest-first (drain order).
+    deferred_leftovers: list = []
 
     def _mark_channel_broken(exc: BaseException) -> None:
         """One-shot broken-channel transition shared by every queue access (drain AND retirement sweep).
@@ -1389,9 +1420,12 @@ def run_turn(*, build_slice, llm, tools, dispatch: Dispatcher, hooks: Hooks | No
         arriving after even this sweep simply stays in the queue — the caller owns the queue and
         must inspect it after ``run_turn`` returns.
         """
+        # Seed with anything a mid-turn drain deferred (malformed items it refused to coerce). They
+        # are OLDER than anything still queued, so they lead the returned leftovers in drain order,
+        # and they survive even when the queue is absent/broken below.
+        swept = list(deferred_leftovers)
         if steer_queue is None or steer_state["broken"]:
-            return ()
-        swept = []
+            return tuple(swept)
         while True:
             try:
                 item = steer_queue.get_nowait()
@@ -1405,14 +1439,15 @@ def run_turn(*, build_slice, llm, tools, dispatch: Dispatcher, hooks: Hooks | No
                 break
             # Preserve a typed peer message INTACT (never stringify): an undelivered peer message must
             # return on leftover_steers exactly as sent so the caller can redrive it and a durable host
-            # can still correlate its message_id/wake. (C2 adaptation of the #49 sweep.)
-            if isinstance(item, PeerMessage):
+            # can still correlate its message_id/wake. (C2 adaptation of the #49 sweep.) A MALFORMED
+            # item (not str / not exact (str, str)) is likewise host-owned: return it AS-IS — never
+            # str()-coerce it into user prose — so the caller's typed lane redrives it and the next
+            # step drain rejects it typed (clem's end-to-end authority finding).
+            kind, value = _classify_steer_item(item)
+            if kind in ("peer", "malformed"):
                 swept.append(item)
                 continue
-            if isinstance(item, (tuple, list)) and len(item) == 2:
-                text, admission_id = str(item[0] or ""), str(item[1] or "")
-            else:
-                text, admission_id = str(item or ""), ""
+            text, admission_id = value if kind == "pair" else (value, "")
             if text.strip():
                 swept.append((text.strip(), admission_id))
         return tuple(swept)
@@ -1448,7 +1483,8 @@ def run_turn(*, build_slice, llm, tools, dispatch: Dispatcher, hooks: Hooks | No
             # cannot forge end-user authority) and acked with its own typed receipt. The kernel admits
             # it as typed input; it does NOT itself resume parked work — wake="resume_wait" only marks
             # the message resume-eligible for a host/bridge to correlate against a PeerWait.
-            if isinstance(item, PeerMessage):
+            kind, value = _classify_steer_item(item)
+            if kind == "peer":
                 messages.append({"role": "user", "content": _peer_envelope(item)})
                 dispatch(PeerMessageDelivered(
                     content=item.content,
@@ -1459,14 +1495,18 @@ def run_turn(*, build_slice, llm, tools, dispatch: Dispatcher, hooks: Hooks | No
                 ))
                 landed += 1
                 continue
-            # Items are plain text, or (text, admission_id) from a host that must reconcile delivery
-            # against a durable inbox (the Raft bridge): the id rides the SteerDelivered receipt so an
-            # admission is acked exactly once, and equal-text steers stay distinguishable.
-            admission_id = ""
-            if isinstance(item, (tuple, list)) and len(item) == 2:
-                text, admission_id = str(item[0] or ""), str(item[1] or "")
-            else:
-                text = str(item or "")
+            if kind == "malformed":
+                # clem's end-to-end authority finding: NEVER str()-coerce a malformed item into a
+                # user-role message — a (PeerMessage, "") pair used to become the peer's repr as
+                # END-USER text with a SteerDelivered receipt. Reject typed and drop it from the
+                # trajectory: no user message, no receipt.
+                dispatch(SteerRejected(shape=value))
+                continue
+            # Items are plain text, or an exact (str, str) (text, admission_id) pair from a host that
+            # must reconcile delivery against a durable inbox (the Raft bridge): the id rides the
+            # SteerDelivered receipt so an admission is acked exactly once, and equal-text steers
+            # stay distinguishable.
+            text, admission_id = value if kind == "pair" else (value, "")
             text = text.strip()
             if not text:
                 continue
