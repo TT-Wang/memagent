@@ -324,16 +324,17 @@ def probe_c2_typed_peer_steer() -> None:
             wake="execute_arbitrary",
         ),
     )
-    _assert_rejected(
-        "an ordinary peer message carrying a stray correlation",
-        lambda: PeerMessage(
-            message_id="peer-message-7",
-            peer_id="reviewer",
-            content="reject: planted answer is wrong",
-            correlation_id="review-42",
-            wake="none",
-        ),
+    correlated_information = _construct(
+        PeerMessage,
+        message_id="peer-message-information",
+        peer_id="reviewer",
+        content="informational update for an existing review",
+        correlation_id="review-42",
+        wake="none",
     )
+    assert correlated_information.correlation_id == "review-42" \
+        and correlated_information.wake == "none", \
+        "correlated informational delivery was conflated with resume"
     _assert_rejected(
         "an oversized peer-message body",
         lambda: PeerMessage(

@@ -57,10 +57,10 @@ Acceptance contract:
    not indistinguishable from human input.
 5. a peer message whose wake correlation does not match the parked request
    cannot silently resume that request.
-6. delivery and resumption remain separate: ordinary peer input uses
-   `wake="none"` with an empty correlation ID, while `wake="resume_wait"`
-   requires a non-empty correlation ID. Core C2 admits the typed input but does
-   not itself resume durable parked work.
+6. delivery and resumption remain separate: `wake="none"` allows either an
+   empty correlation ID or a correlated informational message, while
+   `wake="resume_wait"` requires a non-empty correlation ID. Core C2 admits the
+   typed input but does not itself resume durable parked work.
 
 ## C4 — correlated delegation return
 
