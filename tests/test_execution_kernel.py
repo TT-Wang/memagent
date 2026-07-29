@@ -414,6 +414,45 @@ def active_child_still_stops_at_absolute_delegation_guard():
 
 
 @check
+def omitted_lifecycle_absolute_retains_the_scheduler_leak_guard():
+    """The public scheduler API must fail closed even when an embedder omits the override.
+
+    Before #59, ``run_ordered(..., lifecycle_timeout=...)`` forwarded ``None`` to the
+    per-job wave. A child that kept touching its activity cell could then run forever.
+    """
+    import sliceagent.scheduler as scheduler
+
+    cancel = threading.Event()
+    activity = ChildActivity()
+    invocation = ToolInvocation("default-absolute-child", "spawn_agent", {}, 0)
+
+    def active():
+        while not cancel.wait(0.01):
+            activity.touch()
+        return ToolOutcome(invocation, ToolStatus.CANCELLED, "active child closed")
+
+    prior = scheduler.DEFAULT_LIFECYCLE_ABSOLUTE
+    scheduler.DEFAULT_LIFECYCLE_ABSOLUTE = 0.12
+    try:
+        outcomes = run_ordered([
+            ScheduledTool(
+                invocation,
+                ToolPurity.PURE_READ,
+                active,
+                timeout_safe=False,
+                request_cancel=lambda _kind: cancel.set(),
+                cancel_grace=0.2,
+                activity=activity,
+            ),
+        ], lifecycle_timeout=0.05)
+    finally:
+        scheduler.DEFAULT_LIFECYCLE_ABSOLUTE = prior
+
+    assert outcomes[0].status is ToolStatus.FAILED
+    assert "0.12s absolute delegation leak guard" in outcomes[0].text
+
+
+@check
 def wedged_children_over_the_wave_ceiling_cannot_freeze_the_parent_turn():
     """Every liveness test above uses 1-2 children, so none of them ever fills the wave ceiling —
     which is exactly where the per-job path could hang. With more lifecycle children than

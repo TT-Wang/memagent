@@ -14,6 +14,9 @@ from typing import Callable
 from .execution import (ToolEffect, ToolInvocation, ToolOutcome, ToolPurity, ToolStatus)
 
 
+DEFAULT_LIFECYCLE_ABSOLUTE = 3600.0
+
+
 @dataclass(frozen=True)
 class ScheduledTool:
     invocation: ToolInvocation
@@ -920,8 +923,15 @@ def run_ordered(
     """Run pure-read waves and ordered barriers, preserving provider result order.
 
     An indeterminate invocation stops all later waves. Calls that have not started receive
-    a proven ``cancelled`` outcome so every provider invocation still has one reply.
+    a proven ``cancelled`` outcome so every provider invocation still has one reply. Lifecycle
+    waves always retain a final absolute leak guard: callers that omit the optional override or
+    pass ``None`` receive the same fail-closed 3600-second default as the production host.
     """
+    effective_lifecycle_absolute = (
+        DEFAULT_LIFECYCLE_ABSOLUTE
+        if lifecycle_absolute is None
+        else lifecycle_absolute
+    )
     outcomes: list[ToolOutcome] = []
     i = 0
     while i < len(tasks):
@@ -998,7 +1008,9 @@ def run_ordered(
         try:
             executed = _run_wave(
                 ready, max_workers=max_workers, timeout=wave_timeout,
-                absolute_timeout=(lifecycle_absolute if lifecycle_ready else None),
+                absolute_timeout=(
+                    effective_lifecycle_absolute if lifecycle_ready else None
+                ),
                 should_cancel=should_cancel,
                 # Interrupt harvest: settled real outcomes inside an interrupted wave are surfaced through the
                 # ordinary publication callback before the interrupt propagates, so a finished sibling's sealed

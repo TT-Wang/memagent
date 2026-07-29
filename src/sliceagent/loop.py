@@ -56,7 +56,7 @@ from .execution import (CHILD_ACTIVITY_ARG, CHILD_CANCEL_SIGNAL_ARG, CHILD_INVOC
                         PreflightOverflow, ToolStatus, TurnOutcome, Usage,
                         available_content_capacity, estimate_model_call, is_delegation_tool)
 from .registry import ToolAdmission, ToolText, finalize_tool_outcome, tool_result_text
-from .scheduler import ScheduledTool, run_ordered
+from .scheduler import (DEFAULT_LIFECYCLE_ABSOLUTE, ScheduledTool, run_ordered)
 
 
 def _as_text(out):
@@ -177,9 +177,9 @@ def _delegation_absolute() -> float:
     raw = os.environ.get("AGENT_DELEGATION_ABSOLUTE", "").strip()
     try:
         v = float(raw)
-        return v if math.isfinite(v) and v > 0 else 3600.0
+        return v if math.isfinite(v) and v > 0 else DEFAULT_LIFECYCLE_ABSOLUTE
     except ValueError:
-        return 3600.0
+        return DEFAULT_LIFECYCLE_ABSOLUTE
 
 
 def _delegation_cancel_grace() -> float:
