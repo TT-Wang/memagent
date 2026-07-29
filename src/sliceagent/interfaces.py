@@ -299,9 +299,13 @@ class PeerMessage:
         # as PeerWait/PeerResult): reject every control char and line/paragraph separator.
         _validate_peer_identity(self.message_id, "PeerMessage.message_id")
         _validate_peer_identity(self.peer_id, "PeerMessage.peer_id")
-        # Content: any string, but bounded. Multi-line is allowed (it is data, not identity).
+        # Content: any string, but bounded, and NON-EMPTY. Multi-line is allowed (it is data, not
+        # identity), but a whitespace-only/empty body carries no peer input and must not be admitted —
+        # it would spend a whole provider step delivering nothing.
         if not isinstance(self.content, str):
             raise ValueError("PeerMessage.content must be a string")
+        if not self.content.strip():
+            raise ValueError("PeerMessage.content must be a non-empty string")
         if len(self.content) > _PEER_CONTENT_MAX:
             raise ValueError(f"PeerMessage.content must be <= {_PEER_CONTENT_MAX} chars")
         # Wake: type-check BEFORE membership so a falsy non-string (None/False/0) fails closed on type,
@@ -312,13 +316,15 @@ class PeerMessage:
             raise ValueError(
                 "PeerMessage.wake must be one of: " + ", ".join(sorted(_PEER_WAKE_CONTRACTS))
             )
-        # Correlation: type-check BEFORE any .strip()/identity work so a non-string fails closed on
-        # type rather than raising AttributeError or being coerced.
+        # Correlation: type-check BEFORE any identity work so a non-string fails closed on type rather
+        # than raising AttributeError or being coerced.
         if not isinstance(self.correlation_id, str):
             raise ValueError("PeerMessage.correlation_id must be a string")
         # Paired-state invariant (one-way): resume_wait REQUIRES a correlation; the reverse is legal.
-        if self.wake == "resume_wait" and not self.correlation_id.strip():
+        if self.wake == "resume_wait" and not self.correlation_id:
             raise ValueError("PeerMessage.wake='resume_wait' requires a non-empty correlation_id")
-        # A non-empty correlation must be a valid single-line bounded token; empty is legal for `none`.
-        if self.correlation_id.strip():
+        # Optional correlation must be EXACTLY "" or a valid single-line identity token — a blank/
+        # whitespace/control variant (" ", "\t", " ") is NOT a legal empty and is rejected. Guard
+        # on the RAW value, not `.strip()`, so blank strings reach the identity validator (linglong).
+        if self.correlation_id:
             _validate_peer_identity(self.correlation_id, "PeerMessage.correlation_id")

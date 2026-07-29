@@ -1274,9 +1274,13 @@ def _peer_envelope(peer: PeerMessage) -> str:
     """Render a typed peer message as an injection-safe provider input.
 
     Structure is ``<marker>\\n<canonical-JSON>``. The peer's raw ``content`` is a JSON *value*, so any
-    markers, quotes, or newlines it contains are escaped data and can never break out to forge a steer
-    marker or end-user authority. json.dumps escapes embedded newlines, keeping the payload single-line
-    so the marker/payload split is unambiguous.
+    markers, quotes, or separators it contains are escaped data and can never break out to forge a steer
+    marker or end-user authority. ``ensure_ascii=True`` is LOAD-BEARING, not cosmetic: it escapes every
+    non-ASCII separator/control — including U+2028/U+2029 line/paragraph separators and U+0085 NEL —
+    that ``splitlines()`` would otherwise treat as a real line break, forging a line outside the visual
+    JSON boundary. With every separator escaped the payload is guaranteed single-line, so the
+    marker/payload split (and any downstream line scan) is unambiguous. Compact, sorted keys keep it
+    deterministic.
     """
     payload = json.dumps(
         {
@@ -1286,7 +1290,9 @@ def _peer_envelope(peer: PeerMessage) -> str:
             "correlation_id": peer.correlation_id,
             "wake": peer.wake,
         },
-        ensure_ascii=False,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
     )
     return f"{_PEER_ENVELOPE_MARKER}\n{payload}"
 
