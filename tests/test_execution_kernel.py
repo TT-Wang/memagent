@@ -414,6 +414,52 @@ def active_child_still_stops_at_absolute_delegation_guard():
 
 
 @check
+def wedged_children_over_the_wave_ceiling_cannot_freeze_the_parent_turn():
+    """Every liveness test above uses 1-2 children, so none of them ever fills the wave ceiling —
+    which is exactly where the per-job path could hang. With more lifecycle children than
+    _MAX_PARALLEL_LIFECYCLE_WAVE, children that ignore their cancellation lease hold every worker
+    slot; the launch pointer then freezes below len(jobs). Gating the settlement exit on that pointer
+    made both exits unreachable and (since per_job_liveness sets the wave deadline to None) the wave
+    spun at the poll interval forever, past the absolute leak guard that exists to prevent precisely
+    this. Measured: >20s and still spinning before the fix, 0.71s after."""
+    from sliceagent.scheduler import _MAX_PARALLEL_LIFECYCLE_WAVE
+    total = _MAX_PARALLEL_LIFECYCLE_WAVE + 1
+    wedge = threading.Event()
+    tasks = []
+    for index in range(total):
+        invocation = ToolInvocation(f"wedged-{index}", "spawn_agent", {}, index)
+        tasks.append(ScheduledTool(
+            invocation, ToolPurity.PURE_READ,
+            lambda: (wedge.wait(30), "never")[1],      # never returns: slot.release() never runs
+            timeout_safe=False,
+            request_cancel=lambda _kind: None,          # accepts the lease, ignores it
+            cancel_grace=0.05, activity=ChildActivity(),
+        ))
+
+    box: dict = {}
+    runner = threading.Thread(
+        target=lambda: box.setdefault(
+            "outcomes", run_ordered(tasks, lifecycle_timeout=0.3, lifecycle_absolute=0.6)),
+        daemon=True,
+    )
+    runner.start()
+    runner.join(15.0)
+    frozen = runner.is_alive()
+    wedge.set()                                          # let the daemon threads unwind either way
+    assert not frozen, (
+        "the wave never returned: wedged children filling the ceiling froze the parent turn, and the "
+        "absolute leak guard could not break it"
+    )
+    outcomes = box["outcomes"]
+    assert len(outcomes) == total, outcomes
+    # every provider invocation still gets exactly one typed reply, and NO VERDICT != FAILED holds:
+    # a reaped-but-unconfirmed child is indeterminate; one that never started is cancelled.
+    assert all(o.status in (ToolStatus.INDETERMINATE, ToolStatus.CANCELLED, ToolStatus.FAILED)
+               for o in outcomes), [o.status for o in outcomes]
+    assert outcomes[-1].status is ToolStatus.CANCELLED, "the queued tail never ran"
+
+
+@check
 def queued_child_inactivity_starts_at_physical_admission():
     first_activity = ChildActivity()
     second_activity = ChildActivity()

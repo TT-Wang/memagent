@@ -512,7 +512,13 @@ def _run_read_wave(
     def establish_cutoff(kind: str, cutoff_at: float) -> None:
         nonlocal cutoff_kind, late, unstarted
         cutoff_kind = kind
-        late = {
+        # A per-job reap already recorded in `job_timeout_kind` must SURVIVE a later wave cutoff. This set
+        # was rebound from scratch, so a child cut off by its inactivity window that then settled before
+        # the cutoff instant (finished_at <= cutoff_at) silently dropped out of `late` — and out of the
+        # timeout classification below with it, so the parent saw its RAW outcome (a truncated partial
+        # report reported as SUCCEEDED) instead of a typed delegation timeout. Reaped is a fact about the
+        # child; a subsequent user cancellation cannot unmake it.
+        late = {index for index in job_timeout_kind if jobs[index].entered or jobs[index].announcing} | {
             index for index, job in enumerate(jobs)
             if (job.entered or job.announcing)
             and (job.finished_at is None or job.finished_at > cutoff_at)
@@ -678,7 +684,17 @@ def _run_read_wave(
                     if per_job_liveness and job_timeout_kind:
                         break
                     return [_job_result(job) for job in jobs]
-                if per_job_liveness and next_index == len(jobs) and all(
+                # SETTLEMENT, not the launch pointer, ends a per-job-liveness wave. `next_index` only
+                # advances inside the launch loop above, which is gated on `active_count() < worker_limit`
+                # — so children that ignore their cancellation lease hold every slot forever and freeze
+                # that pointer below len(jobs). Conjoining it here made both exits unreachable: with
+                # per_job_liveness the wave-level `deadline` is None, so a batch of more than
+                # _MAX_PARALLEL_LIFECYCLE_WAVE wedged children spun this loop at the poll interval
+                # indefinitely, past the absolute leak guard whose whole purpose is that no child can
+                # freeze the parent turn. `job_logically_settled` already accounts for the queued tail: a
+                # pending queued job is neither `unstarted` nor `late` and is not done, so it returns
+                # False and the wave still waits for genuinely outstanding work.
+                if per_job_liveness and all(
                         job_logically_settled(index, now) for index in range(len(jobs))):
                     break
 

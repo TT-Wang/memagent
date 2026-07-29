@@ -1144,7 +1144,16 @@ def _repeat_pressure(s) -> int:
         digest = call.get("obs_digest")
         if not digest:
             continue   # no recorded observation → cannot claim "no new evidence"
-        key = (call.get("name"), json.dumps(call.get("args"), sort_keys=True, default=str))
+        # ONE canonical physical-call identity. Hashing raw args folded in the model-authored `note`,
+        # which canonical_tool_args deliberately excludes as commentary — so annotating one of three
+        # byte-identical calls broke the repeat chain and silently disarmed the STOP escalation this
+        # counter exists to gate. Two calls are the same physical observation regardless of the prose
+        # attached to them.
+        try:
+            signature = canonical_tool_args(call.get("args") or {})
+        except TypeError:
+            signature = json.dumps(call.get("args"), sort_keys=True, default=str)
+        key = (call.get("name"), signature)
         if seen.get(key) == digest:
             repeats += 1
         else:
@@ -1167,7 +1176,13 @@ def _unfinished_frontier(s) -> tuple[int, int, int]:
               if getattr(item, "kind", "") != "request"
               and (root_id is None or getattr(item, "root_id", None) == root_id)]
     open_ish = sum(1 for item in scoped if getattr(item, "status", "") in ("open", "in_progress"))
-    ready = sum(1 for item in scoped if getattr(item, "status", "") == "ready")
+    # Only an item with a PENDING VERIFY CONTRACT is "awaiting host verification". An item parked at
+    # 'ready' with no verify commands is a trap, not a frontier: the host has nothing to run, the model
+    # is barred from setting delivered/verified, and every status it MAY set leads backwards or to
+    # cancelled — so the branch below demanded an impossible action and suppressed the completion
+    # checkpoint for the rest of the turn. Such an item falls through to the ordinary nudge instead.
+    ready = sum(1 for item in scoped
+                if getattr(item, "status", "") == "ready" and getattr(item, "verify", ()))
     waiting = sum(1 for item in scoped if getattr(item, "status", "") == "waiting_user")
     # A normal parked turn often has the REQUEST ROOT itself at waiting_user with no waiting child —
     # the root's own parked state must count, or the ordinary completion nudge fires over it.

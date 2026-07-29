@@ -234,6 +234,74 @@ def child_activity_touches_before_progress_dedup_and_wires_transport_heartbeats(
 
 
 @check
+def both_production_touch_sites_actually_advance_the_child_liveness_cell():
+    """WIRING, not ends. The check above proves the emitter touches when handed a cell, and that the
+    transport sink is non-None — but a sink of `lambda *a, **k: None` and `activity=None` on the emitter
+    satisfy both. Negative control: no-op'ing BOTH production sites in scoped_spawn.py left the whole
+    suite green, so nothing pinned the premise of activity-based deadlines. With them neutered no real
+    child ever touches its cell, and the scheduler cuts off a healthy, actively-streaming child at
+    AGENT_DELEGATION_TIMEOUT — reinstating the fixed wave deadline the change existed to remove."""
+    import sliceagent.loop as loop_mod
+
+    cells: list = []
+    real_activity = loop_mod.ChildActivity
+
+    class Recording(real_activity):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            cells.append(self)
+
+    # -- transport path: the sink must move the cell the LOOP injected, not a private one -------
+    span: dict = {}
+
+    class TransportLLM(_ScriptedLLM):
+        def set_transport_activity(self, sink):
+            self._sink = sink
+
+        def complete_with_control(self, messages, tools, *, should_cancel=None,
+                                  transport_activity=None):
+            sink = transport_activity if transport_activity is not None else getattr(self, "_sink", None)
+            assert sink is not None, "the scoped child cleared its mandatory transport observer"
+            cell = cells[-1]
+            span["before"] = cell.last
+            time.sleep(0.002)
+            sink("stream_heartbeat", {"chunks": 1})
+            span["after"] = cell.last
+            return self.complete(messages, tools)
+
+    # -- progress path: child lifecycle events alone must move it, with NO heartbeat at all ------
+    quiet: dict = {}
+
+    class QuietLLM(_ScriptedLLM):
+        def complete_with_control(self, messages, tools, *, should_cancel=None,
+                                  transport_activity=None):
+            quiet.setdefault("at_model_call", cells[-1].last)
+            time.sleep(0.002)
+            return self.complete(messages, tools)
+
+    loop_mod.ChildActivity = Recording
+    try:
+        run_tool_batch([_TC({"agent": "explorer", "task": "Read a.py."})],
+                       _host(_workspace(), llm=TransportLLM()), lambda _e: None, Hooks(),
+                       step=1, turn_id="t-transport")
+        assert span["after"] > span["before"], (
+            "the transport heartbeat did not advance the loop-injected liveness cell — the sink is "
+            "wired to something other than the child's activity"
+        )
+        cells.clear(); quiet.clear()
+        run_tool_batch([_TC({"agent": "explorer", "task": "Read a.py."})],
+                       _host(_workspace(), llm=QuietLLM()), lambda _e: None, Hooks(),
+                       step=1, turn_id="t-quiet")
+        assert cells, "no liveness cell was created for the child"
+        assert cells[-1].last > quiet["at_model_call"], (
+            "child lifecycle events did not advance the liveness cell — ScopedSpawnHost is not passing "
+            "the real activity into _ProgressEmitter, so a streaming child looks idle to the scheduler"
+        )
+    finally:
+        loop_mod.ChildActivity = real_activity
+
+
+@check
 def readonly_child_cannot_reach_a_mutating_tool_on_any_protocol():
     """A write attempt from a read-only child is a LOUD failure (capability escalation, not benign
     steering) and provably never reaches the inner host — on every dispatch protocol."""

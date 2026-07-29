@@ -549,8 +549,9 @@ def run_item_verification(candidates, runner, attempts: dict) -> tuple[frozenset
                     f"verify for {item_id!r} produced NO VERDICT: `{command}` -> "
                     f"{tail or '(no output)'}. Nothing was checked, so this says nothing about the work "
                     "— do NOT re-edit on the strength of it. Fix the CHECK: raise AGENT_VERIFY_TIMEOUT "
-                    "(ceiling 600s) if it needs longer, install what it needs, or give the item a check "
-                    "that completes here. You can also run it under proc_start and report what you see."
+                    "(600s by default, raisable to 3600s) if it needs longer, install what it needs, or "
+                    "give the item a check that completes here. You can also run it under proc_start "
+                    "and report what you see."
                 )
             history = attempts.setdefault(item_id, [])
             signature = _verify_failure_signature(command, output)

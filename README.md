@@ -355,7 +355,7 @@ protects the integrity of the durable local store rather than interpreting user 
 |---|---|---|
 | `AGENT_MODEL` | *(required)* | the model id to run |
 | `AGENT_SANDBOX` | `local` | `local`, or `docker` on POSIX/WSL2 (native Windows: use `local` or run under WSL2) |
-| `AGENT_MAX_STEPS` | `60` | per-turn step ceiling |
+| `AGENT_MAX_STEPS` | `120` | per-turn step ceiling |
 | `AGENT_CONTEXT_WINDOW` | *(catalog or unset)* | explicit provider window for strict per-call preflight; unknown models otherwise use compatibility mode |
 | `AGENT_SUBAGENT_DEPTH` | `1` | delegation depth ceiling for `spawn_agent`; `0` disables delegation, raise to let children spawn children |
 | `AGENT_DELEGATION_TIMEOUT` | `900` | per-child inactivity window in seconds, reset by child and transport activity |

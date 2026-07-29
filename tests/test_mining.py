@@ -121,10 +121,21 @@ def unverified_frontier_redirects_completion_pressure():
         s = Slice(); s.reset("t"); s.edited_files = {"a.py"}; s.since_edit = STOP_NUDGE_AFTER + 1
         return s
 
-    s = edited(); s.active_work = NS(items=[NS(kind="step", status="ready", root_id="r1")],
-                                     unresolved_roots=[NS(id="r1", status="open")])
+    s = edited(); s.active_work = NS(
+        items=[NS(kind="step", status="ready", root_id="r1", verify=("pytest -q",))],
+        unresolved_roots=[NS(id="r1", status="open")])
     out = render_convergence(s)
     assert "awaiting host verification" in out
+    # …but ONLY when there is a verify contract to await. A 'ready' item with no verify commands is a
+    # TRAP, not a frontier: the host has nothing to run, the model is barred from setting
+    # delivered/verified, and every status it MAY set leads backwards or to cancelled — so this branch
+    # ordered an impossible action and suppressed the completion checkpoint for the rest of the turn.
+    s = edited(); s.active_work = NS(
+        items=[NS(kind="step", status="ready", root_id="r1", verify=())],
+        unresolved_roots=[NS(id="r1", status="open")])
+    out = render_convergence(s)
+    assert "awaiting host verification" not in out, "no verify contract = nothing to await"
+    assert "Write your final summary" in out, "the completion checkpoint must stay reachable"
     s = edited(); s.active_work = NS(items=[NS(kind="step", status="in_progress", root_id="r1")],
                                      unresolved_roots=[NS(id="r1", status="open")])
     out = render_convergence(s)
@@ -140,8 +151,8 @@ def unverified_frontier_redirects_completion_pressure():
     assert "waiting on the USER" in out
     # two-root: stale ready item under an older root must NOT hijack the current root's convergence
     s = edited(); s.active_work = NS(
-        items=[NS(kind="step", status="ready", root_id="r1"),
-               NS(kind="step", status="verified", root_id="r2")],
+        items=[NS(kind="step", status="ready", root_id="r1", verify=("pytest -q",)),
+               NS(kind="step", status="verified", root_id="r2", verify=())],
         unresolved_roots=[NS(id="r2", status="open")])
     assert "Write your final summary" in render_convergence(s), \
         "an older root's stale 'ready' item hijacked the current request's convergence"
