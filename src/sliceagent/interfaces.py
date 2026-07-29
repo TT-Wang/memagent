@@ -382,6 +382,19 @@ def correlate_peer_result(
         return None
     if result.peer_id != delegation.peer_id:
         return None
-    if delegation.deadline_s is not None and float(elapsed_s) > float(delegation.deadline_s):
-        return None
+    # Normalize elapsed_s to the same finite/non-negative discipline as the deadline itself:
+    # a NaN elapsed silently passes any `>` comparison (NaN>x is False), and a negative elapsed is a
+    # result "from the future" — both would bypass the deadline authority boundary (the C1 lesson).
+    import math as _math
+    if delegation.deadline_s is not None:
+        if isinstance(elapsed_s, bool) or not isinstance(elapsed_s, (int, float)):
+            raise ValueError("correlate_peer_result elapsed_s must be a number")
+        try:
+            _e = float(elapsed_s)
+        except (OverflowError, ValueError):
+            return None
+        if not _math.isfinite(_e) or _e < 0.0:
+            return None
+        if _e > float(delegation.deadline_s):
+            return None
     return result
