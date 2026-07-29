@@ -881,6 +881,8 @@ def _plan_checklist_plain_lines(snap, width: int, *,
             glyph, semantic, suffix = "▶", "accent", " · in progress"
         elif status == "waiting_user":
             glyph, semantic, suffix = "!", "warn", " · blocked · waiting for input"
+        elif status == "waiting_peer":
+            glyph, semantic, suffix = "⇄", "warn", " · blocked · waiting for peer"
         elif status == "ready":
             glyph, semantic, suffix = "○", "warn", " · ready · unverified"
         elif status == "delivered":

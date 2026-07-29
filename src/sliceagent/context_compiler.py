@@ -66,7 +66,7 @@ def _render_item(
     source_locator_prefix: str = "",
 ) -> str:
     mark = {
-        "open": " ", "in_progress": "~", "waiting_user": "?", "ready": "•", "delivered": "x",
+        "open": " ", "in_progress": "~", "waiting_user": "?", "waiting_peer": "⇄", "ready": "•", "delivered": "x",
         "verified": "✓", "cancelled": "-", "superseded": "→",
     }.get(item.status, " ")
     lines = [f"- [{mark}] {item.id} · {item.kind} · {item.status}"]

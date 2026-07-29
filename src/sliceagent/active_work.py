@@ -361,6 +361,14 @@ class WorkItem:
             raise GraphValidationError("work_item.done_when must be a string of at most 500 chars")
         if self.peer_wait is not None and not isinstance(self.peer_wait, PeerWait):
             raise GraphValidationError("work_item.peer_wait must be a PeerWait or None")
+        # A durable peer wait is meaningful ONLY in the waiting_peer state, and the
+        # waiting_peer state is meaningless WITHOUT its correlation. Enforce the biconditional
+        # so no recovery record is internally contradictory (a parked wait that lost its
+        # correlation, or stale wait metadata surviving after the request left the state).
+        if (self.status == "waiting_peer") != (self.peer_wait is not None):
+            raise GraphValidationError(
+                "work_item.status=='waiting_peer' iff a non-null peer_wait is present"
+            )
         if not self.logical_id and self.kind == "request":
             object.__setattr__(self, "logical_id", self.root_id)
         _text(self.logical_id, "work_item.logical_id", allow_empty=self.kind == "task")
@@ -1044,6 +1052,7 @@ __all__ = [
     "WorkKind",
     "WorkStatus",
     "request_root_item",
+    "resume_waiting_peer",
 ]
 
 
@@ -1075,6 +1084,12 @@ def resume_waiting_peer(
     if wait is None or not result.correlation_id or result.correlation_id != wait.correlation_id:
         raise ActiveWorkError(
             "peer result correlation does not match the parked request"
+        )
+    # Correlation alone is not authority: the result must also come from the expected peer.
+    # A matching correlation ID from a different peer_id must not resume the request.
+    if wait.peer_id and result.peer_id != wait.peer_id:
+        raise ActiveWorkError(
+            "peer result sender does not match the parked request's expected peer"
         )
     revision = graph.revision if expected_revision is None else expected_revision
     resumed = replace(

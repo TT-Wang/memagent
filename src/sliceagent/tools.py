@@ -458,6 +458,9 @@ TOOL_SCHEMAS = [
 ]
 
 
+# NOTE: waiting_peer is intentionally ABSENT here. It is a HOST-managed park set only via
+# WorkGraph.seal_current(peer_wait=...) because it requires typed PeerWait correlation state the
+# model cannot express as a prose status (like verified/delivered, the model never sets it directly).
 _MODEL_WORK_STATUSES = frozenset({
     "open", "in_progress", "waiting_user", "ready", "cancelled", "superseded",
 })
@@ -677,7 +680,7 @@ def _plan_progress_payload(graph: WorkGraph, logical_id: str) -> dict[str, objec
     done_statuses = {"verified"}
     done = sum(item.status in done_statuses for item in items)
     current = None
-    for wanted in ("in_progress", "waiting_user", "open", "ready"):
+    for wanted in ("in_progress", "waiting_user", "waiting_peer", "open", "ready"):
         current = next((item for item in items if item.status == wanted), None)
         if current is not None:
             break
@@ -1923,7 +1926,7 @@ class LocalToolHost:
             frontier = [
                 item for item in proposed.items
                 if item.id != root.id and item.root_id == root.id
-                and item.status in {"open", "in_progress", "waiting_user"}
+                and item.status in {"open", "in_progress", "waiting_user", "waiting_peer"}
             ]
         result = (
             f"ACTIVE WORK update accepted: {len(delta.creates)} created, "

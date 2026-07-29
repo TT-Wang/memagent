@@ -197,6 +197,12 @@ class Oracle(Protocol):
     def verify(self) -> tuple[bool, str]: ...
 
 
+def _validate_peer_identity(value: str, field_name: str) -> None:
+    """Peer correlation/identity must be a non-empty, single-line, bounded token."""
+    if not isinstance(value, str) or not value.strip() or "\n" in value or len(value) > 200:
+        raise ValueError(f"{field_name} must be a non-empty single-line string (<=200 chars)")
+
+
 @dataclass(frozen=True)
 class PeerWait:
     """A durable park on a peer's correlated response (the horizontal analogue of
@@ -211,6 +217,15 @@ class PeerWait:
     peer_id: str = ""
     deadline_s: float | None = None
 
+    def __post_init__(self) -> None:
+        _validate_peer_identity(self.correlation_id, "PeerWait.correlation_id")
+        _validate_peer_identity(self.peer_id, "PeerWait.peer_id")
+        if self.deadline_s is not None:
+            import math as _math
+            if not isinstance(self.deadline_s, (int, float)) or isinstance(self.deadline_s, bool) \
+                    or not _math.isfinite(self.deadline_s) or self.deadline_s < 0:
+                raise ValueError("PeerWait.deadline_s must be a finite, non-negative number or None")
+
 
 @dataclass(frozen=True)
 class PeerResult:
@@ -224,3 +239,7 @@ class PeerResult:
     peer_id: str = ""
     status: str = "ok"
     report: str = ""
+
+    def __post_init__(self) -> None:
+        _validate_peer_identity(self.correlation_id, "PeerResult.correlation_id")
+        _validate_peer_identity(self.peer_id, "PeerResult.peer_id")

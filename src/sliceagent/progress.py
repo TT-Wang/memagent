@@ -495,7 +495,7 @@ class TurnProgress:
                     description = _one_line(row.get("description", ""), 160)
                     status = _one_line(row.get("status", "open"), 32).lower()
                     if not item_id or not description or status not in {
-                        "open", "in_progress", "waiting_user", "ready", "delivered", "verified",
+                        "open", "in_progress", "waiting_user", "waiting_peer", "ready", "delivered", "verified",
                     }:
                         continue
                     items.append(PlanItemProgress(
