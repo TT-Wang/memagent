@@ -273,7 +273,7 @@ def probe_c2_typed_peer_steer() -> None:
 
     inbox: queue.Queue = queue.Queue()
     _assert_rejected(
-        "a peer message without correlation identity",
+        "a resume-wait peer message without correlation identity",
         lambda: PeerMessage(
             message_id="peer-message-7",
             peer_id="reviewer",
@@ -294,7 +294,7 @@ def probe_c2_typed_peer_steer() -> None:
             ),
         )
     _assert_rejected(
-        "a peer message without a wake contract",
+        "a peer message without an explicit wake contract",
         lambda: PeerMessage(
             message_id="peer-message-7",
             peer_id="reviewer",
@@ -322,6 +322,16 @@ def probe_c2_typed_peer_steer() -> None:
             content="reject: planted answer is wrong",
             correlation_id="review-42",
             wake="execute_arbitrary",
+        ),
+    )
+    _assert_rejected(
+        "an ordinary peer message carrying a stray correlation",
+        lambda: PeerMessage(
+            message_id="peer-message-7",
+            peer_id="reviewer",
+            content="reject: planted answer is wrong",
+            correlation_id="review-42",
+            wake="none",
         ),
     )
     _assert_rejected(
@@ -389,8 +399,16 @@ def probe_c2_typed_peer_steer() -> None:
         "wake": "resume_wait",
     }, "the bounded provider envelope lost or rewrote typed peer fields"
 
+    ordinary_peer = _construct(
+        PeerMessage,
+        message_id="peer-message-ordinary",
+        peer_id="reviewer",
+        content="ordinary peer observation",
+        correlation_id="",
+        wake="none",
+    )
     preloaded_inbox: queue.Queue = queue.Queue()
-    preloaded_inbox.put(peer)
+    preloaded_inbox.put(ordinary_peer)
     preloaded_events = []
     preloaded_llm = _ScriptLLM([_done("integrated")])
     run_turn(
@@ -404,10 +422,17 @@ def probe_c2_typed_peer_steer() -> None:
     assert len(preloaded_llm.seen) == 1, \
         "a preloaded peer message missed first-call admission and forced a later provider step"
     first_prepared = preloaded_llm.seen[0]
-    assert first_prepared[-1]["role"] == "user" and first_prepared[-1]["content"] != peer.content, \
+    assert first_prepared[-1]["role"] == "user" \
+        and first_prepared[-1]["content"] != ordinary_peer.content, \
         "the top-of-step drain did not place a typed peer envelope in the first provider call"
-    assert len([event for event in preloaded_events if isinstance(event, PeerMessageDelivered)]) == 1, \
+    ordinary_deliveries = [
+        event for event in preloaded_events if isinstance(event, PeerMessageDelivered)
+    ]
+    assert len(ordinary_deliveries) == 1, \
         "preloaded peer admission did not emit exactly one typed receipt"
+    assert getattr(ordinary_deliveries[0], "correlation_id", None) == "" \
+        and getattr(ordinary_deliveries[0], "wake", None) == "none", \
+        "ordinary peer delivery was conflated with correlated resume"
 
     step_inbox: queue.Queue = queue.Queue()
     step_llm = _ScriptLLM(
