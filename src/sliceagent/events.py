@@ -103,6 +103,25 @@ class SteerDelivered(Event):
 
 
 @dataclass
+class PeerMessageDelivered(Event):
+    """A typed PEER message admitted into the running turn via the steer queue.
+
+    Deliberately NOT a ``SteerDelivered``: a steer is END-USER authority, a peer message is another
+    agent's input. It carries the sender's ``peer_id``, an optional ``correlation_id`` (to a
+    delegation/review), the durable ``message_id`` (the receipt id a bridge acks exactly-once —
+    replay/dedup remains bridge admission-ledger ownership, the kernel only preserves the id), and
+    the typed ``wake`` contract (``none``|``resume_wait``). ``content`` is the peer's raw body; the
+    provider sees it wrapped in a peer-vs-end-user authority envelope, never as plain user text.
+    """
+
+    content: str
+    peer_id: str = ""
+    correlation_id: str = ""
+    message_id: str = ""
+    wake: str = "none"
+
+
+@dataclass
 class ToolRequested(Event):
     """One provider-requested logical invocation, before preflight or scheduling.
 

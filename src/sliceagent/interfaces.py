@@ -258,3 +258,67 @@ class PeerResult:
     def __post_init__(self) -> None:
         _validate_peer_identity(self.correlation_id, "PeerResult.correlation_id")
         _validate_peer_identity(self.peer_id, "PeerResult.peer_id")
+
+
+# The ONLY legal wake contracts a peer message may carry. Delivery and resumption are separate:
+# ``none`` is ordinary in-turn delivery (correlation optional — a correlated ``none`` is an
+# informational message about an existing review/delegation, still NOT a resume request);
+# ``resume_wait`` is the only value that expresses "this reply may resume a parked PeerWait", and
+# it is meaningless without a correlation to the park it answers. An unknown value is never a
+# silently-tolerated no-op — it fails closed so a forged/typo'd wake can't smuggle new semantics.
+_PEER_WAKE_CONTRACTS = frozenset({"none", "resume_wait"})
+
+# A peer message body may be multi-line prose, but it is bounded so a hostile/looping peer cannot
+# blow the slice budget with one steer. Distinct from the 200-char single-line identity bound.
+_PEER_CONTENT_MAX = 8000
+
+
+@dataclass(frozen=True)
+class PeerMessage:
+    """A typed message from a collaborating PEER, admitted into the running turn via the steer queue.
+
+    Unlike an end-user steer (``SteerDelivered``), a peer message carries a sender identity, an
+    optional correlation to a delegation/review, and a typed ``wake`` contract. The kernel admits it
+    as typed peer INPUT and renders it under a peer-vs-end-user authority envelope; it does NOT itself
+    resume parked work — ``wake="resume_wait"`` only marks the message as a resume-eligible reply for
+    a host/bridge to correlate against a ``PeerWait``. Fail-closed matrix (validated below):
+
+    - ``wake="none"``     → correlation may be empty OR non-empty (ordinary/informational delivery).
+    - ``wake="resume_wait"`` → correlation MUST be non-empty (a resume answers a specific park).
+    - unknown ``wake`` or any non-string typed field → rejected.
+    """
+
+    message_id: str
+    peer_id: str
+    content: str
+    correlation_id: str = ""
+    wake: str = "none"
+
+    def __post_init__(self) -> None:
+        # Identity fields are non-empty, single-line, bounded tokens (same durable-boundary discipline
+        # as PeerWait/PeerResult): reject every control char and line/paragraph separator.
+        _validate_peer_identity(self.message_id, "PeerMessage.message_id")
+        _validate_peer_identity(self.peer_id, "PeerMessage.peer_id")
+        # Content: any string, but bounded. Multi-line is allowed (it is data, not identity).
+        if not isinstance(self.content, str):
+            raise ValueError("PeerMessage.content must be a string")
+        if len(self.content) > _PEER_CONTENT_MAX:
+            raise ValueError(f"PeerMessage.content must be <= {_PEER_CONTENT_MAX} chars")
+        # Wake: type-check BEFORE membership so a falsy non-string (None/False/0) fails closed on type,
+        # never silently coerced to a legal contract.
+        if not isinstance(self.wake, str):
+            raise ValueError("PeerMessage.wake must be a string")
+        if self.wake not in _PEER_WAKE_CONTRACTS:
+            raise ValueError(
+                "PeerMessage.wake must be one of: " + ", ".join(sorted(_PEER_WAKE_CONTRACTS))
+            )
+        # Correlation: type-check BEFORE any .strip()/identity work so a non-string fails closed on
+        # type rather than raising AttributeError or being coerced.
+        if not isinstance(self.correlation_id, str):
+            raise ValueError("PeerMessage.correlation_id must be a string")
+        # Paired-state invariant (one-way): resume_wait REQUIRES a correlation; the reverse is legal.
+        if self.wake == "resume_wait" and not self.correlation_id.strip():
+            raise ValueError("PeerMessage.wake='resume_wait' requires a non-empty correlation_id")
+        # A non-empty correlation must be a valid single-line bounded token; empty is legal for `none`.
+        if self.correlation_id.strip():
+            _validate_peer_identity(self.correlation_id, "PeerMessage.correlation_id")
