@@ -243,6 +243,10 @@ class TurnOutcome:
     # Machine-readable failure shape within that origin.  In particular, ``indeterminate_model_call`` means a
     # watchdog returned while provider I/O may remain live, so wrappers must not launch a recovery request.
     error_kind: str = ""
+    # Steers still queued when the turn retired, as (text, admission_id) pairs. These were NEVER delivered to
+    # the model and NO SteerDelivered receipt was emitted for them — the caller owns their fate (typically:
+    # admit as the next turn's input). A durable host must not treat turn retirement as having consumed them.
+    leftover_steers: tuple = ()
 
     def __post_init__(self) -> None:
         try:
