@@ -460,6 +460,47 @@ def wedged_children_over_the_wave_ceiling_cannot_freeze_the_parent_turn():
 
 
 @check
+def per_job_reap_outranks_a_later_parent_cancel_in_assembly():
+    """Two-child race (lexie's counterexample on 113ec74): child A is reaped by its inactivity
+    window and then SETTLES while child B is still live; the parent then cancels the wave. A's
+    earlier per-job timeout is a recorded fact — assembly must keep its delegation-timeout
+    classification and typed timeout_kind, not overwrite it with plain parent-cancel just because
+    the wave-level cutoff_kind is 'cancel'."""
+    a_inv = ToolInvocation("reaped-then-settled", "spawn_agent", {}, 0)
+    b_inv = ToolInvocation("live-sibling", "spawn_agent", {}, 1)
+    a_activity, b_activity = ChildActivity(), ChildActivity()
+    cancel_at = time.monotonic() + 0.7
+
+    def child_a():
+        time.sleep(0.5)                      # silent past the 0.3s window -> reaped; settles inside grace
+        return ToolOutcome(a_inv, ToolStatus.SUCCEEDED, "late but present")
+
+    def child_b():
+        until = time.monotonic() + 1.4
+        while time.monotonic() < until:
+            b_activity.touch()               # provably live the whole time
+            time.sleep(0.02)
+        return ToolOutcome(b_inv, ToolStatus.SUCCEEDED, "b done")
+
+    tasks = [
+        ScheduledTool(a_inv, ToolPurity.PURE_READ, child_a, timeout_safe=False,
+                      request_cancel=lambda _k: None, cancel_grace=0.4, activity=a_activity),
+        ScheduledTool(b_inv, ToolPurity.PURE_READ, child_b, timeout_safe=False,
+                      request_cancel=lambda _k: None, cancel_grace=0.4, activity=b_activity),
+    ]
+    outcomes = run_ordered(tasks, lifecycle_timeout=0.3, lifecycle_absolute=5.0,
+                           should_cancel=lambda: time.monotonic() >= cancel_at)
+    assert len(outcomes) == 2
+    a_out = outcomes[0]
+    kinds = [e.payload.get("timeout_kind") for e in a_out.effects
+             if isinstance(getattr(e, "payload", None), dict) and "timeout_kind" in e.payload]
+    assert "inactivity" in kinds, (
+        f"A's recorded per-job reap was overwritten by the later wave cancel: status={a_out.status} "
+        f"text={a_out.text[:120]!r} effect_kinds={kinds}")
+    assert "no activity" in a_out.text, a_out.text[:160]
+
+
+@check
 def queued_child_inactivity_starts_at_physical_admission():
     first_activity = ChildActivity()
     second_activity = ChildActivity()

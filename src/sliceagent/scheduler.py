@@ -839,10 +839,14 @@ def _run_read_wave(
                     absolute_timeout if job_timeout_kind.get(index) == "absolute" else timeout
                 )
                 outcomes.append(
+                    # An existing PER-JOB reap outranks a later wave-level cancel: the child's
+                    # inactivity/absolute cutoff is a recorded fact about the child, and assembling it
+                    # as plain parent-cancel discarded both the classification and the typed
+                    # timeout_kind (the reap→settle→sibling-live→parent-cancel race).
                     _closed_lifecycle_timeout(
                         job.task, settled, timeout_value, job_timeout_kind.get(index, "deadline"),
                     )
-                    if cutoff_kind == "deadline" else
+                    if cutoff_kind == "deadline" or index in job_timeout_kind else
                     _closed_lifecycle_cancel(job.task, settled)
                 )
             else:
