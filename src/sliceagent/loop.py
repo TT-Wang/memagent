@@ -798,7 +798,7 @@ def _purity_for(tools, name: str, args: dict, entry) -> ToolPurity:
     return ToolPurity.UNKNOWN
 
 
-def _audit_projection(invocation, entry):
+def _audit_projection(invocation, body_free):
     """Body-free audit view of a turn-control invocation.
 
     ``ToolRequested`` is dispatched BEFORE preflight so required journal sinks see every logical
@@ -808,7 +808,7 @@ def _audit_projection(invocation, entry):
     the stable identity plus host-derived counts/digest, so a suppressed call leaves a provable
     trace without leaving its content.
     """
-    if not getattr(entry, "turn_exclusive", False):
+    if not body_free:
         return invocation
     args = invocation.args if isinstance(invocation.args, dict) else {}
     payload = json.dumps(args, ensure_ascii=True, sort_keys=True, default=str)
@@ -819,21 +819,25 @@ def _audit_projection(invocation, entry):
 
 
 
-def _audit_outcome(out, tools):
+def _audit_outcome(out, body_free_ids):
     """Body-free audit view of a turn-control tool's OUTCOME.
 
     The durable audit of an ask never needs its subject: the handler already received the real
     args, and the bridge persists whatever it needs. Reducing every audit edge for a
     turn-exclusive tool keeps a suppressed call's residue to identity plus counts, and keeps a
     successful one from journalling model-authored prose it has no reason to retain.
+
+    The classification is FROZEN at admission and passed in, never re-derived from the live
+    registry at publication time. A handler can replace or deregister its own entry before
+    returning; re-looking it up then would find no turn-exclusive entry and publish the raw
+    subject — the audit's sensitivity must not depend on state the audited code can mutate.
     """
     invocation = getattr(out, "invocation", None)
     if invocation is None:
         return out
-    entry = _entry_for(tools, getattr(invocation, "name", "") or "")
-    if not getattr(entry, "turn_exclusive", False):
+    if getattr(invocation, "id", None) not in body_free_ids:
         return out
-    return replace(out, invocation=_audit_projection(invocation, entry))
+    return replace(out, invocation=_audit_projection(invocation, True))
 
 
 def run_tool_batch(tool_calls, tools, dispatch: Dispatcher, hooks: Hooks, *, step: int = 0,
@@ -892,6 +896,8 @@ def run_tool_batch(tool_calls, tools, dispatch: Dispatcher, hooks: Hooks, *, ste
             + ", ".join(sorted(_exclusive_names))
         )
 
+    # Frozen audit classification, captured with the entry that AUTHORIZED execution.
+    audit_body_free_ids: set[str] = set()
     descriptors: list[dict] = []
     scheduled: list[ScheduledTool] = []
     dup_of: dict[int, int] = {}
@@ -917,7 +923,8 @@ def run_tool_batch(tool_calls, tools, dispatch: Dispatcher, hooks: Hooks, *, ste
         # turn-control ask is audited body-free here, or its subject would be journalled even when the
         # batch gate suppresses the handler entirely.
         dispatch(ToolRequested(_audit_projection(
-            invocation, _entry_for(tools, getattr(tc, "name", "") or ""),
+            invocation,
+            getattr(_entry_for(tools, getattr(tc, "name", "") or ""), "turn_exclusive", False),
         )))
     for provider_index, tc in enumerate(tool_calls):
         name = getattr(tc, "name", "") or ""
@@ -951,6 +958,8 @@ def run_tool_batch(tool_calls, tools, dispatch: Dispatcher, hooks: Hooks, *, ste
                 "deduplicable": can_dedup,
                 "admission": None, "run_preflighted": None, "prepared_not_started": False,
                 "child_cancel": child_cancel, "child_activity": child_activity}
+        if getattr(entry, "turn_exclusive", False):
+            audit_body_free_ids.add(invocation.id)
         descriptors.append(desc)
         if key is not None and key in wave_seen:
             dup_of[provider_index] = wave_seen[key]
@@ -1111,7 +1120,7 @@ def run_tool_batch(tool_calls, tools, dispatch: Dispatcher, hooks: Hooks, *, ste
             start_publication_attempt_ids.add(inv.id)
             # The ask's execution edges are audited body-free too: the handler already holds the
             # real args, so the durable start rows have no reason to retain model-authored prose.
-            _audit_inv = _audit_projection(inv, _entry_for(tools, inv.name))
+            _audit_inv = _audit_projection(inv, inv.id in audit_body_free_ids)
             _audit_args = dict(_audit_inv.args) if _audit_inv is not inv else a
             dispatch(ToolExecutionStarted(_audit_inv))
             if is_abandoned():
@@ -1156,7 +1165,7 @@ def run_tool_batch(tool_calls, tools, dispatch: Dispatcher, hooks: Hooks, *, ste
             kind = "steered" if out.status is ToolStatus.STEERED else "validation"
         else:
             return
-        out = _audit_outcome(out, tools)
+        out = _audit_outcome(out, audit_body_free_ids)
         dispatch(ToolRejected(out.invocation, reason, out, kind=kind))
         rejection_published_ids.add(invocation_id)
 
@@ -1164,14 +1173,14 @@ def run_tool_batch(tool_calls, tools, dispatch: Dispatcher, hooks: Hooks, *, ste
         invocation_id = out.invocation.id
         if invocation_id in settlement_published_ids:
             return
-        dispatch(ToolSettled(_audit_outcome(out, tools)))
+        dispatch(ToolSettled(_audit_outcome(out, audit_body_free_ids)))
         settlement_published_ids.add(invocation_id)
 
     def publish_result(out: ToolOutcome) -> None:
         invocation_id = out.invocation.id
         if invocation_id in result_published_ids:
             return
-        out = _audit_outcome(out, tools)
+        out = _audit_outcome(out, audit_body_free_ids)
         dispatch(ToolResult(
             out.invocation.name, dict(out.invocation.args), out.text, out.failing,
             status=out.status.value, invocation_id=invocation_id, outcome=out,
@@ -1278,7 +1287,7 @@ def run_tool_batch(tool_calls, tools, dispatch: Dispatcher, hooks: Hooks, *, ste
                 reason = str(src.text or "tool validation rejected the call before execution")
                 kind = "steered" if src.status is ToolStatus.STEERED else "validation"
             dispatch(ToolRejected(
-                _audit_projection(inv, desc.get("entry")), reason, outcomes[index], kind=kind,
+                _audit_projection(inv, inv.id in audit_body_free_ids), reason, outcomes[index], kind=kind,
             ))
         dispatch(ToolSettled(outcomes[index], apply_effects=False))
         dispatch(ToolResult(

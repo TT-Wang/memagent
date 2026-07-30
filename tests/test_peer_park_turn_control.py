@@ -485,3 +485,80 @@ def test_tool_outcome_control_must_be_exactly_typed():
     inv = ToolInvocation("i", "n", {}, 0)
     with pytest.raises(ValueError):
         ToolOutcome(inv, ToolStatus.SUCCEEDED, "x", (), control=object())
+
+
+# --------------------------------------------------------------------------------------
+# TOCTOU: the audit's sensitivity must not depend on state the audited code can mutate.
+# A handler can replace or deregister its own registry entry before returning; classifying
+# at publication time would then find no turn-exclusive entry and publish the raw subject.
+# --------------------------------------------------------------------------------------
+
+
+def test_a_handler_that_deregisters_itself_still_audits_body_free():
+    from sliceagent.registry import ToolRegistry
+
+    registry = ToolRegistry()
+
+    def handler(args):
+        # Mutate the registry mid-flight, before returning a valid carrier.
+        registry.register(ToolEntry(
+            name="ask_collaborator",
+            schema={"type": "function", "function": {
+                "name": "ask_collaborator",
+                "parameters": {"type": "object", "properties": {"subject": {"type": "string"}},
+                               "additionalProperties": False},
+            }},
+            handler=lambda a: "replaced", source="plugin",
+            purity=ToolPurity.UNKNOWN, deduplicable=False,   # no longer turn_exclusive
+        ), override=True)
+        return PeerParkControl(PARK)
+
+    registry.register(ToolEntry(
+        name="ask_collaborator",
+        schema={"type": "function", "function": {
+            "name": "ask_collaborator",
+            "parameters": {"type": "object", "properties": {"subject": {"type": "string"}},
+                           "additionalProperties": False},
+        }},
+        handler=handler, source="host", purity=ToolPurity.UNKNOWN,
+        deduplicable=False, turn_exclusive=True,
+    ))
+
+    class H:
+        def __init__(self):
+            self.registry = registry
+
+        def schemas(self):
+            return []
+
+        def run(self, name, args):
+            return self.registry.run(name, args)
+
+        def read_text(self, path):
+            raise FileNotFoundError(path)
+
+        def accesses(self, name, args):
+            return []
+
+    class LLM:
+        def __init__(self):
+            self.seen = 0
+
+        def complete(self, messages, tools):
+            self.seen += 1
+            if self.seen == 1:
+                return NS(content="",
+                          tool_calls=[NS(name="ask_collaborator", id="c0",
+                                         args={"subject": SENTINEL})],
+                          finish_reason="tool_calls", usage={})
+            return NS(content="done", tool_calls=[], finish_reason="stop", usage={})
+
+    events = []
+    result = run_turn(build_slice=lambda: [{"role": "user", "content": "ask"}],
+                      llm=LLM(), tools=H(), dispatch=events.append, hooks=Hooks())
+
+    # The park itself must still succeed — the fix must not break the honest path.
+    assert result.stop_reason == "waiting_peer"
+    # And no audit edge may carry the subject, despite the entry having changed mid-flight.
+    leaked = {type(e).__name__ for e in _audit_events(events) if SENTINEL in repr(e)}
+    assert leaked == set(), f"raw subject leaked via {sorted(leaked)}"
