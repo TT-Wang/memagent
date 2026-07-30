@@ -296,6 +296,11 @@ class TurnOutcome:
     # the model and NO SteerDelivered receipt was emitted for them — the caller owns their fate (typically:
     # admit as the next turn's input). A durable host must not treat turn retirement as having consumed them.
     leftover_steers: tuple = ()
+    # Set when the turn ended PARKED on a peer (stop_reason "waiting_peer"). Carries the typed
+    # PeerWait so the host's seal can persist the park durably. None for every ordinary stop, so
+    # existing consumers are unchanged. The paired invariant — status waiting_peer iff this is
+    # set — is enforced by the work graph, which is the authority for the durable park.
+    peer_wait: object | None = None
 
     def __post_init__(self) -> None:
         try:

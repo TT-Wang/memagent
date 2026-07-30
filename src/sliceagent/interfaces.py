@@ -260,6 +260,37 @@ class PeerResult:
         _validate_peer_identity(self.peer_id, "PeerResult.peer_id")
 
 
+@dataclass(frozen=True)
+class PeerParkControl:
+    """A host tool's request to END THIS TURN parked on a peer (task #101, C1 host).
+
+    This is the typed control carrier the kernel recognises as turn-ending. It is NOT an
+    ordinary tool result appended to the trajectory: a park suspends the turn, so the loop
+    must treat it as a terminal control signal rather than data the model reasons on.
+
+    The kernel gains no new verb — a HOST-layer tool (``ask_collaborator``) mints the park —
+    and the kernel never infers a park from prose. ``peer_wait`` carries the host-derived
+    correlation/peer/deadline; the host is responsible for minting those, never the model.
+
+    MVP scope: ``peer_wait.deadline_s`` must be None. A finite deadline requires a platform
+    capability (lossless server event time plus a persistent server-side wake) that the
+    current Raft surface does not expose, so a bounded park is refused at the boundary rather
+    than accepted and silently unenforceable.
+    """
+
+    peer_wait: "PeerWait"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.peer_wait, PeerWait):
+            raise ValueError("PeerParkControl.peer_wait must be a typed PeerWait")
+        if self.peer_wait.deadline_s is not None:
+            raise ValueError(
+                "PeerParkControl: finite deadlines are not supported yet — a bounded park "
+                "needs lossless server event time and a persistent server-side wake, so it is "
+                "refused here rather than accepted and left unenforceable"
+            )
+
+
 # The ONLY legal wake contracts a peer message may carry. Delivery and resumption are separate:
 # ``none`` is ordinary in-turn delivery (correlation optional — a correlated ``none`` is an
 # informational message about an existing review/delegation, still NOT a resume request);
