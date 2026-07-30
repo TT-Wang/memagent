@@ -169,7 +169,16 @@ def finalize_tool_outcome(
         effects = (ToolEffect(
             effect_id, "tool_outcome", {"name": invocation.name, "status": status.value},
         ),)
-    return ToolOutcome(invocation=invocation, status=status, text=text, effects=effects)
+    # A host tool may return a typed PeerParkControl to END THE TURN parked on a peer. It rides
+    # the typed outcome rather than the text, so the loop recognises control flow by TYPE and can
+    # never be tricked into parking by model-authored prose.
+    from .interfaces import PeerParkControl as _PeerParkControl
+    control = result if isinstance(result, _PeerParkControl) else getattr(result, "control", None)
+    if control is not None and not isinstance(control, _PeerParkControl):
+        control = None
+    return ToolOutcome(
+        invocation=invocation, status=status, text=text, effects=effects, control=control,
+    )
 
 
 # Compatibility metadata for built-ins registered before ToolEntry carried execution

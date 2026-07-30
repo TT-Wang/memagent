@@ -143,6 +143,11 @@ class ToolOutcome:
     status: ToolStatus
     text: str
     effects: tuple[ToolEffect, ...] = ()
+    # Optional TYPED control signal a host tool may return to end the turn (task #101 peer
+    # park). Deliberately not text: the loop must never infer control flow from prose. None
+    # for every ordinary tool, so existing consumers and as_legacy() are unchanged — the loop
+    # reaches it through the already-exposed "outcome" row entry.
+    control: object | None = None
 
     @property
     def failing(self) -> bool:

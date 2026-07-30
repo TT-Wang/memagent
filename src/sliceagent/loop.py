@@ -47,7 +47,7 @@ from .events import (
     TurnInterrupted,
     TurnPhaseChanged,
 )
-from .interfaces import PeerMessage
+from .interfaces import PeerMessage, PeerParkControl
 from .tool_identity import DEDUP_SAFE_TOOL_NAMES, canonical_tool_args
 from .guidance import BUDGET_EXHAUSTED
 from .hooks import Hooks, ToolPreflight
@@ -1849,8 +1849,18 @@ def run_turn(*, build_slice, llm, tools, dispatch: Dispatcher, hooks: Hooks | No
                 )
                 tool_phase = False
                 catastrophic_stop: str | None = None
+                park_control = None
+                park_conflict = False
                 for r in results:
                     messages.append({"role": "tool", "tool_call_id": r["id"], "content": r["output"]})
+                    _out = r.get("outcome")
+                    _ctl = getattr(_out, "control", None) if _out is not None else None
+                    if isinstance(_ctl, PeerParkControl):
+                        # Per-turn EXCLUSIVITY: a second park in one batch is a typed conflict, never a
+                        # silent overwrite — two parks would leave one correlation unanswerable.
+                        if park_control is not None:
+                            park_conflict = True
+                        park_control = _ctl
                     if r.get("rejection_kind") == "catastrophic" and catastrophic_stop is None:
                         catastrophic_stop = str(r.get("rejection_reason") or r.get("output") or
                                                 "Safety stop: potentially catastrophic command refused")
@@ -1893,6 +1903,24 @@ def run_turn(*, build_slice, llm, tools, dispatch: Dispatcher, hooks: Hooks | No
                         # A synthesis-only model call cannot overtake an effect. It lets the parent deliver
                         # every already-settled sibling report while truthfully preserving the unknown child.
                         closeout=bool(settled_reports),
+                    )
+                if park_conflict:
+                    dispatch(StepEnd(steps, combined_usage.as_dict(), "error"))
+                    return _park(
+                        "error",
+                        "two peer parks were requested in one batch; a turn can wait on exactly one "
+                        "collaborator, so neither park was taken",
+                        closeout=False,
+                    )
+                if park_control is not None:
+                    # The turn ENDS here, parked on a peer. No closeout: a closeout answer would tell
+                    # the user the work finished when it is waiting on a collaborator.
+                    dispatch(StepEnd(steps, combined_usage.as_dict(), "waiting_peer"))
+                    dispatch(TurnEnd("waiting_peer", steps, total.as_dict()))
+                    return TurnResult(
+                        "waiting_peer", steps, total,
+                        leftover_steers=_sweep_leftovers(),
+                        peer_wait=park_control.peer_wait,
                     )
                 if catastrophic_stop is not None:
                     dispatch(StepEnd(steps, combined_usage.as_dict(), "blocked"))
