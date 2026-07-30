@@ -98,6 +98,20 @@ def _validate_entry_schema(entry: "ToolEntry") -> None:
         raise ValueError(f"tool {entry.name!r} schema required must be a list of strings")
 
 
+# Park authority is a REGISTRATION-PATH fact, never entry data. `turn_exclusive` is
+# caller-supplied: a plugin/MCP descriptor can set it, and self-assertion is not authority.
+# The registry stamps this module-private sentinel only via register_turn_control(), and
+# strips it on the ordinary register() path, so the capability cannot be claimed by any
+# entry the host merely passes through — it must be granted by the code path the host chose.
+_PARK_AUTHORITY = object()
+_PARK_STAMP = "_park_authority"
+
+
+def park_authorized(entry: object) -> bool:
+    """True only for an entry the host registered through register_turn_control()."""
+    return getattr(entry, _PARK_STAMP, None) is _PARK_AUTHORITY
+
+
 @dataclass
 class ToolEntry:
     name: str
@@ -108,7 +122,8 @@ class ToolEntry:
     source: str = "builtin"                  # builtin | mcp | plugin | skill
     purity: ToolPurity = ToolPurity.UNKNOWN
     deduplicable: bool = False
-    # A TURN-ENDING control tool (task #101 ask_collaborator). Declared by the host, enforced
+    # SCHEDULING METADATA ONLY (task #101 ask_collaborator): it isolates the call in its
+    # provider batch. It confers NO park authority — see park_authorized(). Enforced
     # generically by the loop: such a call must be ALONE in its provider batch, rejected before
     # ANY handler runs. Detecting the conflict after execution would be too late — by then each
     # handler may already have prepared/dispatched durable side effects that cannot be undone.
@@ -188,9 +203,9 @@ def finalize_tool_outcome(
     if control is not None and not isinstance(control, _PeerParkControl):
         # Exact type only: an arbitrary object carries no wait to resume against.
         control = None
-    if control is not None and not getattr(entry, "turn_exclusive", False):
-        # "PersonaHost/ask_collaborator alone mints the park" is enforced here rather than left
-        # to registration convention: an unauthorized entry cannot suspend the turn.
+    if control is not None and not park_authorized(entry):
+        # "PersonaHost/ask_collaborator alone mints the park" is enforced against the authority
+        # the REGISTRAR granted, not against a boolean the entry declares about itself.
         control = None
     if control is not None and status is not ToolStatus.SUCCEEDED:
         # A failed or indeterminate call must follow ordinary failure semantics and never seal a
@@ -218,6 +233,13 @@ class ToolRegistry:
         self.generation = 0
 
     def register(self, entry: ToolEntry, *, override: bool = False) -> None:
+        # Capability removal, not detection: the ordinary path can never carry park authority,
+        # so a descriptor that arrives pre-stamped (a plugin guessing the attribute, a recycled
+        # entry object) loses it here rather than being screened for later.
+        try:
+            entry.__dict__.pop(_PARK_STAMP, None)
+        except AttributeError:
+            pass
         _validate_entry_schema(entry)
         if getattr(entry, "turn_exclusive", False):
             # Contradictory metadata, rejected at the boundary rather than handled downstream.
@@ -245,6 +267,29 @@ class ToolRegistry:
             entry.deduplicable = True
         self._tools[entry.name] = entry
         self.generation += 1
+
+    def register_turn_control(self, entry: ToolEntry, *, override: bool = False) -> None:
+        """Register a tool authorized to END THE TURN on a peer wait (PersonaHost/ask_collaborator).
+
+        Authority comes from the host choosing THIS method; it is not readable off the entry.
+        Untrusted descriptors reach the registry through register(), so a plugin cannot obtain
+        the capability by declaring turn_exclusive or forging source="host" — both are entry data.
+        """
+        if entry.source not in ("builtin", "host"):
+            # Defense in depth for a miswired host: a plugin/MCP/skill descriptor routed into the
+            # control registrar fails loudly instead of being silently granted turn authority.
+            raise ValueError(
+                f"tool {entry.name!r} from source {entry.source!r} cannot be registered as a "
+                "turn-control tool: only host-owned tools may end the turn on a peer wait"
+            )
+        if not entry.turn_exclusive:
+            # The scheduling flag and the authority must agree, or the loop would grant a park
+            # to a call that was never isolated in its batch.
+            raise ValueError(
+                f"tool {entry.name!r} must set turn_exclusive to be registered as turn-control"
+            )
+        self.register(entry, override=override)
+        self._tools[entry.name].__dict__[_PARK_STAMP] = _PARK_AUTHORITY
 
     def deregister(self, name: str) -> None:
         if self._tools.pop(name, None) is not None:
@@ -319,13 +364,13 @@ class ToolRegistry:
             if isinstance(out, ToolText):
                 return out
             from .interfaces import PeerParkControl as _PPC
-            if isinstance(out, _PPC) and getattr(e, "turn_exclusive", False):
+            if isinstance(out, _PPC) and park_authorized(e):
                 # A park is CONTROL, not output. Converting it with tool_result_text would both
                 # lose the typed signal (production would silently never park) and stringify the
                 # correlation into the model-visible transcript. Body-free text, typed control.
                 return ToolText("Waiting on the collaborator.", ok=True, control=out)
             if isinstance(out, _PPC):
-                # Minting a park is HOST authority, declared by turn_exclusive. A plugin/MCP or
+                # Minting a park is HOST authority, granted by register_turn_control. A plugin/MCP or
                 # any undeclared tool returning a carrier is a protocol error, not a park: it
                 # would let unauthorized code suspend the turn. Fail loudly rather than drop it
                 # silently, so a miswired host is visible instead of mysteriously never parking.

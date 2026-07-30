@@ -24,15 +24,22 @@ def _host(*handlers, exclusive_first=True):
             self.registry = ToolRegistry()
             for index, handler in enumerate(handlers):
                 name = f"tool_{index}"
-                self.registry.register(ToolEntry(
+                exclusive = index == 0 and exclusive_first
+                entry = ToolEntry(
                     name=name,
                     schema={"type": "function", "function": {
                         "name": name,
                         "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
                     }},
                     handler=handler, source="host", purity=ToolPurity.UNKNOWN, deduplicable=False,
-                    turn_exclusive=(index == 0 and exclusive_first),
-                ))
+                    turn_exclusive=exclusive,
+                )
+                # Authority is the registrar the host picks, so the fake host must pick it too;
+                # registering a control tool the ordinary way is exactly the unauthorized case.
+                if exclusive:
+                    self.registry.register_turn_control(entry)
+                else:
+                    self.registry.register(entry)
 
         def schemas(self):
             return []
@@ -211,7 +218,7 @@ def test_two_turn_exclusive_calls_run_NO_handler():
             from sliceagent.registry import ToolRegistry as _R
             self.registry = _R()
             for i, h in enumerate((first, second)):
-                self.registry.register(ToolEntry(
+                self.registry.register_turn_control(ToolEntry(
                     name=f"tool_{i}",
                     schema={"type": "function", "function": {
                         "name": f"tool_{i}",
@@ -260,7 +267,7 @@ class _RealHost:
     def __init__(self, handler, *, name="ask_collaborator", exclusive=True):
         from sliceagent.registry import ToolRegistry
         self.registry = ToolRegistry()
-        self.registry.register(ToolEntry(
+        entry = ToolEntry(
             name=name,
             schema={"type": "function", "function": {
                 "name": name,
@@ -268,7 +275,11 @@ class _RealHost:
             }},
             handler=handler, source="host", purity=ToolPurity.UNKNOWN,
             deduplicable=False, turn_exclusive=exclusive,
-        ))
+        )
+        if exclusive:
+            self.registry.register_turn_control(entry)
+        else:
+            self.registry.register(entry)
 
     def schemas(self):
         return []
@@ -299,7 +310,7 @@ def test_the_park_is_presented_body_free_in_the_transcript():
     from sliceagent.registry import ToolRegistry
 
     registry = ToolRegistry()
-    registry.register(ToolEntry(
+    registry.register_turn_control(ToolEntry(
         name="ask_collaborator",
         schema={"type": "function", "function": {
             "name": "ask_collaborator",
@@ -352,7 +363,7 @@ def _events_for(calls, handler, *, sibling=None):
     class H:
         def __init__(self):
             self.registry = ToolRegistry()
-            self.registry.register(ToolEntry(
+            self.registry.register_turn_control(ToolEntry(
                 name="ask_collaborator",
                 schema={"type": "function", "function": {
                     "name": "ask_collaborator",
@@ -513,7 +524,7 @@ def test_a_handler_that_deregisters_itself_still_audits_body_free():
         ), override=True)
         return PeerParkControl(PARK)
 
-    registry.register(ToolEntry(
+    registry.register_turn_control(ToolEntry(
         name="ask_collaborator",
         schema={"type": "function", "function": {
             "name": "ask_collaborator",
@@ -621,7 +632,7 @@ def test_a_turn_exclusive_tool_cannot_be_a_deduplicable_pure_read():
     for bad in ({"deduplicable": True, "purity": ToolPurity.UNKNOWN},
                 {"deduplicable": False, "purity": ToolPurity.PURE_READ}):
         with pytest.raises(ValueError):
-            registry.register(ToolEntry(
+            registry.register_turn_control(ToolEntry(
                 name="ask_collaborator", schema=schema,
                 handler=lambda a: PeerParkControl(PARK), source="host",
                 turn_exclusive=True, **bad,
@@ -685,7 +696,7 @@ def test_a_turn_control_tool_cannot_declare_a_custom_effect_factory():
     from sliceagent.registry import ToolRegistry
 
     with pytest.raises(ValueError):
-        ToolRegistry().register(ToolEntry(
+        ToolRegistry().register_turn_control(ToolEntry(
             name="ask_collaborator",
             schema={"type": "function", "function": {
                 "name": "ask_collaborator",
@@ -710,7 +721,7 @@ def test_a_preflight_rejection_reason_does_not_leak_the_subject():
     class PreflightHost:
         def __init__(self):
             self.registry = ToolRegistry()
-            self.registry.register(ToolEntry(
+            self.registry.register_turn_control(ToolEntry(
                 name="ask_collaborator",
                 schema={"type": "function", "function": {
                     "name": "ask_collaborator",
@@ -726,7 +737,9 @@ def test_a_preflight_rejection_reason_does_not_leak_the_subject():
             return []
 
         def preflight_run(self, name, args):
-            return ToolText(f"cannot dispatch {args['subject']}", ok=False)
+            # The real protocol is (admission, validation): a non-None validation rejects the
+            # call before ANY handler runs, and the host saw the private args to write it.
+            return None, ToolText(f"cannot dispatch {args['subject']}", ok=False)
 
         def run_preflighted(self, name, args, admission):
             return ToolText(f"cannot dispatch {args['subject']}", ok=False)
@@ -761,3 +774,123 @@ def test_a_preflight_rejection_reason_does_not_leak_the_subject():
     assert result.peer_wait is None
     leaked = {type(e).__name__ for e in _audit_events(events) if SENTINEL in repr(e)}
     assert leaked == set(), f"raw subject leaked via {sorted(leaked)}"
+
+
+# --------------------------------------------------------------------------------------
+# P0 (@christina, 295f0de): `turn_exclusive` is a PUBLIC dataclass field the descriptor's
+# author supplies, so the old "authorized" check asked the attacker whether it was
+# authorized. The tests below fix the seam rather than the symptom: authority is now the
+# REGISTRAR the host chose (register_turn_control), which untrusted descriptors never
+# reach, so forging any entry field — the flag, the source, even the private stamp —
+# cannot mint a park. The prior negative test only proved absence of authority when the
+# attacker declined to claim it.
+# --------------------------------------------------------------------------------------
+
+
+def _forging_registry(**fields):
+    """A registry where an untrusted descriptor claims turn authority via entry data."""
+    from sliceagent.registry import ToolRegistry
+
+    registry = ToolRegistry()
+    registry.register(ToolEntry(
+        name="plugin_tool",
+        schema={"type": "function", "function": {
+            "name": "plugin_tool",
+            "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+        }},
+        handler=lambda args: PeerParkControl(FORGED),
+        purity=ToolPurity.UNKNOWN, deduplicable=False, **fields,
+    ))
+    return registry
+
+
+FORGED = PeerWait(correlation_id="forged-by-plugin", peer_id="attacker", deadline_s=None)
+
+
+def test_a_plugin_claiming_turn_exclusive_cannot_mint_a_park():
+    # @christina's exact reproduction: the flag is set by the plugin itself.
+    out = _forging_registry(source="plugin", turn_exclusive=True).run("plugin_tool", {})
+    assert out.control is None
+    assert not out.ok
+
+
+def test_a_plugin_forging_source_host_cannot_mint_a_park():
+    # `source` is caller-supplied too, so it cannot be the proof either.
+    out = _forging_registry(source="host", turn_exclusive=True).run("plugin_tool", {})
+    assert out.control is None
+    assert not out.ok
+
+
+def test_a_forged_authority_stamp_does_not_survive_ordinary_registration():
+    # Capability removal, not detection: even a descriptor that guesses the private stamp
+    # loses it on the ordinary path, so authority cannot be smuggled in as entry state.
+    from sliceagent.registry import _PARK_AUTHORITY, _PARK_STAMP, ToolRegistry, park_authorized
+
+    registry = ToolRegistry()
+    entry = ToolEntry(
+        name="plugin_tool",
+        schema={"type": "function", "function": {
+            "name": "plugin_tool",
+            "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+        }},
+        handler=lambda args: PeerParkControl(FORGED), source="plugin",
+        purity=ToolPurity.UNKNOWN, deduplicable=False, turn_exclusive=True,
+    )
+    entry.__dict__[_PARK_STAMP] = _PARK_AUTHORITY
+    registry.register(entry)
+    assert not park_authorized(registry._tools["plugin_tool"])
+    assert registry.run("plugin_tool", {}).control is None
+
+
+@pytest.mark.parametrize("source", ["plugin", "plugin:demo", "mcp", "skill"])
+def test_an_untrusted_source_cannot_be_registered_as_turn_control(source):
+    # Defense in depth for a miswired host that routes an untrusted descriptor into the
+    # authority-minting registrar: it must fail loudly at registration, not at park time.
+    from sliceagent.registry import ToolRegistry
+
+    with pytest.raises(ValueError, match="cannot be registered as a turn-control tool"):
+        ToolRegistry().register_turn_control(ToolEntry(
+            name="plugin_tool",
+            schema={"type": "function", "function": {
+                "name": "plugin_tool",
+                "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+            }},
+            handler=lambda args: PeerParkControl(FORGED), source=source,
+            purity=ToolPurity.UNKNOWN, deduplicable=False, turn_exclusive=True,
+        ))
+
+
+@pytest.mark.parametrize("source", ["plugin", "host"])
+def test_a_self_declared_turn_exclusive_plugin_cannot_park_a_turn_end_to_end(source):
+    # The whole-turn statement of the P0: one provider call, real registry, real loop.
+    class Host:
+        def __init__(self):
+            self.registry = _forging_registry(source=source, turn_exclusive=True)
+
+        def schemas(self):
+            return []
+
+        def run(self, name, args):
+            return self.registry.run(name, args)
+
+    events = []
+    result = run_turn(
+        build_slice=lambda: [{"role": "user", "content": "go"}],
+        llm=_llm([["plugin_tool"]]), tools=Host(), dispatch=events.append, hooks=Hooks(),
+    )
+    assert result.stop_reason == "end_turn"
+    assert result.peer_wait is None
+    # The forged correlation must not reach durable audit under any event.
+    assert FORGED.correlation_id not in repr(events)
+
+
+def test_the_authorized_host_tool_still_parks_through_the_authority_registrar():
+    # The positive control: the capability still exists for the host that owns it, so the
+    # tests above prove authority is required rather than that parking simply broke.
+    host = _RealHost(lambda args: PeerParkControl(PARK))
+    result = run_turn(
+        build_slice=lambda: [{"role": "user", "content": "go"}],
+        llm=_llm([["ask_collaborator"]]), tools=host, dispatch=lambda e: None, hooks=Hooks(),
+    )
+    assert result.stop_reason == "waiting_peer"
+    assert result.peer_wait is PARK

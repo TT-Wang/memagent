@@ -59,7 +59,10 @@ from .execution import (CHILD_ACTIVITY_ARG, CHILD_CANCEL_SIGNAL_ARG, CHILD_INVOC
                         ToolInvocation, ToolOutcome, ToolPurity,
                         PreflightOverflow, ToolStatus, TurnOutcome, Usage,
                         available_content_capacity, estimate_model_call, is_delegation_tool)
-from .registry import ToolAdmission, ToolText, finalize_tool_outcome, tool_result_text
+from .registry import (
+    ToolAdmission, ToolText, finalize_tool_outcome,
+    park_authorized as _park_authorized, tool_result_text,
+)
 from .scheduler import (DEFAULT_LIFECYCLE_ABSOLUTE, ScheduledTool, run_ordered)
 
 
@@ -934,7 +937,7 @@ def run_tool_batch(tool_calls, tools, dispatch: Dispatcher, hooks: Hooks, *, ste
         # batch gate suppresses the handler entirely.
         dispatch(ToolRequested(_audit_projection(
             invocation,
-            getattr(_entry_for(tools, getattr(tc, "name", "") or ""), "turn_exclusive", False),
+            _park_authorized(_entry_for(tools, getattr(tc, "name", "") or "")),
         )))
     for provider_index, tc in enumerate(tool_calls):
         name = getattr(tc, "name", "") or ""
@@ -968,7 +971,9 @@ def run_tool_batch(tool_calls, tools, dispatch: Dispatcher, hooks: Hooks, *, ste
                 "deduplicable": can_dedup,
                 "admission": None, "run_preflighted": None, "prepared_not_started": False,
                 "child_cancel": child_cancel, "child_activity": child_activity}
-        if getattr(entry, "turn_exclusive", False):
+        if _park_authorized(entry):
+            # Body-free audit is a privilege of the authorized control tool. Keying it off the
+            # public flag would let an unauthorized entry suppress its own arguments in audit.
             audit_body_free_ids.add(invocation.id)
         descriptors.append(desc)
         if key is not None and key in wave_seen:
