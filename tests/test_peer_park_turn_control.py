@@ -18,7 +18,7 @@ from sliceagent.registry import ToolEntry, ToolRegistry
 PARK = PeerWait(correlation_id="ask-1", peer_id="sre", deadline_s=None)
 
 
-def _host(*handlers):
+def _host(*handlers, exclusive_first=True):
     class Host:
         def __init__(self):
             self.registry = ToolRegistry()
@@ -31,6 +31,7 @@ def _host(*handlers):
                         "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
                     }},
                     handler=handler, source="host", purity=ToolPurity.UNKNOWN, deduplicable=False,
+                    turn_exclusive=(index == 0 and exclusive_first),
                 ))
 
         def schemas(self):
@@ -169,3 +170,77 @@ def test_the_result_boundary_enforces_the_paired_invariant():
         TurnOutcome("waiting_peer", 1, {})                      # parked, no wait
     with pytest.raises(ValueError):
         TurnOutcome("end_turn", 1, {}, peer_wait=PARK)          # wait, not parked
+
+
+# --------------------------------------------------------------------------------------
+# Whole-batch exclusivity, decided BEFORE any handler runs. Detecting a conflict after
+# execution is too late: each handler may already have prepared/dispatched durable effects.
+# --------------------------------------------------------------------------------------
+
+
+def _counting(result):
+    calls = []
+
+    def handler(args):
+        calls.append(1)
+        return result
+
+    handler.calls = calls
+    return handler
+
+
+def test_a_turn_exclusive_call_batched_with_a_sibling_runs_NO_handler():
+    ask = _counting(PeerParkControl(PARK))
+    sibling = _counting("side effect")
+    llm = _llm([["tool_0", "tool_1"]])
+    result = _run(_host(ask, sibling), llm)
+    assert result.stop_reason != "waiting_peer"
+    assert result.peer_wait is None
+    # The point of the gate: ZERO effects, not "conflict detected afterwards".
+    assert ask.calls == [] and sibling.calls == []
+
+
+def test_two_turn_exclusive_calls_run_NO_handler():
+    first = _counting(PeerParkControl(PARK))
+    second = _counting(PeerParkControl(
+        PeerWait(correlation_id="ask-2", peer_id="other", deadline_s=None)
+    ))
+
+    class Host2:
+        def __init__(self):
+            from sliceagent.registry import ToolRegistry as _R
+            self.registry = _R()
+            for i, h in enumerate((first, second)):
+                self.registry.register(ToolEntry(
+                    name=f"tool_{i}",
+                    schema={"type": "function", "function": {
+                        "name": f"tool_{i}",
+                        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+                    }},
+                    handler=h, source="host", purity=ToolPurity.UNKNOWN,
+                    deduplicable=False, turn_exclusive=True,
+                ))
+
+        def schemas(self):
+            return []
+
+        def run(self, name, args):
+            return self.registry.entry(name).handler(args)
+
+        def read_text(self, path):
+            raise FileNotFoundError(path)
+
+        def accesses(self, name, args):
+            return []
+
+    result = _run(Host2(), _llm([["tool_0", "tool_1"]]))
+    assert result.stop_reason != "waiting_peer"
+    assert first.calls == [] and second.calls == []
+
+
+def test_a_lone_turn_exclusive_call_still_parks():
+    """The gate must not break the honest single-call case."""
+    ask = _counting(PeerParkControl(PARK))
+    result = _run(_host(ask), _llm([["tool_0"]]))
+    assert result.stop_reason == "waiting_peer"
+    assert ask.calls == [1]

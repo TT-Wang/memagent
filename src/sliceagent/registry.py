@@ -102,6 +102,11 @@ class ToolEntry:
     source: str = "builtin"                  # builtin | mcp | plugin | skill
     purity: ToolPurity = ToolPurity.UNKNOWN
     deduplicable: bool = False
+    # A TURN-ENDING control tool (task #101 ask_collaborator). Declared by the host, enforced
+    # generically by the loop: such a call must be ALONE in its provider batch, rejected before
+    # ANY handler runs. Detecting the conflict after execution would be too late — by then each
+    # handler may already have prepared/dispatched durable side effects that cannot be undone.
+    turn_exclusive: bool = False
     capabilities: frozenset[str] = frozenset()
     effect_factory: Optional[
         Callable[[ToolInvocation, ToolStatus, str], tuple[ToolEffect, ...]]

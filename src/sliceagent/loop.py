@@ -834,6 +834,25 @@ def run_tool_batch(tool_calls, tools, dispatch: Dispatcher, hooks: Hooks, *, ste
             f"{effect_call_ids[invocation.provider_index]}:0"
         )
 
+    # WHOLE-BATCH EXCLUSIVITY, decided BEFORE any handler runs. A host may declare a tool
+    # turn-exclusive (task #101 ask_collaborator): ending the turn is only coherent if that call
+    # is alone, because siblings would either execute into a suspended turn or be silently
+    # dropped. Detecting this AFTER execution is too late — each handler may already have
+    # prepared/dispatched durable effects that cannot be undone — so the whole batch is stopped
+    # at preflight and every call reports zero effects. Generic by declaration: the loop never
+    # hardcodes a tool name.
+    _exclusive_names = {
+        str(getattr(tc, "name", "") or "")
+        for tc in tool_calls
+        if getattr(_entry_for(tools, str(getattr(tc, "name", "") or "")), "turn_exclusive", False)
+    }
+    _batch_exclusion = ""
+    if _exclusive_names and len(tool_calls) > 1:
+        _batch_exclusion = (
+            "a turn-ending tool must be the only call in its batch, so no call in this batch ran: "
+            + ", ".join(sorted(_exclusive_names))
+        )
+
     descriptors: list[dict] = []
     scheduled: list[ScheduledTool] = []
     dup_of: dict[int, int] = {}
@@ -883,7 +902,9 @@ def run_tool_batch(tool_calls, tools, dispatch: Dispatcher, hooks: Hooks, *, ste
         can_dedup = bool(entry.deduplicable) if entry is not None else name in DEDUP_SAFE_TOOL_NAMES
         key = _dedup_key(name, call_args) if can_dedup and purity is ToolPurity.PURE_READ else None
         desc = {"invocation": invocation, "args": raw_args, "call_args": call_args,
-                "preflight": ToolPreflight(), "entry": entry, "purity": purity,
+                "preflight": (ToolPreflight(True, _batch_exclusion, "lifecycle")
+                              if _batch_exclusion else ToolPreflight()),
+                "entry": entry, "purity": purity,
                 "deduplicable": can_dedup,
                 "admission": None, "run_preflighted": None, "prepared_not_started": False,
                 "child_cancel": child_cancel, "child_activity": child_activity}
@@ -930,7 +951,12 @@ def run_tool_batch(tool_calls, tools, dispatch: Dispatcher, hooks: Hooks, *, ste
             """Resolve narrow safety/lifecycle preflight against every prior barrier's settled state."""
             nonlocal handoff_index
             inv = d["invocation"]
-            if handoff_index is not None and inv.provider_index > handoff_index:
+            if _batch_exclusion:
+                # Whole-batch exclusivity is decided before any handler and OUTRANKS the per-call
+                # preflight recomputed here; without this the batch stop would be overwritten and
+                # every handler would run, which is exactly the zero-effects rule it enforces.
+                preflight = ToolPreflight(True, _batch_exclusion, kind="lifecycle")
+            elif handoff_index is not None and inv.provider_index > handoff_index:
                 preflight = ToolPreflight(
                     True,
                     "an earlier tool in this batch scheduled a workspace switch",

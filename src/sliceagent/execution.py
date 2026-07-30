@@ -15,9 +15,12 @@ import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from enum import Enum
-from typing import Callable, Iterator
+from typing import TYPE_CHECKING, Callable, Iterator
 
 from .context_overflow import ContextOverflow
+
+if TYPE_CHECKING:  # forward refs only; interfaces must not import execution at runtime
+    from .interfaces import PeerParkControl, PeerWait
 
 
 # Private scheduler→child cancellation lease. Unlike provider/audit arguments this is a live process object;
@@ -147,7 +150,7 @@ class ToolOutcome:
     # park). Deliberately not text: the loop must never infer control flow from prose. None
     # for every ordinary tool, so existing consumers and as_legacy() are unchanged — the loop
     # reaches it through the already-exposed "outcome" row entry.
-    control: object | None = None
+    control: "PeerParkControl | None" = None
 
     @property
     def failing(self) -> bool:
@@ -308,7 +311,7 @@ class TurnOutcome:
     # PeerWait so the host's seal can persist the park durably. None for every ordinary stop, so
     # existing consumers are unchanged. The paired invariant — status WAITING_PEER iff this is
     # set — is enforced below AND again by the work graph at the durable seal.
-    peer_wait: object | None = None
+    peer_wait: "PeerWait | None" = None
 
     def __post_init__(self) -> None:
         try:
