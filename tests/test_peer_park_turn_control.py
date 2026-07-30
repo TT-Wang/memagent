@@ -695,3 +695,69 @@ def test_a_turn_control_tool_cannot_declare_a_custom_effect_factory():
             purity=ToolPurity.UNKNOWN, deduplicable=False, turn_exclusive=True,
             effect_factory=lambda *a, **k: (),
         ))
+
+
+def test_a_preflight_rejection_reason_does_not_leak_the_subject():
+    """christina's fourth bypass: preflight_run() sees the private args too.
+
+    The handler never runs, yet the host's rejection text can echo the subject and the reason
+    was derived before the projection, landing raw in durable ToolRejected.reason.
+    """
+    from sliceagent.registry import ToolRegistry, ToolText
+
+    calls = []
+
+    class PreflightHost:
+        def __init__(self):
+            self.registry = ToolRegistry()
+            self.registry.register(ToolEntry(
+                name="ask_collaborator",
+                schema={"type": "function", "function": {
+                    "name": "ask_collaborator",
+                    "parameters": {"type": "object", "properties": {"subject": {"type": "string"}},
+                                   "additionalProperties": False},
+                }},
+                handler=lambda a: (calls.append(1), PeerParkControl(PARK))[1],
+                source="host", purity=ToolPurity.UNKNOWN,
+                deduplicable=False, turn_exclusive=True,
+            ))
+
+        def schemas(self):
+            return []
+
+        def preflight_run(self, name, args):
+            return ToolText(f"cannot dispatch {args['subject']}", ok=False)
+
+        def run_preflighted(self, name, args, admission):
+            return ToolText(f"cannot dispatch {args['subject']}", ok=False)
+
+        def run(self, name, args):
+            return self.registry.run(name, args)
+
+        def read_text(self, path):
+            raise FileNotFoundError(path)
+
+        def accesses(self, name, args):
+            return []
+
+    class LLM:
+        def __init__(self):
+            self.seen = 0
+
+        def complete(self, messages, tools):
+            self.seen += 1
+            if self.seen == 1:
+                return NS(content="",
+                          tool_calls=[NS(name="ask_collaborator", id="c0",
+                                         args={"subject": SENTINEL})],
+                          finish_reason="tool_calls", usage={})
+            return NS(content="done", tool_calls=[], finish_reason="stop", usage={})
+
+    events = []
+    result = run_turn(build_slice=lambda: [{"role": "user", "content": "ask"}],
+                      llm=LLM(), tools=PreflightHost(), dispatch=events.append, hooks=Hooks())
+
+    assert result.stop_reason != "waiting_peer"
+    assert result.peer_wait is None
+    leaked = {type(e).__name__ for e in _audit_events(events) if SENTINEL in repr(e)}
+    assert leaked == set(), f"raw subject leaked via {sorted(leaked)}"

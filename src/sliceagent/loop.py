@@ -1167,6 +1167,12 @@ def run_tool_batch(tool_calls, tools, dispatch: Dispatcher, hooks: Hooks, *, ste
         desc = descriptors[out.invocation.provider_index]
         if invocation_id in rejection_published_ids:
             return
+        # Project FIRST: the reason is derived from preflight/outcome text, and a host's
+        # preflight_run() sees the private args, so its rejection text can echo the subject
+        # ("cannot dispatch <subject>") even though the handler never ran. Deriving the reason
+        # before projecting put that raw text in the durable ToolRejected.reason.
+        body_free = out.invocation.id in audit_body_free_ids
+        out = _audit_outcome(out, audit_body_free_ids)
         if desc["preflight"].stop:
             reason = str(desc["preflight"].reason or "cancelled")
             kind = str(getattr(desc["preflight"], "kind", "") or "lifecycle")
@@ -1175,7 +1181,10 @@ def run_tool_batch(tool_calls, tools, dispatch: Dispatcher, hooks: Hooks, *, ste
             kind = "steered" if out.status is ToolStatus.STEERED else "validation"
         else:
             return
-        out = _audit_outcome(out, audit_body_free_ids)
+        if body_free:
+            # Canonical, body-free, and kind-preserving: the audit still says WHY the call was
+            # refused without repeating anything the host's message may have quoted.
+            reason = f"turn-control call refused ({kind}); reason withheld from audit"
         dispatch(ToolRejected(out.invocation, reason, out, kind=kind))
         rejection_published_ids.add(invocation_id)
 
