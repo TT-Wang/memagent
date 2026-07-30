@@ -121,3 +121,33 @@ def test_a_finite_deadline_is_refused_at_the_boundary():
     """MVP scope: a bounded park needs platform capability we do not have."""
     with pytest.raises(ValueError):
         PeerParkControl(PeerWait(correlation_id="ask-3", peer_id="sre", deadline_s=30.0))
+
+
+# --------------------------------------------------------------------------------------
+# The seal must persist the park durably, or the kernel reports waiting_peer while the
+# durable record forgets it and the peer's reply has nothing to resume.
+# --------------------------------------------------------------------------------------
+
+
+def test_a_parked_turn_seals_the_park_into_the_durable_graph():
+    from sliceagent.active_work import WorkGraph
+
+    graph = WorkGraph().open_request("evt-1", "ask the SRE").seal_current(
+        "waiting_peer", peer_wait=PARK
+    )
+    root = graph.request_roots[-1]
+    assert root.status == "waiting_peer"
+    assert root.peer_wait == PARK
+    # And it survives the durable wire round-trip the checkpoint uses.
+    restored = WorkGraph.from_records(graph.to_records()).request_roots[-1]
+    assert restored.status == "waiting_peer"
+    assert restored.peer_wait == PARK
+
+
+def test_sealing_waiting_peer_without_the_park_is_refused():
+    """The paired invariant: a parked status may never exist without its correlation."""
+    from sliceagent.active_work import GraphValidationError, WorkGraph
+
+    graph = WorkGraph().open_request("evt-1", "ask the SRE")
+    with pytest.raises(GraphValidationError):
+        graph.seal_current("waiting_peer")

@@ -1496,7 +1496,7 @@ def main() -> None:
             identity=(logical.id, artifact_id),
         )
 
-    def _seal_local_turn(stop_reason: str, event_dispatch=None) -> bool:
+    def _seal_local_turn(stop_reason: str, event_dispatch=None, *, peer_wait=None) -> bool:
         """Required artifact-first seal; emit completion only after durable activation succeeds."""
         emit = event_dispatch or dispatch
         emit(TurnPhaseChanged(
@@ -1550,9 +1550,12 @@ def main() -> None:
             OutputRef("turn_artifact", artifact_id)
             if stop_reason == "end_turn" and not transitioned else None
         )
+        # A turn that ended parked on a peer persists that park durably here, so the wait
+        # survives restart and the peer's eventual reply has something to resume. Without this
+        # the kernel would report waiting_peer and the durable record would forget it.
         sealed_target.active_work = sealed_target.active_work.seal_current(
             stop_reason, response_ref=response_ref, transitioned=transitioned,
-            logical_id=active.logical_id,
+            logical_id=active.logical_id, peer_wait=peer_wait,
         )
         from dataclasses import asdict
         from .taskstate import slice_to_task_state, task_state_from_checkpoint
@@ -2481,7 +2484,10 @@ def main() -> None:
             # land ahead of the prefix ([C, A, B]).
             _prepend_leftover_steers(getattr(sink, "steer_queue", None),
                                      getattr(result, "leftover_steers", ()))
-            if _seal_local_turn(result.stop_reason, live_dispatch):
+            if _seal_local_turn(
+                result.stop_reason, live_dispatch,
+                peer_wait=getattr(result, "peer_wait", None),
+            ):
                 _rec.clear(root)                           # clear WAL only after this segment's required commit
             else:
                 raise _DurabilityStop(
