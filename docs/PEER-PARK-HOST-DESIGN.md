@@ -1,4 +1,4 @@
-# Peer-Park Host Design (task #95) — revision 4
+# Peer-Park Host Design (task #95) — revision 5
 
 Status: **design for review — not implemented.** Revision 3 answers @christina's task #98
 review of revision 2 (`2a2026ff`) and adopts the shape she accepted: the park owns
@@ -73,10 +73,13 @@ it would let the host claim the agent chose to wait when it did not.
   delivery receipt. The ordinary idle path is insufficient: it renders messages as
   `_message_text`, dropping `message_id`/`correlation_id`/`wake` — precisely the fields the
   causal binding needs.
-- **Ingress authority is a named authenticated typed lane, distinct from `raw_inbound`.** The
-  raw row is *untrusted* and does not carry `peer`/`correlation`/`wake`/semantic decision or
-  trusted server time; those come from the authenticated sidecar. Define the immutable conflict
-  tuple, and retain the referenced row through receipt/tombstone.
+- **Ingress authority: `PeerIngressRecord`**, an authenticated typed sidecar keyed 1:1 to the
+  `raw_inbound` row, which is itself *untrusted* and carries none of these. Required fields:
+  `raw_row_id` · `park_id` + `generation` · `peer_id` · `correlation_id` · `wake` ·
+  `artifact_digest` · `server_event_time` (PC-1) · `ingress_seq`. **Immutable conflict tuple**:
+  `(raw_row_id, park_id, generation, peer_id, correlation_id, wake, artifact_digest,
+  server_event_time)` — reuse of `raw_row_id` with any differing member is corruption and fails
+  loudly. The referenced raw row is retained through receipt and tombstone.
 - **`artifact_digest` is host-derived** from the actual current artifact/generation at
   delegation time and **re-checked at deploy** — never accepted from model or peer prose.
 - **Informational delivery is its own idempotent path.** Rehydration is not only "on resume":
@@ -126,6 +129,14 @@ wait?" are different problems and only the first is a comparison.
   compare trusted server-now against the stored server-domain `deadline_at` and CAS the same
   transition. Without this, a local clock rollback still delays expiry even though reply
   classification is sound.
+- **Ingress watermark barrier (required for correctness, not an optimisation).** A reply may
+  commit at `D-ε` while our authenticated ingress is still lagging. If expiry fires at `D` and
+  wins the terminal CAS, recovery later observes a *timely* reply it can no longer honour —
+  the record says the collaborator answered in time and the work expired anyway. Therefore:
+  the park stores a durable **deadline cut**, and **expiry may only commit once the
+  authenticated ingress cursor has advanced past that cut**. The wake may fire early; when it
+  does it re-checks the *watermark*, never the clock, and waits. "No reply by the deadline"
+  must be a **proven absence** — every event up to the cut observed — never an assumed one.
 
 Local processing time is operational telemetry and never a decision input. Measuring against
 host-local park start is rejected: it charges the collaborator for *our* restart.
@@ -136,11 +147,23 @@ today renders server timestamps to host-local whole seconds, drops the offset, d
 in bridge parsing, and returns only id/seq on send. That is **not sufficient**, so revision 4
 makes the requirement explicit rather than hoping:
 
-- a pinned Raft CLI/API surface returning **lossless canonical UTC event time** for *both* the
-  outbound delegation confirmation and the inbound reply;
-- **one chosen persistent deadline-wake mechanism** (not "reminder or query" — one, named);
-- the **platform/version digest joins the acceptance manifest** alongside the core and bridge
-  pins. A two-repo pin cannot prove a three-dependency composition.
+**PC-1 — event time.** Per event, the API must return an *immutable canonical UTC instant*
+with sub-second precision and explicit offset, stable across restarts and reads, for **both**
+the outbound delegation confirmation and the inbound reply. Whole-second host-local rendering
+with the offset dropped (today's surface) does not satisfy this.
+
+**PC-2 — the wake mechanism, named: a server-scheduled deadline event delivered as a
+committed, sequenced entry on the same ordered surface as replies.** Not a wake notification.
+This is the single choice, and it is chosen because it is the only option that supplies
+*both* liveness (it fires without our host) and an *ordering anchor* (it commits into the same
+sequence as the reply). A notification-only wake gives liveness without ordering; a time query
+gives ordering without liveness.
+
+**PC-3 — pin.** The platform/version digest joins the acceptance manifest alongside the core
+and bridge pins. A two-repo pin cannot prove a three-dependency composition.
+
+Absent PC-1 or PC-2, `ask_collaborator` **rejects a finite deadline before dispatch** — the
+call fails loudly at the boundary rather than producing a park that cannot be honoured.
 
 **Fail closed.** If either capability is absent, a finite wait is **not armed** — it is refused
 as bounded, not silently degraded. There is no fallback to local wall time; that would restore
@@ -172,10 +195,23 @@ prepare and confirm must recover to unarmed, never to a silently-bounded park wh
 is anchored to nothing. The **post-CAS outbox** closes the window where a crash between the
 CAS and the scheduling would lose the wake entirely, or double it on retry.
 
-- **{resume, expire, cancel/supersede} is ONE generation-fenced terminal CAS** — not resume
-  XOR expire with cancellation emitted separately, which would let reply-vs-cancel and
-  expiry-vs-cancel produce contradictory outcomes. The winner rule is stated, and a late reply
-  that loses still gets informational visibility.
+- **{resume, expire, cancel/supersede} is ONE generation-fenced terminal CAS.** Revision 4
+  claimed "the winner rule is stated" without stating it — describing a contract instead of
+  specifying one. It is specified here.
+
+  Terminal states: `RESUMED` · `EXPIRED` · `CANCELLED`. Exactly one commits per
+  `park_id`/generation; the first committed terminal transition wins and all later attempts are
+  no-ops that fall through to informational delivery.
+
+  | Condition, evaluated on the authenticated ingress sequence | Terminal |
+  |---|---|
+  | cancel/supersede commits before any other terminal | `CANCELLED` |
+  | matching reply with arrival ≤ `deadline_at`, observed before any terminal | `RESUMED` |
+  | ingress watermark passes the deadline cut with no qualifying reply | `EXPIRED` |
+
+  **Cancel beats a later reply** — a superseded request must not be resumed by an answer to the
+  question it no longer asks. A reply that arrives after a terminal, or loses the CAS, is never
+  a second terminal: it is delivered informationally and the root's terminal state stands.
 - **Typed delivery is pre-worker, never start-then-inject.** `HeadlessDriver.start` launches
   immediately and `inject_peer` is live-turn/in-memory only, so a turn can reach its first or
   final model call before injection lands, and a crash can split delivery from receipt. The
