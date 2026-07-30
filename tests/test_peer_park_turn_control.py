@@ -601,3 +601,43 @@ def test_the_frozen_set_is_built_from_the_authorizing_entry():
         llm=_llm([["ask_collaborator"]]), tools=host, dispatch=lambda e: None, hooks=Hooks(),
     )
     assert result.stop_reason == "waiting_peer" and calls == [1]
+
+
+def test_a_turn_exclusive_tool_cannot_be_a_deduplicable_pure_read():
+    """christina's P1, closed structurally: the contradictory combination is rejected.
+
+    A turn-ending control call suspends the turn — it is neither a pure read nor replayable
+    from a sibling's result. Allowing it let a deduplicated twin take a compatibility path
+    that bypassed the frozen audit projection and republished the raw subject.
+    """
+    from sliceagent.registry import ToolRegistry
+
+    registry = ToolRegistry()
+    schema = {"type": "function", "function": {
+        "name": "ask_collaborator",
+        "parameters": {"type": "object", "properties": {"subject": {"type": "string"}},
+                       "additionalProperties": False},
+    }}
+    for bad in ({"deduplicable": True, "purity": ToolPurity.UNKNOWN},
+                {"deduplicable": False, "purity": ToolPurity.PURE_READ}):
+        with pytest.raises(ValueError):
+            registry.register(ToolEntry(
+                name="ask_collaborator", schema=schema,
+                handler=lambda a: PeerParkControl(PARK), source="host",
+                turn_exclusive=True, **bad,
+            ), override=True)
+
+
+def test_two_identical_asks_leak_nothing_through_the_replay_edge():
+    """Defence in depth: even if such an entry existed, the replay edge stays projected."""
+    from sliceagent.execution import ToolInvocation, ToolOutcome, ToolStatus
+    from sliceagent.loop import _audit_outcome
+
+    # The compatibility twin is constructed from the same raw invocation as its source.
+    twin = ToolOutcome(
+        ToolInvocation("inv-2", "ask_collaborator", {"subject": SENTINEL}, 1),
+        ToolStatus.CANCELLED, "cancelled", (),
+    )
+    projected = _audit_outcome(twin, {"inv-2"})
+    assert SENTINEL not in repr(projected)
+    assert projected.invocation.args["arg_count"] == 1

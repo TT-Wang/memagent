@@ -1276,7 +1276,12 @@ def run_tool_batch(tool_calls, tools, dispatch: Dispatcher, hooks: Hooks, *, ste
         inv = descriptors[index]["invocation"]
         descriptors[index]["preflight"] = descriptors[source]["preflight"]
         descriptors[index]["prepared_not_started"] = descriptors[source]["prepared_not_started"]
-        outcomes[index] = ToolOutcome(inv, src.status, src.text, ())
+        # The compatibility twin carries the SAME frozen classification as the call it mirrors,
+        # so a replay path can never republish what the primary path correctly reduced.
+        outcomes[index] = _audit_outcome(
+            ToolOutcome(inv, src.status, src.text, ()), audit_body_free_ids,
+        )
+        audit_inv = outcomes[index].invocation
         # Every provider invocation gets one durable logical outcome. The source call already applied the
         # semantic effects, so this compatibility reply is explicitly non-reducing.
         if descriptors[index]["preflight"].stop or descriptors[index]["prepared_not_started"]:
@@ -1286,12 +1291,10 @@ def run_tool_batch(tool_calls, tools, dispatch: Dispatcher, hooks: Hooks, *, ste
             else:
                 reason = str(src.text or "tool validation rejected the call before execution")
                 kind = "steered" if src.status is ToolStatus.STEERED else "validation"
-            dispatch(ToolRejected(
-                _audit_projection(inv, inv.id in audit_body_free_ids), reason, outcomes[index], kind=kind,
-            ))
+            dispatch(ToolRejected(audit_inv, reason, outcomes[index], kind=kind))
         dispatch(ToolSettled(outcomes[index], apply_effects=False))
         dispatch(ToolResult(
-            inv.name, dict(inv.args), src.text, src.failing,
+            audit_inv.name, dict(audit_inv.args), src.text, src.failing,
             status=src.status.value, invocation_id=inv.id, outcome=outcomes[index], apply_effects=False,
         ))
 

@@ -219,6 +219,17 @@ class ToolRegistry:
 
     def register(self, entry: ToolEntry, *, override: bool = False) -> None:
         _validate_entry_schema(entry)
+        if getattr(entry, "turn_exclusive", False):
+            # Contradictory metadata, rejected at the boundary rather than handled downstream.
+            # A turn-ending control call SUSPENDS the turn; it is neither a pure read nor
+            # replayable from a sibling's result. Allowing the combination let a deduplicated
+            # twin take a compatibility path that bypassed the frozen audit projection and
+            # published the raw subject.
+            if entry.deduplicable or entry.purity is ToolPurity.PURE_READ:
+                raise ValueError(
+                    f"tool {entry.name!r} is turn_exclusive and cannot be deduplicable "
+                    "or PURE_READ: a turn-ending control call is neither replayable nor a read"
+                )
         if entry.name in self._tools and not override:
             raise ValueError(f"tool {entry.name!r} already registered (pass override=True to replace)")
         if entry.source == "builtin" and entry.purity is ToolPurity.UNKNOWN:
