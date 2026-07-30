@@ -186,6 +186,11 @@ def finalize_tool_outcome(
     from .interfaces import PeerParkControl as _PeerParkControl
     control = result if isinstance(result, _PeerParkControl) else getattr(result, "control", None)
     if control is not None and not isinstance(control, _PeerParkControl):
+        # Exact type only: an arbitrary object carries no wait to resume against.
+        control = None
+    if control is not None and not getattr(entry, "turn_exclusive", False):
+        # "PersonaHost/ask_collaborator alone mints the park" is enforced here rather than left
+        # to registration convention: an unauthorized entry cannot suspend the turn.
         control = None
     if control is not None and status is not ToolStatus.SUCCEEDED:
         # A failed or indeterminate call must follow ordinary failure semantics and never seal a
@@ -297,11 +302,20 @@ class ToolRegistry:
             if isinstance(out, ToolText):
                 return out
             from .interfaces import PeerParkControl as _PPC
-            if isinstance(out, _PPC):
+            if isinstance(out, _PPC) and getattr(e, "turn_exclusive", False):
                 # A park is CONTROL, not output. Converting it with tool_result_text would both
                 # lose the typed signal (production would silently never park) and stringify the
                 # correlation into the model-visible transcript. Body-free text, typed control.
                 return ToolText("Waiting on the collaborator.", ok=True, control=out)
+            if isinstance(out, _PPC):
+                # Minting a park is HOST authority, declared by turn_exclusive. A plugin/MCP or
+                # any undeclared tool returning a carrier is a protocol error, not a park: it
+                # would let unauthorized code suspend the turn. Fail loudly rather than drop it
+                # silently, so a miswired host is visible instead of mysteriously never parking.
+                return ToolText(
+                    "Error: this tool is not authorized to end the turn on a peer wait",
+                    ok=False,
+                )
             return ToolText(tool_result_text(out), ok=True)
         except ReachSteer as ex:
             # Only the built-in resolver can prove this exception happened before

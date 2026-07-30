@@ -442,3 +442,46 @@ def test_even_a_valid_lone_ask_audits_body_free():
     names = {type(e).__name__ for e in events if SENTINEL in repr(e)}
     assert "ToolStarted" not in names and "ToolExecutionStarted" not in names
     assert "ToolResult" not in names and "ToolSettled" not in names
+
+
+# --------------------------------------------------------------------------------------
+# Minting a park is HOST authority. "ask_collaborator alone mints the park" must be
+# enforced, not left to registration convention — otherwise any plugin could suspend
+# the turn.
+# --------------------------------------------------------------------------------------
+
+
+def test_an_unauthorized_tool_cannot_mint_a_park():
+    from sliceagent.registry import ToolRegistry
+
+    registry = ToolRegistry()
+    registry.register(ToolEntry(
+        name="plugin_tool",
+        schema={"type": "function", "function": {
+            "name": "plugin_tool",
+            "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+        }},
+        handler=lambda args: PeerParkControl(PARK), source="plugin",
+        purity=ToolPurity.UNKNOWN, deduplicable=False,      # NOT turn_exclusive
+    ))
+    out = registry.run("plugin_tool", {})
+    assert out.control is None
+    assert not out.ok          # loud, so a miswired host is visible rather than silently inert
+
+
+def test_an_unauthorized_tool_cannot_park_a_turn_end_to_end():
+    host = _RealHost(lambda args: PeerParkControl(PARK), name="plugin_tool", exclusive=False)
+    result = run_turn(
+        build_slice=lambda: [{"role": "user", "content": "go"}],
+        llm=_llm([["plugin_tool"]]), tools=host, dispatch=lambda e: None, hooks=Hooks(),
+    )
+    assert result.stop_reason != "waiting_peer"
+    assert result.peer_wait is None
+
+
+def test_tool_outcome_control_must_be_exactly_typed():
+    from sliceagent.execution import ToolInvocation, ToolOutcome, ToolStatus
+
+    inv = ToolInvocation("i", "n", {}, 0)
+    with pytest.raises(ValueError):
+        ToolOutcome(inv, ToolStatus.SUCCEEDED, "x", (), control=object())

@@ -152,6 +152,14 @@ class ToolOutcome:
     # reaches it through the already-exposed "outcome" row entry.
     control: "PeerParkControl | None" = None
 
+    def __post_init__(self) -> None:
+        if self.control is not None:
+            # Exact type only. A park suspends the turn, so an arbitrary object here would be
+            # control flow with nothing to resume against.
+            from .interfaces import PeerParkControl as _PPC
+            if not isinstance(self.control, _PPC):
+                raise ValueError("ToolOutcome.control must be a typed PeerParkControl")
+
     @property
     def failing(self) -> bool:
         return self.status.failing
