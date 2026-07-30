@@ -1,4 +1,4 @@
-# Peer-Park Host Design (task #95) — revision 3
+# Peer-Park Host Design (task #95) — revision 4
 
 Status: **design for review — not implemented.** Revision 3 answers @christina's task #98
 review of revision 2 (`2a2026ff`) and adopts the shape she accepted: the park owns
@@ -73,6 +73,17 @@ it would let the host claim the agent chose to wait when it did not.
   delivery receipt. The ordinary idle path is insufficient: it renders messages as
   `_message_text`, dropping `message_id`/`correlation_id`/`wake` — precisely the fields the
   causal binding needs.
+- **Ingress authority is a named authenticated typed lane, distinct from `raw_inbound`.** The
+  raw row is *untrusted* and does not carry `peer`/`correlation`/`wake`/semantic decision or
+  trusted server time; those come from the authenticated sidecar. Define the immutable conflict
+  tuple, and retain the referenced row through receipt/tombstone.
+- **`artifact_digest` is host-derived** from the actual current artifact/generation at
+  delegation time and **re-checked at deploy** — never accepted from model or peer prose.
+- **Informational delivery is its own idempotent path.** Rehydration is not only "on resume":
+  `wake="none"`, wrong/stale/cancelled/post-expiry classes never resume, so they are delivered
+  through a typed informational outbox that **leaves the root parked**. Freeze/revocation
+  additionally requires **durable typed authorization state plus a deploy CAS/fence** —
+  eventual visibility and prose parsing are both insufficient.
 - Evidence stores stay body-free; this changes nothing about them.
 
 ### Message dispositions
@@ -120,10 +131,26 @@ Local processing time is operational telemetry and never a decision input. Measu
 host-local park start is rejected: it charges the collaborator for *our* restart.
 `deadline_s=None` is intentionally unbounded — no timer, never reaped by time.
 
-**Platform dependency, stated explicitly:** this removes local wall time from correctness
-entirely, *provided* Raft guarantees immutable comparable event timestamps plus a
-server-now/deadline firing mechanism. If it cannot, the explicit rollback fallback stays and
-the weaker guarantee must be documented rather than silently assumed.
+**Platform capability — a pinned dependency, not an assumption.** The installed Raft surface
+today renders server timestamps to host-local whole seconds, drops the offset, discards `time`
+in bridge parsing, and returns only id/seq on send. That is **not sufficient**, so revision 4
+makes the requirement explicit rather than hoping:
+
+- a pinned Raft CLI/API surface returning **lossless canonical UTC event time** for *both* the
+  outbound delegation confirmation and the inbound reply;
+- **one chosen persistent deadline-wake mechanism** (not "reminder or query" — one, named);
+- the **platform/version digest joins the acceptance manifest** alongside the core and bridge
+  pins. A two-repo pin cannot prove a three-dependency composition.
+
+**Fail closed.** If either capability is absent, a finite wait is **not armed** — it is refused
+as bounded, not silently degraded. There is no fallback to local wall time; that would restore
+the exact defect this section exists to remove.
+
+*Rejected branch (recorded so it is not re-proposed):* using a Raft reminder fire as the
+deadline event. A fire arrives as a wake notification (`msg=-`, absent from channel history),
+not a linearized surface event, so it shares no commit sequence with the reply. Having the host
+post a marker on wake reintroduces host downtime as the collaborator's extra time — the same
+asymmetry rejected for host-local park start.
 
 ## D5 — Coordinator, saga, and fencing
 
@@ -145,7 +172,16 @@ prepare and confirm must recover to unarmed, never to a silently-bounded park wh
 is anchored to nothing. The **post-CAS outbox** closes the window where a crash between the
 CAS and the scheduling would lose the wake entirely, or double it on retry.
 
-- **Resume and expire are mutually exclusive**, decided by CAS against graph revision.
+- **{resume, expire, cancel/supersede} is ONE generation-fenced terminal CAS** — not resume
+  XOR expire with cancellation emitted separately, which would let reply-vs-cancel and
+  expiry-vs-cancel produce contradictory outcomes. The winner rule is stated, and a late reply
+  that loses still gets informational visibility.
+- **Typed delivery is pre-worker, never start-then-inject.** `HeadlessDriver.start` launches
+  immediately and `inject_peer` is live-turn/in-memory only, so a turn can reach its first or
+  final model call before injection lands, and a crash can split delivery from receipt. The
+  exact `PeerMessage` is preseeded under a **deterministic semantic-admission ID** before the
+  worker's first model call; the acknowledgement happens only after it is durably attached to
+  that turn, and recovery redrives the same raw row / admission ID.
 - **Park identity** is a host-minted `park_id` scoped to checkpoint/binding, with generation
   tombstones so an id can never be reused or resurrected.
 - **Timers and scheduled turns are leased and fenced**, so a duplicate or restarted owner
@@ -181,6 +217,14 @@ CAS and the scheduling would lose the wake entirely, or double it on retry.
    cleanup — each removal turns a *named* test red.
 9. Evidence must traverse the **production transport and host**; a unit/harness shortcut does
    not satisfy the end-to-end gate.
+11. Host-computed **stale-v1 vs current-v2 digest**; freeze; approval→revocation; every
+    non-resuming class delivered exactly once; per-field conflicting-ID reuse.
+12. Crashes at **informational delivery, timestamp resolution, arm-persist, and deadline-event
+    prepare/accept/fire/consume**; plus **host down at fire**.
+13. Revert-red for the **typed decoder/binding, digest verifier, semantic receipt, conflict
+    guard, and deploy fence**.
+14. **Fail-closed proof**: with the platform timestamp or wake capability absent, a finite wait
+    is refused as unarmed rather than silently degrading to local time.
 10. **Eval 1 traverses the durable Raft/PersonaHost ingress**, not the transient-body
     `SwarmPeerRouter` path — otherwise it tests a route production does not use.
 
