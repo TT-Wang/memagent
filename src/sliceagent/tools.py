@@ -675,8 +675,12 @@ def build_work_delta(
                 )
             if status == "superseded" and superseded_by != root.id:
                 raise ValueError("an older request root may be superseded only by the current request root")
+            # Retiring a request also retires any peer park it holds. `peer_wait` is the typed
+            # state that belongs to `waiting_peer`, so a terminal status must clear it in the same
+            # transition — otherwise the biconditional fires and a peer-parked root becomes a
+            # one-way door that can never be cancelled or superseded.
             updates.append(replace(
-                previous, status=status, superseded_by=superseded_by,
+                previous, status=status, superseded_by=superseded_by, peer_wait=None,
             ))
             # Retiring a request retires its still-live ownership subtree atomically.  Leaving those children
             # unresolved below a terminal root both pollutes the frontier and lets the next request's compaction
@@ -687,6 +691,7 @@ def build_work_delta(
                     status="cancelled",
                     superseded_by="",
                     stop_reason=f"request_{status}",
+                    peer_wait=None,
                 )
                 for child in graph.items
                 if child.id != previous.id

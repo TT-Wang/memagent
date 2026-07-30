@@ -886,7 +886,8 @@ class WorkGraph:
     def seal_current(self, stop_reason: str, response_ref: OutputRef | None = None, *,
                      transitioned: bool = False, logical_id: str | None = None,
                      expected_revision: int | None = None,
-                     peer_wait: "PeerWait | None" = None) -> "WorkGraph":
+                     peer_wait: "PeerWait | None" = None,
+                     resolve_peer_wait: bool = False) -> "WorkGraph":
         """Seal one runtime segment without confusing transport with task completion.
 
         A context/workspace transition keeps the request ``in_progress`` even if a progress
@@ -917,23 +918,46 @@ class WorkGraph:
             and item.status != "ready"
             for item in self.items
         )
+        # A peer park is DURABLE REQUEST state, not per-segment state. The status and its typed
+        # `peer_wait` must move together by construction: the old code let the fallthrough carry
+        # `waiting_peer` forward while unconditionally forcing `peer_wait=None`, which either
+        # tripped the biconditional (re-sealing a parked root raised GraphValidationError for
+        # every stop reason, escaping _seal_local_turn's TurnCommitted(ok=False) lane) or, with a
+        # response ref, silently destroyed the park so the peer's eventual reply could never land.
+        # Resolution is now always EXPLICIT: pass `resolve_peer_wait=True` (or resume through
+        # resume_waiting_peer). Anything else preserves the park.
+        parked = current.status == "waiting_peer"
         if transitioned:
             status: WorkStatus = "in_progress"
         elif stop_reason == "waiting_user":
             status = "waiting_user"
         elif stop_reason == "waiting_peer":
             status = "waiting_peer"
+        elif parked and not resolve_peer_wait:
+            status = "waiting_peer"
         elif response_ref is not None and not unresolved_children:
             status = "delivered"
+        elif current.status in ("open", "waiting_peer"):
+            status = "in_progress"
         else:
-            status = "in_progress" if current.status == "open" else current.status
+            status = current.status
+        if status == "waiting_peer":
+            # Carry the existing park unless this seal supplies a new one; never leave the
+            # status set without its typed correlation state.
+            next_peer_wait = peer_wait if peer_wait is not None else current.peer_wait
+            if next_peer_wait is None:
+                raise GraphValidationError(
+                    "sealing waiting_peer requires typed PeerWait correlation state"
+                )
+        else:
+            next_peer_wait = None
         outputs = (response_ref,) if response_ref is not None else ()
         updated_root = replace(
             current,
             status=status,
             output_refs=tuple(dict.fromkeys(current.output_refs + outputs)),
             stop_reason=stop_reason,
-            peer_wait=peer_wait if status == "waiting_peer" else None,
+            peer_wait=next_peer_wait,
         )
         updated_children = tuple(
             replace(

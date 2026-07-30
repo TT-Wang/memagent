@@ -1,0 +1,126 @@
+"""Regressions for the peer-park lifecycle defects found in the owner's merge review.
+
+Every guard these pin was previously UNPINNED: the whole C4 wrong-peer + elapsed_s fix could
+be deleted with the conformance probe still 3/3 and the suite still green. These tests are the
+mutation controls — remove a production guard and one of them must go red.
+"""
+from __future__ import annotations
+
+import pytest
+
+from sliceagent.active_work import GraphValidationError, OutputRef, WorkGraph
+from sliceagent.interfaces import (
+    PeerDelegation,
+    PeerResult,
+    PeerWait,
+    correlate_peer_result,
+)
+
+PARK = PeerWait(correlation_id="review-1", peer_id="reviewer", deadline_s=30.0)
+
+
+def parked_graph() -> WorkGraph:
+    return WorkGraph().open_request("evt-1", "do the thing").seal_current(
+        "waiting_peer", peer_wait=PARK
+    )
+
+
+# --------------------------------------------------------------------------------------
+# Defect 1: the park must survive a re-seal instead of raising or vanishing.
+# --------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("stop_reason", ["aborted", "error", "interrupted", "end_turn"])
+def test_resealing_a_parked_root_preserves_the_park(stop_reason):
+    """Re-sealing used to raise GraphValidationError for every one of these.
+
+    The raise escaped `_seal_local_turn` (cli.py has no try/except there), bypassing the
+    designed TurnCommitted(ok=False) lane and killing the turn commit outright.
+    """
+    root = parked_graph().seal_current(stop_reason).request_roots[-1]
+    assert root.status == "waiting_peer"
+    assert root.peer_wait == PARK
+
+
+def test_delivering_a_response_does_not_silently_destroy_the_park():
+    """The silent variant: status became `delivered` with peer_wait dropped.
+
+    The park disappeared with no typed record, so the peer's eventual reply could never land.
+    """
+    root = parked_graph().seal_current(
+        "end_turn", OutputRef(kind="message", ref="resp-1")
+    ).request_roots[-1]
+    assert root.status == "waiting_peer"
+    assert root.peer_wait == PARK
+
+
+def test_resolving_the_park_must_be_explicit():
+    """Leaving the park is legal, but only as a deliberate typed act."""
+    root = parked_graph().seal_current(
+        "end_turn", OutputRef(kind="message", ref="resp-1"), resolve_peer_wait=True
+    ).request_roots[-1]
+    assert root.status == "delivered"
+    assert root.peer_wait is None
+
+
+def test_sealing_waiting_peer_without_typed_state_is_refused():
+    """`waiting_peer` may never exist without its correlation state."""
+    graph = WorkGraph().open_request("evt-1", "do the thing")
+    with pytest.raises(GraphValidationError):
+        graph.seal_current("waiting_peer")
+
+
+def test_a_new_park_replaces_the_carried_one():
+    replacement = PeerWait(correlation_id="review-2", peer_id="other", deadline_s=5.0)
+    root = parked_graph().seal_current(
+        "waiting_peer", peer_wait=replacement
+    ).request_roots[-1]
+    assert root.peer_wait == replacement
+
+
+# --------------------------------------------------------------------------------------
+# Defect 4: the C4 authority guards must be load-bearing, not decorative.
+# --------------------------------------------------------------------------------------
+
+
+DELEGATION = PeerDelegation(
+    correlation_id="delegate-9", peer_id="worker", task="inspect shard B", deadline_s=20.0
+)
+
+
+def _result(**kw):
+    base = dict(correlation_id="delegate-9", peer_id="worker", status="ok", report="done")
+    base.update(kw)
+    return PeerResult(**base)
+
+
+def test_matching_result_is_accepted():
+    assert correlate_peer_result(DELEGATION, _result()) is not None
+
+
+def test_wrong_peer_is_refused():
+    """Deleting this gate previously left conformance 3/3 and the suite green."""
+    assert correlate_peer_result(DELEGATION, _result(peer_id="impostor")) is None
+
+
+def test_wrong_correlation_is_refused():
+    assert correlate_peer_result(DELEGATION, _result(correlation_id="delegate-other")) is None
+
+
+@pytest.mark.parametrize("elapsed", [float("nan"), float("inf"), -1.0, -0.0001])
+def test_hostile_elapsed_values_are_refused(elapsed):
+    """NaN defeats every `>` comparison, so an expired result would resurrect silently."""
+    assert correlate_peer_result(DELEGATION, _result(), elapsed_s=elapsed) is None
+
+
+def test_expired_result_is_refused():
+    assert correlate_peer_result(DELEGATION, _result(), elapsed_s=20.0001) is None
+
+
+def test_deadline_boundary_is_inclusive():
+    assert correlate_peer_result(DELEGATION, _result(), elapsed_s=20.0) is not None
+
+
+def test_non_numeric_elapsed_raises_typed_error():
+    with pytest.raises(ValueError):
+        correlate_peer_result(DELEGATION, _result(), elapsed_s="20")
