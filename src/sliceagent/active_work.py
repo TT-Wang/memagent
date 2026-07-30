@@ -17,6 +17,7 @@ from .interfaces import PeerResult, PeerWait
 
 import hashlib
 import json
+import math as _math
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType
@@ -1085,8 +1086,72 @@ __all__ = [
     "WorkKind",
     "WorkStatus",
     "request_root_item",
+    "expire_peer_waits",
     "resume_waiting_peer",
 ]
+
+
+def expire_peer_waits(
+    graph: "WorkGraph",
+    elapsed_by_correlation: Mapping[str, float],
+    *,
+    expected_revision: int | None = None,
+) -> tuple["WorkGraph", tuple[str, ...]]:
+    """Unpark every ``waiting_peer`` request whose deadline has passed.
+
+    Without this, a park is a permanent trap: ``PeerWait.deadline_s`` was validated and
+    serialized but never compared against anything, so an unanswered peer wait would wait
+    forever and ``render_convergence``'s peer-wait exemption would stay silent past any
+    deadline. A park is only as good as the thing that reaps it.
+
+    The kernel deliberately does NOT read a clock. ``deadline_s`` is a DURATION, and the
+    elapsed time per correlation is supplied by the host — the same discipline as
+    ``correlate_peer_result(..., elapsed_s=...)``. That keeps core logic deterministic and
+    replayable, and keeps wall-time authority with the host that owns it.
+
+    Returns the updated graph and the correlation ids that were expired. An expired park
+    returns the request to ``in_progress`` with a typed ``peer_wait_expired`` stop reason —
+    the work is live again and the frontier can converge — never silently to ``delivered``.
+    """
+    if not isinstance(elapsed_by_correlation, Mapping):
+        raise ActiveWorkError("expire_peer_waits requires a mapping of elapsed seconds")
+    updates: list[WorkItem] = []
+    expired: list[str] = []
+    for item in graph.unresolved_roots:
+        if item.status != "waiting_peer":
+            continue
+        wait = item.peer_wait
+        if wait is None or wait.deadline_s is None:
+            continue                      # an unbounded park never expires by time
+        if wait.correlation_id not in elapsed_by_correlation:
+            continue                      # the host has no elapsed reading for this park
+        raw = elapsed_by_correlation[wait.correlation_id]
+        # Same hostile-input discipline as correlate_peer_result: a NaN elapsed defeats every
+        # `>` comparison and would silently keep the park alive forever.
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            raise ActiveWorkError("expire_peer_waits elapsed seconds must be numbers")
+        try:
+            elapsed = float(raw)
+        except (OverflowError, ValueError) as exc:
+            raise ActiveWorkError("expire_peer_waits elapsed seconds must be finite") from exc
+        if not _math.isfinite(elapsed) or elapsed < 0.0:
+            raise ActiveWorkError("expire_peer_waits elapsed seconds must be finite and non-negative")
+        if elapsed <= float(wait.deadline_s):
+            continue                      # inclusive boundary, matching correlate_peer_result
+        updates.append(replace(
+            item,
+            status="in_progress",
+            stop_reason="peer_wait_expired",
+            peer_wait=None,
+        ))
+        expired.append(wait.correlation_id)
+    if not updates:
+        return graph, ()
+    revision = graph.revision if expected_revision is None else expected_revision
+    return (
+        graph.apply_delta(WorkDelta(expected_revision=revision, updates=tuple(updates))),
+        tuple(expired),
+    )
 
 
 def resume_waiting_peer(

@@ -124,3 +124,62 @@ def test_deadline_boundary_is_inclusive():
 def test_non_numeric_elapsed_raises_typed_error():
     with pytest.raises(ValueError):
         correlate_peer_result(DELEGATION, _result(), elapsed_s="20")
+
+
+# --------------------------------------------------------------------------------------
+# The reaper: a park nobody can expire is a permanent trap. `deadline_s` was validated and
+# serialized but never compared to anything before this.
+# --------------------------------------------------------------------------------------
+
+
+from sliceagent.active_work import expire_peer_waits  # noqa: E402
+
+
+def test_an_overdue_park_is_expired_back_to_live_work():
+    graph, expired = expire_peer_waits(parked_graph(), {"review-1": 30.0001})
+    root = graph.request_roots[-1]
+    assert expired == ("review-1",)
+    assert root.status == "in_progress"
+    assert root.peer_wait is None
+    assert root.stop_reason == "peer_wait_expired"
+
+
+def test_a_park_within_its_deadline_is_untouched():
+    graph, expired = expire_peer_waits(parked_graph(), {"review-1": 29.9})
+    assert expired == ()
+    assert graph.request_roots[-1].status == "waiting_peer"
+
+
+def test_the_deadline_boundary_is_inclusive():
+    """Matches correlate_peer_result: elapsed == deadline is still inside the window."""
+    _, expired = expire_peer_waits(parked_graph(), {"review-1": 30.0})
+    assert expired == ()
+
+
+def test_an_unknown_correlation_never_expires_someone_elses_park():
+    _, expired = expire_peer_waits(parked_graph(), {"some-other-park": 9_999.0})
+    assert expired == ()
+
+
+def test_an_unbounded_park_never_expires_by_time():
+    from sliceagent.interfaces import PeerWait as _PW
+
+    graph = WorkGraph().open_request("evt-1", "x").seal_current(
+        "waiting_peer", peer_wait=_PW(correlation_id="c", peer_id="p", deadline_s=None)
+    )
+    _, expired = expire_peer_waits(graph, {"c": 10_000.0})
+    assert expired == ()
+
+
+@pytest.mark.parametrize("elapsed", [float("nan"), float("inf"), -1.0])
+def test_hostile_elapsed_readings_are_refused(elapsed):
+    """A NaN elapsed defeats every `>` comparison and would keep a park alive forever."""
+    with pytest.raises(Exception):
+        expire_peer_waits(parked_graph(), {"review-1": elapsed})
+
+
+def test_a_graph_with_no_park_is_returned_unchanged():
+    graph = WorkGraph().open_request("evt-1", "x")
+    same, expired = expire_peer_waits(graph, {"review-1": 9_999.0})
+    assert expired == ()
+    assert same is graph
