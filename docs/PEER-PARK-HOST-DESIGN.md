@@ -1,83 +1,132 @@
-# Peer-Park Host Design (task #95)
+# Peer-Park Host Design (task #95) — revision 2
 
-Status: **design for review — not implemented.** C1/C4 are currently a well-tested
-library with **zero production callers**: nothing parks, nothing resumes, nothing expires.
-The conformance probe is green against the library, not the feature. This document is the
-plan to close that, circulated before code so the design can be attacked cheaply.
+Status: **design for review — not implemented.** Revision 2 answers the five blocking
+findings in @christina's task #98 review of revision 1 (`d436cbb`). Implementation stays
+paused until the choices below are accepted.
 
-## What exists today
+C1/C4 are today a well-tested library with **zero production callers**: nothing parks,
+nothing resumes, nothing expires. The conformance probe is green against the library, not
+the feature.
 
-| Piece | State |
-|---|---|
-| `PeerWait` / `PeerResult` / `PeerDelegation` | typed, hardened, fully validated |
-| `WorkGraph.seal_current(..., peer_wait=, resolve_peer_wait=)` | park is durable, preserved across every seal branch, explicit resolution |
-| `active_work.resume_waiting_peer(graph, PeerResult)` | correlation + expected-peer gated |
-| `active_work.expire_peer_waits(graph, elapsed_by_correlation)` | deterministic reaper, host supplies elapsed |
-| `interfaces.correlate_peer_result(delegation, result, elapsed_s=)` | correlation + peer + deadline gated |
-| C2 `PeerMessage` delivery into a running turn | working, with `wake="none"|"resume_wait"` |
-| **A production caller for any of the above** | **missing — this document** |
+## What revision 1 got wrong
 
-## The five missing pieces
+Recording this, because two of the misses are the same failure class we keep hitting:
 
-### 1. A turn can end parked
-`run_turn` has no path that produces `stop_reason="waiting_peer"`. Proposal: the kernel
-surfaces an optional `peer_wait` on its turn result, set when the turn ends because it is
-waiting on a peer. Two candidate triggers, in preference order:
+1. I enumerated `seal_current` callers **in the core repo only** and declared one production
+   seal. The bridge — the host that actually runs the personas — has a second
+   (`HeadlessDriver.finish_turn`). My own acceptance item was "mechanical caller
+   enumeration" and I scoped it to one repo. Cross-repo composition, again.
+2. I proposed reaping at turn admission and restart. A **silent** collaborator produces
+   neither event, so the one case the reaper exists for was the one it could not catch.
+3. "Host-declared parking" named no typed path from a delegation to a parked outcome, so
+   the host would have been inferring the agent's intent.
+4. **`HeadlessDriver.inject_peer` returns `False` when no turn thread is alive, and a parked
+   task is idle.** The C2 delivery lane and the park lane do not connect in production at
+   all. Revision 1 assumed a resume ingress that does not exist.
 
-- **(a) Host-declared.** The host, holding the delegation it just issued, tells the loop the
-  turn is peer-blocked. No new model-visible surface; the kernel stays mechanism-only.
-- **(b) Tool-declared.** A registered `await_peer` tool records a `PeerWait`; the loop ends
-  the turn with `stop_reason="waiting_peer"`.
+## Design
 
-**(a) is preferred**: parking is a lifecycle fact the host owns, and it keeps the kernel free
-of another model-facing verb. (b) can be layered later without changing the graph contract.
+### D1 — Two production hosts, one pinned pair
 
-### 2. The seal site passes it through
-`cli.py` `_seal_local_turn` is the single `seal_current` caller and never passes `peer_wait=`.
-It must forward the turn result's park. The lifecycle work is already done: a park now
-survives re-seal, response delivery, workspace transition, and retirement.
+Both seals propagate the typed park:
 
-### 3. Durable park-start timing
-`PeerWait.deadline_s` is a **duration**, and the kernel deliberately reads no clock, so the
-host must record when each park began and supply `elapsed_by_correlation` to the reaper.
-This must be **durable** — a park that survives a restart but loses its start time can never
-expire. Proposal: persist `{correlation_id: started_at}` alongside the checkpoint that
-already carries the work graph, so park and timing are restored atomically.
+| Host | Seal | Change |
+|---|---|---|
+| CLI (local) | `cli.py::_seal_local_turn` | pass `peer_wait=` from the turn outcome |
+| Bridge (durable personas) | `sliceagent_raft/driver.py::HeadlessDriver.finish_turn` | same, and `_run_turn` must forward the park, not only `stop_reason`/usage |
 
-### 4. Resume trigger from a C2 peer message
-C2 already delivers `PeerMessage(correlation_id, peer_id, wake="resume_wait")`. The host
-correlates an arriving resume-eligible message into a `PeerResult` and calls
-`resume_waiting_peer`. Authority rules that must hold at this seam:
-- `wake="none"` is ordinary delivery and must **never** resume;
-- correlation **and** `peer_id` must both match (already enforced downstream — the host must
-  not pre-empt or weaken it);
-- a non-matching message is ordinary peer input, not an error.
+`TurnOutcome` gains an optional `peer_wait`. Every `run_turn`/`TurnOutcome` consumer
+(including scoped-child and alternate hosts) is enumerated so the added field cannot
+silently change their behaviour — default `None` must mean "unchanged".
 
-### 5. Reaper cadence
-`expire_peer_waits` must be invoked somewhere real. Proposal: at turn admission, before the
-slice is built — a park is only interesting when we are about to do work — plus on restart
-recovery. An expired park returns to `in_progress` with `peer_wait_expired`, so the request
-is live again and the convergence exemption stops suppressing nudges.
+**Acceptance is an immutable `(core_sha, bridge_sha)` pair.** A two-repo feature has no
+single SHA; a lone core pin cannot prove the composition.
 
-## Acceptance (what would make this a feature, not a library)
+### D2 — Park origin: one typed host operation, no inference
 
-1. **Caller enumeration**: `resume_waiting_peer`, `expire_peer_waits`, and
-   `seal_current(peer_wait=)` each have at least one production caller. This is the check that
-   caught the current state; it must pass mechanically.
-2. **End-to-end**: park → peer replies late → resume → turn completes.
-3. **End-to-end**: park → peer never replies → reaper expires it → work becomes live again,
-   convergence resumes.
-4. **Restart**: park survives a restart *with its timing* and can still expire afterwards.
-5. **Authority**: a `wake="none"` message does not resume; a wrong-peer reply does not resume.
-6. **Revert-red**: removing any one of the five wirings turns a named test red.
+A **host-layer** tool (`ask_collaborator`) is model-visible; the kernel gains no new verb.
+One atomic operation:
 
-A pseudo-human collaborator eval (task #97) is the natural end-to-end case for 2–4: an
-LLM-played human is slow, late, and sometimes silent, which is precisely the behaviour these
-primitives exist to survive. Preference is to build the host **to** that eval rather than
-write the eval afterwards to fit the host.
+1. mints correlation, peer identity, and deadline **host-side** (never model-authored — see
+   the durable-evidence rule the bridge now enforces),
+2. issues the `PeerDelegation`,
+3. ends the turn with a parked `TurnOutcome` carrying the typed `PeerWait`,
+4. binds the delegation to the current **logical work identity**, not just a correlation.
+
+Result-boundary invariant, enforced in the kernel:
+`stop_reason == "waiting_peer"` **iff** a typed `PeerWait` is present.
+
+An external orchestrator declaring a park (rather than the agent choosing to wait) is a
+**separate API, explicitly out of scope here** — conflating them would let the host claim
+the agent chose to wait when it did not.
+
+### D3 — Durable timing in the same fact as the park
+
+One record, committed and recovered with the graph in a single transaction:
+
+- **Key**: `(logical_work_id, correlation_id)` — a bare correlation is not a stable identity.
+- **Fields**: durable start time, deadline duration, and the scheduled wake.
+- **Paired recovery invariants**: a bounded `waiting_peer` record may not lack timing, and
+  timing may not survive resume, expiry, cancel, supersede, or retirement.
+- **Clock**: a durable monotonic-with-wall-fallback representation, with defined behaviour
+  under restart and clock rollback. The kernel still receives only explicit elapsed values
+  and reads no clock.
+- `deadline_s=None` is **intentionally unbounded** — no timer is scheduled and the reaper
+  never expires it.
+
+### D4 — Out-of-band deadline wake
+
+A durable timer/sweep that fires **without inbound traffic**:
+
+- scheduled at park commit; **restored on restart**, with already-overdue parks reaped
+  immediately;
+- on expiry: transition to `in_progress` with `peer_wait_expired` **and schedule the request
+  for another turn** — changing graph status alone does not run work, which was the gap in
+  revision 1;
+- acceptance runs on a **virtual clock / deterministic event queue**; wall-clock and API
+  latency are a separate operational measurement, never the thing tests depend on.
+
+### D5 — Idle ingress and an atomic resume-XOR-expire state machine
+
+The blocking gap: **a parked binding is idle, and `inject_peer` refuses when idle.**
+
+- **Persist first, resume second.** C2 input is durably recorded on arrival *even when the
+  binding is idle or parked* — persistence must not depend on a live turn thread. Resume is
+  then attempted from durable state, not from an in-flight injection.
+- **Exactly one transition wins.** Resume and expire are decided atomically against graph
+  revision and durable event time; the wait and its timer are consumed exactly once, and
+  exactly one resumed turn is scheduled with the peer payload delivered exactly once.
+- **Durable arrival time governs**, not processing time — so a reply that arrived before the
+  deadline but is processed after a restart still resumes.
+- **Boundary rule preserved**: a matching reply at exactly the deadline is accepted; only
+  `elapsed > deadline` expires (consistent with `correlate_peer_result`).
+- **Resume by exact logical-work identity**, requiring active-correlation uniqueness.
+- Non-resuming typed outcomes, never errors and never resurrection: `wake="none"`, wrong
+  peer, wrong correlation, duplicate/conflicting `message_id`, stale, cancelled/superseded,
+  and post-expiry replies.
+
+## Acceptance
+
+1. **Caller enumeration across both repos and both hosts**, with the exact `(core_sha,
+   bridge_sha)` pair. Mechanical, not by inspection.
+2. Real bridge path: typed delegation → parked `TurnOutcome` → **both** seals persist graph
+   *and* timing atomically.
+3. Reply after park, at or before deadline → resume once → payload appears exactly once in
+   the resumed slice → task completes.
+4. No reply, no other traffic → out-of-band wake → expiry → work is **scheduled live again**.
+5. Restart before deadline; restart after deadline; reply persisted before a crash and
+   processed after recovery.
+6. Exact-boundary, post-expiry, wrong-peer, wrong-correlation, `wake="none"`, duplicate,
+   conflicting-ID, out-of-order, cancel, supersede, concurrent-park.
+7. **Revert-red per wiring**: removing the bridge seal, the durable timer, the idle ingress,
+   the scheduler wake, or the cleanup each turns a *named* test red.
+8. A unit/harness shortcut **does not** satisfy the end-to-end gate — evidence must traverse
+   the production transport and host.
 
 ## Non-goals
 
-- No new model-facing verb in this pass (option 1b stays deferred).
+- No new **kernel** verb (the host-layer tool is not a kernel verb).
 - No clock inside the kernel — elapsed readings stay host-supplied and explicit.
 - No change to the frozen C1/C2/C4 conformance contract; this adds callers, not semantics.
+- No claim of human-like collaboration from a synthetic collaborator: task #97 can prove
+  host coordination competence; human-likeness needs real-human traces (per #98).
