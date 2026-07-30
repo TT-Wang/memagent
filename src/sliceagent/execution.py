@@ -329,6 +329,12 @@ class TurnOutcome:
             raise ValueError(
                 "TurnOutcome: status WAITING_PEER and peer_wait must be present together"
             )
+        if parked:
+            # Presence alone is not the invariant: an arbitrary object would satisfy "not None"
+            # while carrying no correlation to resume against. Require the exact typed wait.
+            from .interfaces import PeerWait as _PeerWait
+            if not isinstance(self.peer_wait, _PeerWait):
+                raise ValueError("TurnOutcome.peer_wait must be a typed PeerWait")
 
     @property
     def stop_reason(self) -> str:

@@ -2722,7 +2722,10 @@ def main() -> None:
                 finally:
                     if _esc is not None:
                         _esc.stop()
-                if not _seal_local_turn(result.stop_reason, dispatch):
+                if not _seal_local_turn(
+                    result.stop_reason, dispatch,
+                    peer_wait=getattr(result, "peer_wait", None),
+                ):
                     print("  · required local seal failed; stopping before accepting another request")
                     stop_inline_session = True
                     break

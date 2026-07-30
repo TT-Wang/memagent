@@ -27,13 +27,14 @@ class ToolText(str):
     merely begins with "Error"/"Exit code" (a grep hit, a log line, a docstring). A handler that fails
     WITHOUT raising returns ToolText(msg, ok=False); the registry sets ok=True for any normal return and
     ok=False for a raised exception. See run()."""
-    __slots__ = ("_status", "_effects")
+    __slots__ = ("_status", "_effects", "_control")
 
     def __new__(cls, value: str = "", ok: bool = True, *, status: ToolStatus | str | None = None,
-                effects: tuple[ToolEffect, ...] = ()):
+                effects: tuple[ToolEffect, ...] = (), control=None):
         obj = super().__new__(cls, value)
         obj._status = coerce_tool_status(status if status is not None else ok)  # type: ignore[attr-defined]
         obj._effects = tuple(effects or ())  # type: ignore[attr-defined]
+        obj._control = control  # type: ignore[attr-defined]
         return obj
 
     @property
@@ -47,6 +48,11 @@ class ToolText(str):
     @property
     def effects(self) -> tuple[ToolEffect, ...]:
         return getattr(self, "_effects", ())
+
+    @property
+    def control(self):
+        """Typed turn-control signal (task #101 park), never inferred from this string's text."""
+        return getattr(self, "_control", None)
 
 
 def _all_access(_args: dict) -> list:
@@ -181,6 +187,10 @@ def finalize_tool_outcome(
     control = result if isinstance(result, _PeerParkControl) else getattr(result, "control", None)
     if control is not None and not isinstance(control, _PeerParkControl):
         control = None
+    if control is not None and status is not ToolStatus.SUCCEEDED:
+        # A failed or indeterminate call must follow ordinary failure semantics and never seal a
+        # park: parking on an ask that did not succeed would wait forever for a reply nobody asked for.
+        control = None
     return ToolOutcome(
         invocation=invocation, status=status, text=text, effects=effects, control=control,
     )
@@ -286,6 +296,12 @@ class ToolRegistry:
             out = e.handler(args)
             if isinstance(out, ToolText):
                 return out
+            from .interfaces import PeerParkControl as _PPC
+            if isinstance(out, _PPC):
+                # A park is CONTROL, not output. Converting it with tool_result_text would both
+                # lose the typed signal (production would silently never park) and stringify the
+                # correlation into the model-visible transcript. Body-free text, typed control.
+                return ToolText("Waiting on the collaborator.", ok=True, control=out)
             return ToolText(tool_result_text(out), ok=True)
         except ReachSteer as ex:
             # Only the built-in resolver can prove this exception happened before

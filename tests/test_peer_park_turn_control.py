@@ -244,3 +244,93 @@ def test_a_lone_turn_exclusive_call_still_parks():
     result = _run(_host(ask), _llm([["tool_0"]]))
     assert result.stop_reason == "waiting_peer"
     assert ask.calls == [1]
+
+
+# --------------------------------------------------------------------------------------
+# PRODUCTION-SHAPED: the earlier tests used a fake host whose .run() returned the raw
+# handler value. The real ToolRegistry converts a non-ToolText return to prose BEFORE
+# finalize_tool_outcome, so the carrier has to survive that choke point or production
+# would silently never park while the tests stayed green.
+# --------------------------------------------------------------------------------------
+
+
+class _RealHost:
+    """Uses the real ToolRegistry.run() path, not a raw-handler shortcut."""
+
+    def __init__(self, handler, *, name="ask_collaborator", exclusive=True):
+        from sliceagent.registry import ToolRegistry
+        self.registry = ToolRegistry()
+        self.registry.register(ToolEntry(
+            name=name,
+            schema={"type": "function", "function": {
+                "name": name,
+                "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+            }},
+            handler=handler, source="host", purity=ToolPurity.UNKNOWN,
+            deduplicable=False, turn_exclusive=exclusive,
+        ))
+
+    def schemas(self):
+        return []
+
+    def run(self, name, args):
+        return self.registry.run(name, args)
+
+    def read_text(self, path):
+        raise FileNotFoundError(path)
+
+    def accesses(self, name, args):
+        return []
+
+
+def test_the_carrier_survives_the_real_registry_choke_point():
+    host = _RealHost(lambda args: PeerParkControl(PARK))
+    llm = _llm([["ask_collaborator"]])
+    result = run_turn(
+        build_slice=lambda: [{"role": "user", "content": "ask"}],
+        llm=llm, tools=host, dispatch=lambda e: None, hooks=Hooks(),
+    )
+    assert result.stop_reason == "waiting_peer"
+    assert result.peer_wait == PARK
+
+
+def test_the_park_is_presented_body_free_in_the_transcript():
+    """The correlation must not be stringified into model-visible text."""
+    from sliceagent.registry import ToolRegistry
+
+    registry = ToolRegistry()
+    registry.register(ToolEntry(
+        name="ask_collaborator",
+        schema={"type": "function", "function": {
+            "name": "ask_collaborator",
+            "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+        }},
+        handler=lambda args: PeerParkControl(PARK), source="host",
+        purity=ToolPurity.UNKNOWN, deduplicable=False, turn_exclusive=True,
+    ))
+    out = registry.run("ask_collaborator", {})
+    assert out.control is not None                    # typed control preserved
+    assert PARK.correlation_id not in str(out)        # identity not leaked into the transcript
+    assert PARK.peer_id not in str(out)
+
+
+def test_a_failed_control_never_parks():
+    """A park on a call that did not succeed would wait forever for a reply nobody asked for."""
+    from sliceagent.registry import ToolText
+
+    host = _RealHost(lambda args: ToolText("could not reach the collaborator", ok=False,
+                                           control=PeerParkControl(PARK)))
+    result = run_turn(
+        build_slice=lambda: [{"role": "user", "content": "ask"}],
+        llm=_llm([["ask_collaborator"]]), tools=host, dispatch=lambda e: None, hooks=Hooks(),
+    )
+    assert result.stop_reason != "waiting_peer"
+    assert result.peer_wait is None
+
+
+def test_the_biconditional_requires_an_exact_typed_wait():
+    """Presence is not the invariant: an arbitrary object carries nothing to resume against."""
+    from sliceagent.execution import TurnOutcome
+
+    with pytest.raises(ValueError):
+        TurnOutcome("waiting_peer", 1, {}, peer_wait=object())
