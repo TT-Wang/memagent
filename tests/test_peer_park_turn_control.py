@@ -641,3 +641,57 @@ def test_two_identical_asks_leak_nothing_through_the_replay_edge():
     projected = _audit_outcome(twin, {"inv-2"})
     assert SENTINEL not in repr(projected)
     assert projected.invocation.args["arg_count"] == 1
+
+
+def test_a_failed_prepare_that_echoes_the_subject_does_not_leak_it_into_audit():
+    """christina's third P1: the handler RECEIVES the subject, so its failure text can echo it.
+
+    Production-reachable failed-prepare behaviour, not hostile metadata. The invocation-args
+    projection alone left the raw subject in ToolSettled.outcome.text and ToolResult.output.
+    """
+    from sliceagent.registry import ToolText
+
+    host = _RealHost(
+        lambda args: ToolText(f"dispatch failed for {args['subject']}", ok=False)
+    )
+
+    class LLM:
+        def __init__(self):
+            self.seen = 0
+
+        def complete(self, messages, tools):
+            self.seen += 1
+            if self.seen == 1:
+                return NS(content="",
+                          tool_calls=[NS(name="ask_collaborator", id="c0",
+                                         args={"subject": SENTINEL})],
+                          finish_reason="tool_calls", usage={})
+            return NS(content="done", tool_calls=[], finish_reason="stop", usage={})
+
+    events = []
+    result = run_turn(build_slice=lambda: [{"role": "user", "content": "ask"}],
+                      llm=LLM(), tools=host, dispatch=events.append, hooks=Hooks())
+
+    # Ordinary failure semantics: no park.
+    assert result.stop_reason != "waiting_peer"
+    assert result.peer_wait is None
+    # And nothing durable echoes the subject, including nested outcome/effect payloads.
+    leaked = {type(e).__name__ for e in _audit_events(events) if SENTINEL in repr(e)}
+    assert leaked == set(), f"raw subject leaked via {sorted(leaked)}"
+
+
+def test_a_turn_control_tool_cannot_declare_a_custom_effect_factory():
+    """A control call's effects would carry model-authored content into durable audit."""
+    from sliceagent.registry import ToolRegistry
+
+    with pytest.raises(ValueError):
+        ToolRegistry().register(ToolEntry(
+            name="ask_collaborator",
+            schema={"type": "function", "function": {
+                "name": "ask_collaborator",
+                "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+            }},
+            handler=lambda a: PeerParkControl(PARK), source="host",
+            purity=ToolPurity.UNKNOWN, deduplicable=False, turn_exclusive=True,
+            effect_factory=lambda *a, **k: (),
+        ))

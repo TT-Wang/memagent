@@ -225,6 +225,12 @@ class ToolRegistry:
             # replayable from a sibling's result. Allowing the combination let a deduplicated
             # twin take a compatibility path that bypassed the frozen audit projection and
             # published the raw subject.
+            if entry.effect_factory is not None:
+                raise ValueError(
+                    f"tool {entry.name!r} is turn_exclusive and cannot declare a custom "
+                    "effect_factory: a control call's effects would carry model-authored "
+                    "content into durable audit"
+                )
             if entry.deduplicable or entry.purity is ToolPurity.PURE_READ:
                 raise ValueError(
                     f"tool {entry.name!r} is turn_exclusive and cannot be deduplicable "

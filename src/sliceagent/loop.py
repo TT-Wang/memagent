@@ -837,7 +837,17 @@ def _audit_outcome(out, body_free_ids):
         return out
     if getattr(invocation, "id", None) not in body_free_ids:
         return out
-    return replace(out, invocation=_audit_projection(invocation, True))
+    # Reducing the invocation args alone is not enough: a handler RECEIVES the private subject,
+    # so its own failure text can echo it ("dispatch failed for <subject>"), and a custom effect
+    # can carry it too. Both reach ToolSettled/ToolResult and their nested outcome. The audit
+    # therefore carries a canonical body-free line and no effects. The model still sees the real
+    # handler text through the unprojected legacy row — this reduces the DURABLE audit only.
+    return replace(
+        out,
+        invocation=_audit_projection(invocation, True),
+        text=f"[{out.status.value}] turn-control outcome (body withheld from audit)",
+        effects=(),
+    )
 
 
 def run_tool_batch(tool_calls, tools, dispatch: Dispatcher, hooks: Hooks, *, step: int = 0,
