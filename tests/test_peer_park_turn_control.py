@@ -562,3 +562,42 @@ def test_a_handler_that_deregisters_itself_still_audits_body_free():
     # And no audit edge may carry the subject, despite the entry having changed mid-flight.
     leaked = {type(e).__name__ for e in _audit_events(events) if SENTINEL in repr(e)}
     assert leaked == set(), f"raw subject leaked via {sorted(leaked)}"
+
+
+def test_audit_classification_is_independent_of_registry_state():
+    """Covers BOTH mutation windows by proving the property, not by racing a schedule.
+
+    @clem's acceptance rows name two timings: replacement after admission but before start
+    publication, and self-replacement before settlement/result. A test that tries to hit
+    either window has to win a race to be meaningful, and silently passes when it loses.
+    Instead: the classification is a pure function of the frozen id set, so NO registry
+    state at any later instant can change it — which covers every window, including ones
+    nobody has enumerated.
+    """
+    from sliceagent.execution import ToolInvocation, ToolOutcome, ToolStatus
+    from sliceagent.loop import _audit_outcome, _audit_projection
+
+    inv = ToolInvocation("inv-1", "ask_collaborator", {"subject": SENTINEL}, 0)
+    out = ToolOutcome(inv, ToolStatus.SUCCEEDED, "Waiting on the collaborator.", ())
+
+    # Frozen as body-free at admission -> reduced, regardless of any registry anywhere.
+    reduced = _audit_outcome(out, {"inv-1"})
+    assert SENTINEL not in repr(reduced)
+    assert reduced.invocation.args["arg_count"] == 1
+    assert "args_sha256" in reduced.invocation.args
+
+    # Not frozen -> untouched. The decision depends on the frozen set and nothing else.
+    assert _audit_outcome(out, set()) is out
+    assert _audit_projection(inv, True).args != inv.args
+    assert _audit_projection(inv, False) is inv
+
+
+def test_the_frozen_set_is_built_from_the_authorizing_entry():
+    """The id is captured with the entry that authorized execution, before any handler runs."""
+    calls = []
+    host = _RealHost(lambda args: (calls.append(1), PeerParkControl(PARK))[1])
+    result = run_turn(
+        build_slice=lambda: [{"role": "user", "content": "ask"}],
+        llm=_llm([["ask_collaborator"]]), tools=host, dispatch=lambda e: None, hooks=Hooks(),
+    )
+    assert result.stop_reason == "waiting_peer" and calls == [1]
