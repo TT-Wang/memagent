@@ -334,3 +334,111 @@ def test_the_biconditional_requires_an_exact_typed_wait():
 
     with pytest.raises(ValueError):
         TurnOutcome("waiting_peer", 1, {}, peer_wait=object())
+
+
+# --------------------------------------------------------------------------------------
+# Zero-feature-effects includes the AUDIT trail. ToolRequested is dispatched before
+# preflight, so a suppressed ask would still journal its subject unless the audit
+# projection itself is body-free.
+# --------------------------------------------------------------------------------------
+
+
+SENTINEL = "zz-private-subject-739"
+
+
+def _events_for(calls, handler, *, sibling=None):
+    from sliceagent.registry import ToolRegistry
+
+    class H:
+        def __init__(self):
+            self.registry = ToolRegistry()
+            self.registry.register(ToolEntry(
+                name="ask_collaborator",
+                schema={"type": "function", "function": {
+                    "name": "ask_collaborator",
+                    "parameters": {"type": "object", "properties": {"subject": {"type": "string"}},
+                                   "additionalProperties": False},
+                }},
+                handler=handler, source="host", purity=ToolPurity.UNKNOWN,
+                deduplicable=False, turn_exclusive=True,
+            ))
+            if sibling is not None:
+                self.registry.register(ToolEntry(
+                    name="other",
+                    schema={"type": "function", "function": {
+                        "name": "other",
+                        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+                    }},
+                    handler=sibling, source="host", purity=ToolPurity.UNKNOWN, deduplicable=False,
+                ))
+
+        def schemas(self):
+            return []
+
+        def run(self, name, args):
+            return self.registry.run(name, args)
+
+        def read_text(self, path):
+            raise FileNotFoundError(path)
+
+        def accesses(self, name, args):
+            return []
+
+    class LLM:
+        def __init__(self):
+            self.seen = 0
+
+        def complete(self, messages, tools):
+            self.seen += 1
+            if self.seen == 1:
+                return NS(content="", tool_calls=calls, finish_reason="tool_calls", usage={})
+            return NS(content="done", tool_calls=[], finish_reason="stop", usage={})
+
+    events = []
+    run_turn(build_slice=lambda: [{"role": "user", "content": "ask"}],
+             llm=LLM(), tools=H(), dispatch=events.append, hooks=Hooks())
+    return events
+
+
+# ModelCallPrepared is the model's OWN request being sent to the provider — it contains the
+# tool_call the model itself authored. That is the model's output, not our audit of it, and it
+# is what the provider must receive. Every AUDIT edge, however, must be body-free.
+_AUDIT_EXEMPT = {"ModelCallPrepared", "SliceBuilt"}
+
+
+def _audit_events(events):
+    return [e for e in events if type(e).__name__ not in _AUDIT_EXEMPT]
+
+
+def _no_sentinel(events):
+    return all(SENTINEL not in repr(event) for event in _audit_events(events))
+
+
+def test_a_suppressed_mixed_batch_never_journals_the_ask_subject():
+    """The batch gate suppresses the handler; the audit must not leak what it suppressed."""
+    events = _events_for(
+        [NS(name="ask_collaborator", id="c0", args={"subject": SENTINEL}),
+         NS(name="other", id="c1", args={})],
+        handler=lambda args: PeerParkControl(PARK),
+        sibling=lambda args: "sibling",
+    )
+    assert _no_sentinel(events)
+
+
+def test_even_a_valid_lone_ask_audits_body_free():
+    """Execution still receives the real args; only the audit projection is reduced."""
+    seen = {}
+
+    def handler(args):
+        seen.update(args)                      # the handler DOES get the real subject
+        return PeerParkControl(PARK)
+
+    events = _events_for(
+        [NS(name="ask_collaborator", id="c0", args={"subject": SENTINEL})], handler=handler,
+    )
+    assert seen.get("subject") == SENTINEL     # execution unaffected
+    assert _no_sentinel(events)                # audit trail carries no subject text
+    # Specifically the durable execution edges, which previously carried raw args.
+    names = {type(e).__name__ for e in events if SENTINEL in repr(e)}
+    assert "ToolStarted" not in names and "ToolExecutionStarted" not in names
+    assert "ToolResult" not in names and "ToolSettled" not in names

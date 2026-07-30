@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+from dataclasses import replace
 import json
 import math
 import queue as _stdqueue
@@ -797,6 +798,44 @@ def _purity_for(tools, name: str, args: dict, entry) -> ToolPurity:
     return ToolPurity.UNKNOWN
 
 
+def _audit_projection(invocation, entry):
+    """Body-free audit view of a turn-control invocation.
+
+    ``ToolRequested`` is dispatched BEFORE preflight so required journal sinks see every logical
+    request — including one the batch gate is about to suppress. For a turn-exclusive ask that
+    means the model-authored subject would reach the durable journal even when the handler
+    correctly never runs. Execution keeps the real args; only the AUDIT projection is reduced to
+    the stable identity plus host-derived counts/digest, so a suppressed call leaves a provable
+    trace without leaving its content.
+    """
+    if not getattr(entry, "turn_exclusive", False):
+        return invocation
+    args = invocation.args if isinstance(invocation.args, dict) else {}
+    payload = json.dumps(args, ensure_ascii=True, sort_keys=True, default=str)
+    return replace(invocation, args={
+        "arg_count": len(args),
+        "args_sha256": hashlib.sha256(payload.encode()).hexdigest(),
+    })
+
+
+
+def _audit_outcome(out, tools):
+    """Body-free audit view of a turn-control tool's OUTCOME.
+
+    The durable audit of an ask never needs its subject: the handler already received the real
+    args, and the bridge persists whatever it needs. Reducing every audit edge for a
+    turn-exclusive tool keeps a suppressed call's residue to identity plus counts, and keeps a
+    successful one from journalling model-authored prose it has no reason to retain.
+    """
+    invocation = getattr(out, "invocation", None)
+    if invocation is None:
+        return out
+    entry = _entry_for(tools, getattr(invocation, "name", "") or "")
+    if not getattr(entry, "turn_exclusive", False):
+        return out
+    return replace(out, invocation=_audit_projection(invocation, entry))
+
+
 def run_tool_batch(tool_calls, tools, dispatch: Dispatcher, hooks: Hooks, *, step: int = 0,
                    turn_id: str = "", signal=None, call_namespace: str = ""):
     """Preflight and execute one provider batch through canonical typed outcomes.
@@ -874,8 +913,12 @@ def run_tool_batch(tool_calls, tools, dispatch: Dispatcher, hooks: Hooks, *, ste
         )
         invocations.append(invocation)
         # The logical request exists whether it proceeds, is deduplicated, is cancelled, or physically runs.
-        # Required journal sinks see it before preflight or scheduling can start any handler.
-        dispatch(ToolRequested(invocation))
+        # Required journal sinks see it before preflight or scheduling can start any handler — so a
+        # turn-control ask is audited body-free here, or its subject would be journalled even when the
+        # batch gate suppresses the handler entirely.
+        dispatch(ToolRequested(_audit_projection(
+            invocation, _entry_for(tools, getattr(tc, "name", "") or ""),
+        )))
     for provider_index, tc in enumerate(tool_calls):
         name = getattr(tc, "name", "") or ""
         raw_args = tc.args if isinstance(getattr(tc, "args", None), dict) else {}
@@ -1066,10 +1109,14 @@ def run_tool_batch(tool_calls, tools, dispatch: Dispatcher, hooks: Hooks, *, ste
             # a start row. The outer recovery path must therefore close that partial edge explicitly instead
             # of forgetting the invocation or pretending ordinary execution began.
             start_publication_attempt_ids.add(inv.id)
-            dispatch(ToolExecutionStarted(inv))
+            # The ask's execution edges are audited body-free too: the handler already holds the
+            # real args, so the durable start rows have no reason to retain model-authored prose.
+            _audit_inv = _audit_projection(inv, _entry_for(tools, inv.name))
+            _audit_args = dict(_audit_inv.args) if _audit_inv is not inv else a
+            dispatch(ToolExecutionStarted(_audit_inv))
             if is_abandoned():
                 return
-            dispatch(ToolStarted(inv.name, a, inv))
+            dispatch(ToolStarted(_audit_inv.name, _audit_args, _audit_inv))
             started_ids.add(inv.id)
 
         child_cancel = desc.get("child_cancel")
@@ -1109,6 +1156,7 @@ def run_tool_batch(tool_calls, tools, dispatch: Dispatcher, hooks: Hooks, *, ste
             kind = "steered" if out.status is ToolStatus.STEERED else "validation"
         else:
             return
+        out = _audit_outcome(out, tools)
         dispatch(ToolRejected(out.invocation, reason, out, kind=kind))
         rejection_published_ids.add(invocation_id)
 
@@ -1116,13 +1164,14 @@ def run_tool_batch(tool_calls, tools, dispatch: Dispatcher, hooks: Hooks, *, ste
         invocation_id = out.invocation.id
         if invocation_id in settlement_published_ids:
             return
-        dispatch(ToolSettled(out))
+        dispatch(ToolSettled(_audit_outcome(out, tools)))
         settlement_published_ids.add(invocation_id)
 
     def publish_result(out: ToolOutcome) -> None:
         invocation_id = out.invocation.id
         if invocation_id in result_published_ids:
             return
+        out = _audit_outcome(out, tools)
         dispatch(ToolResult(
             out.invocation.name, dict(out.invocation.args), out.text, out.failing,
             status=out.status.value, invocation_id=invocation_id, outcome=out,
@@ -1229,7 +1278,7 @@ def run_tool_batch(tool_calls, tools, dispatch: Dispatcher, hooks: Hooks, *, ste
                 reason = str(src.text or "tool validation rejected the call before execution")
                 kind = "steered" if src.status is ToolStatus.STEERED else "validation"
             dispatch(ToolRejected(
-                inv, reason, outcomes[index], kind=kind,
+                _audit_projection(inv, desc.get("entry")), reason, outcomes[index], kind=kind,
             ))
         dispatch(ToolSettled(outcomes[index], apply_effects=False))
         dispatch(ToolResult(
