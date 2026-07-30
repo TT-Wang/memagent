@@ -84,15 +84,38 @@ it would let the host claim the agent chose to wait when it did not.
 `raw_inbound.received_at` is **local processing time** and the parser does not retain the
 server timestamp, so it cannot decide expiry: after a restart a timely reply is stamped late.
 
+The contract is **two-part**, because "was the reply timely?" and "what wakes a silent
+wait?" are different problems and only the first is a comparison.
+
+**(a) Eligibility and ordering — immutable server event timestamps.**
 - Preserve the trusted **server/event timestamp** through the parser into the durable ingress
-  row.
-- Express the host-minted deadline as an **absolute instant in that same domain** at park time.
-- Expiry is then one comparison of two server-domain instants, immune to our downtime and to
-  local clock rollback. **Inclusive boundary preserved**: only `arrival > deadline` expires.
-- Local processing time is operational telemetry and never a decision input.
-- Measuring against host-local park start is rejected: it charges the collaborator for *our*
-  restart.
-- `deadline_s=None` is intentionally unbounded — no timer, never reaped by time.
+  row, at full precision.
+- **Do not translate host wall-clock park time into server time.** Anchor the deadline to an
+  authoritative server-stamped event — the outbound delegation's own Raft timestamp — and
+  persist `deadline_at = delegation_server_time + duration`. Translation would reintroduce
+  the local clock as a correctness input through the back door.
+- The reply's immutable server timestamp then compares **directly** to `deadline_at`.
+  **Inclusive boundary preserved**: only `arrival > deadline_at` expires.
+- **Until the delegation is server-confirmed, the bounded park is not fully armed** — there is
+  no authoritative anchor yet, and this state must be explicit rather than assumed.
+
+**(b) Liveness wake — server-domain now, idempotently fenced.**
+- A comparison rule cannot wake anything. The out-of-band scheduler needs an authoritative
+  notion of **server-now**: a server-side deadline event/reminder, or a trusted server-time
+  query, is the correctness source.
+- **Local monotonic timers are wake accelerators only, never authoritative.** On recovery,
+  compare trusted server-now against the stored server-domain `deadline_at` and CAS the same
+  transition. Without this, a local clock rollback still delays expiry even though reply
+  classification is sound.
+
+Local processing time is operational telemetry and never a decision input. Measuring against
+host-local park start is rejected: it charges the collaborator for *our* restart.
+`deadline_s=None` is intentionally unbounded — no timer, never reaped by time.
+
+**Platform dependency, stated explicitly:** this removes local wall time from correctness
+entirely, *provided* Raft guarantees immutable comparable event timestamps plus a
+server-now/deadline firing mechanism. If it cannot, the explicit rollback fallback stays and
+the weaker guarantee must be documented rather than silently assumed.
 
 ## D5 — Coordinator, saga, and fencing
 
@@ -129,7 +152,9 @@ Minimum saga (each step idempotent, keyed by `park_id`/generation):
    `message_id`/`correlation_id`/`wake` intact → task completes.
 4. Silence, no other traffic → out-of-band wake → expiry → work **scheduled** live again.
 5. Restart before deadline; restart after deadline; **reply that arrived before the deadline
-   but is processed after recovery still resumes** (the clock-domain case).
+   but is processed after recovery still resumes** (the clock-domain case). Plus: a local
+   clock rollback must not delay expiry, and a park whose delegation is not yet
+   server-confirmed must report as not-yet-armed rather than silently bounded.
 6. Exact-boundary, post-expiry, wrong-peer, wrong-correlation, `wake="none"` visibility,
    duplicate idempotence, **`message_id` reuse failing loudly**, out-of-order, cancel,
    supersede-cancel reconciliation, concurrent parks.
