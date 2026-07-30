@@ -13,7 +13,7 @@ from sliceagent.execution import ToolPurity
 from sliceagent.hooks import Hooks
 from sliceagent.interfaces import PeerParkControl, PeerWait
 from sliceagent.loop import run_turn
-from sliceagent.registry import ToolEntry, ToolRegistry
+from sliceagent.registry import ToolEntry, ToolRegistry, TurnControlRegistrar
 
 PARK = PeerWait(correlation_id="ask-1", peer_id="sre", deadline_s=None)
 
@@ -37,7 +37,7 @@ def _host(*handlers, exclusive_first=True):
                 # Authority is the registrar the host picks, so the fake host must pick it too;
                 # registering a control tool the ordinary way is exactly the unauthorized case.
                 if exclusive:
-                    self.registry.register_turn_control(entry)
+                    TurnControlRegistrar(self.registry).register(entry)
                 else:
                     self.registry.register(entry)
 
@@ -218,7 +218,7 @@ def test_two_turn_exclusive_calls_run_NO_handler():
             from sliceagent.registry import ToolRegistry as _R
             self.registry = _R()
             for i, h in enumerate((first, second)):
-                self.registry.register_turn_control(ToolEntry(
+                TurnControlRegistrar(self.registry).register(ToolEntry(
                     name=f"tool_{i}",
                     schema={"type": "function", "function": {
                         "name": f"tool_{i}",
@@ -277,7 +277,7 @@ class _RealHost:
             deduplicable=False, turn_exclusive=exclusive,
         )
         if exclusive:
-            self.registry.register_turn_control(entry)
+            TurnControlRegistrar(self.registry).register(entry)
         else:
             self.registry.register(entry)
 
@@ -310,7 +310,7 @@ def test_the_park_is_presented_body_free_in_the_transcript():
     from sliceagent.registry import ToolRegistry
 
     registry = ToolRegistry()
-    registry.register_turn_control(ToolEntry(
+    TurnControlRegistrar(registry).register(ToolEntry(
         name="ask_collaborator",
         schema={"type": "function", "function": {
             "name": "ask_collaborator",
@@ -363,7 +363,7 @@ def _events_for(calls, handler, *, sibling=None):
     class H:
         def __init__(self):
             self.registry = ToolRegistry()
-            self.registry.register_turn_control(ToolEntry(
+            TurnControlRegistrar(self.registry).register(ToolEntry(
                 name="ask_collaborator",
                 schema={"type": "function", "function": {
                     "name": "ask_collaborator",
@@ -524,7 +524,7 @@ def test_a_handler_that_deregisters_itself_still_audits_body_free():
         ), override=True)
         return PeerParkControl(PARK)
 
-    registry.register_turn_control(ToolEntry(
+    TurnControlRegistrar(registry).register(ToolEntry(
         name="ask_collaborator",
         schema={"type": "function", "function": {
             "name": "ask_collaborator",
@@ -632,7 +632,7 @@ def test_a_turn_exclusive_tool_cannot_be_a_deduplicable_pure_read():
     for bad in ({"deduplicable": True, "purity": ToolPurity.UNKNOWN},
                 {"deduplicable": False, "purity": ToolPurity.PURE_READ}):
         with pytest.raises(ValueError):
-            registry.register_turn_control(ToolEntry(
+            TurnControlRegistrar(registry).register(ToolEntry(
                 name="ask_collaborator", schema=schema,
                 handler=lambda a: PeerParkControl(PARK), source="host",
                 turn_exclusive=True, **bad,
@@ -696,7 +696,7 @@ def test_a_turn_control_tool_cannot_declare_a_custom_effect_factory():
     from sliceagent.registry import ToolRegistry
 
     with pytest.raises(ValueError):
-        ToolRegistry().register_turn_control(ToolEntry(
+        TurnControlRegistrar(ToolRegistry()).register(ToolEntry(
             name="ask_collaborator",
             schema={"type": "function", "function": {
                 "name": "ask_collaborator",
@@ -721,7 +721,7 @@ def test_a_preflight_rejection_reason_does_not_leak_the_subject():
     class PreflightHost:
         def __init__(self):
             self.registry = ToolRegistry()
-            self.registry.register_turn_control(ToolEntry(
+            TurnControlRegistrar(self.registry).register(ToolEntry(
                 name="ask_collaborator",
                 schema={"type": "function", "function": {
                     "name": "ask_collaborator",
@@ -849,7 +849,7 @@ def test_an_untrusted_source_cannot_be_registered_as_turn_control(source):
     from sliceagent.registry import ToolRegistry
 
     with pytest.raises(ValueError, match="cannot be registered as a turn-control tool"):
-        ToolRegistry().register_turn_control(ToolEntry(
+        TurnControlRegistrar(ToolRegistry()).register(ToolEntry(
             name="plugin_tool",
             schema={"type": "function", "function": {
                 "name": "plugin_tool",
@@ -899,7 +899,7 @@ def test_the_authorized_host_tool_still_parks_through_the_authority_registrar():
 # --------------------------------------------------------------------------------------
 # P0, second finding (@christina, f87a327): moving the grant from a public FIELD to a
 # public METHOD is not removal if untrusted code holds the object exposing it. Plugins were
-# handed the shared ToolRegistry, so `ctx.registry.register_turn_control(...)` minted the
+# handed the shared ToolRegistry, so `ctx.TurnControlRegistrar(registry).register(...)` minted the
 # capability outright — no private import, no `_tools` mutation. The control below is
 # generic over the production PluginContext surface so re-exposing authority anywhere on it
 # fails here, rather than needing a new test per method.
@@ -931,12 +931,14 @@ def test_no_reachable_plugin_context_method_can_mint_turn_authority():
     registry = ToolRegistry()
     ctx = _plugin_context(registry)
 
-    surfaces = [ctx, ctx.registry]
+    surfaces = [ctx, ctx.registry, registry]
     attempted = 0
     for surface in surfaces:
         for attr in dir(surface):
             if attr.startswith("_"):
                 continue
+            if attr.startswith("run"):
+                continue          # execution surface, not a grant path; calling it runs handlers
             member = getattr(surface, attr, None)
             if not callable(member):
                 continue

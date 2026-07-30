@@ -100,15 +100,15 @@ def _validate_entry_schema(entry: "ToolEntry") -> None:
 
 # Park authority is a REGISTRATION-PATH fact, never entry data. `turn_exclusive` is
 # caller-supplied: a plugin/MCP descriptor can set it, and self-assertion is not authority.
-# The registry stamps this module-private sentinel only via register_turn_control(), and
-# strips it on the ordinary register() path, so the capability cannot be claimed by any
-# entry the host merely passes through — it must be granted by the code path the host chose.
+# Only the host-held TurnControlRegistrar port stamps this module-private sentinel, and the
+# ordinary register() path strips it. Minting is NOT on ToolRegistry: that object is shared
+# with plugin/MCP/skill registration, so reaching it must not be enough to grant the capability.
 _PARK_AUTHORITY = object()
 _PARK_STAMP = "_park_authority"
 
 
 def park_authorized(entry: object) -> bool:
-    """True only for an entry the host registered through register_turn_control()."""
+    """True only for an entry granted authority through the host-held TurnControlRegistrar."""
     return getattr(entry, _PARK_STAMP, None) is _PARK_AUTHORITY
 
 
@@ -268,29 +268,6 @@ class ToolRegistry:
         self._tools[entry.name] = entry
         self.generation += 1
 
-    def register_turn_control(self, entry: ToolEntry, *, override: bool = False) -> None:
-        """Register a tool authorized to END THE TURN on a peer wait (PersonaHost/ask_collaborator).
-
-        Authority comes from the host choosing THIS method; it is not readable off the entry.
-        Untrusted descriptors reach the registry through register(), so a plugin cannot obtain
-        the capability by declaring turn_exclusive or forging source="host" — both are entry data.
-        """
-        if entry.source not in ("builtin", "host"):
-            # Defense in depth for a miswired host: a plugin/MCP/skill descriptor routed into the
-            # control registrar fails loudly instead of being silently granted turn authority.
-            raise ValueError(
-                f"tool {entry.name!r} from source {entry.source!r} cannot be registered as a "
-                "turn-control tool: only host-owned tools may end the turn on a peer wait"
-            )
-        if not entry.turn_exclusive:
-            # The scheduling flag and the authority must agree, or the loop would grant a park
-            # to a call that was never isolated in its batch.
-            raise ValueError(
-                f"tool {entry.name!r} must set turn_exclusive to be registered as turn-control"
-            )
-        self.register(entry, override=override)
-        self._tools[entry.name].__dict__[_PARK_STAMP] = _PARK_AUTHORITY
-
     def deregister(self, name: str) -> None:
         if self._tools.pop(name, None) is not None:
             self.generation += 1
@@ -370,7 +347,7 @@ class ToolRegistry:
                 # correlation into the model-visible transcript. Body-free text, typed control.
                 return ToolText("Waiting on the collaborator.", ok=True, control=out)
             if isinstance(out, _PPC):
-                # Minting a park is HOST authority, granted by register_turn_control. A plugin/MCP or
+                # Minting a park is HOST authority, granted only by TurnControlRegistrar. A plugin/MCP or
                 # any undeclared tool returning a carrier is a protocol error, not a park: it
                 # would let unauthorized code suspend the turn. Fail loudly rather than drop it
                 # silently, so a miswired host is visible instead of mysteriously never parking.
@@ -441,3 +418,38 @@ class ToolRegistry:
             invocation, out, entry=admission.entry,
             default_effect_id=default_effect_id,
         )
+
+
+class TurnControlRegistrar:
+    """The host-held port that GRANTS park authority. Nothing else mints it.
+
+    Minting deliberately does not live on ToolRegistry: the registry is shared with plugin,
+    MCP and skill registration paths, so holding the registry must not be sufficient to grant
+    a turn-ending capability. The registry may still strip and validate; only this port grants.
+
+    The host constructs one at wiring time and keeps it. In-process code can of course import
+    this class — plugins run in the same interpreter — so the boundary this enforces is
+    "reaching the shared registry is not enough", not sandboxing hostile in-process code.
+    """
+
+    __slots__ = ("_registry",)
+
+    def __init__(self, registry: "ToolRegistry"):
+        self._registry = registry
+
+    def register(self, entry: ToolEntry, *, override: bool = False) -> None:
+        if entry.source not in ("builtin", "host"):
+            # Defense in depth for a miswired host: an untrusted descriptor routed into the
+            # authority port fails loudly at registration rather than at park time.
+            raise ValueError(
+                f"tool {entry.name!r} from source {entry.source!r} cannot be registered as a "
+                "turn-control tool: only host-owned tools may end the turn on a peer wait"
+            )
+        if not entry.turn_exclusive:
+            # The scheduling flag and the authority must agree, or the loop would grant a park
+            # to a call that was never isolated in its batch.
+            raise ValueError(
+                f"tool {entry.name!r} must set turn_exclusive to be registered as turn-control"
+            )
+        self._registry.register(entry, override=override)
+        self._registry._tools[entry.name].__dict__[_PARK_STAMP] = _PARK_AUTHORITY

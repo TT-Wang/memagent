@@ -35,9 +35,9 @@ def _default_dirs(root: str | None = None) -> list[str]:
 class _PluginRegistrar:
     """The ONLY registry surface a plugin sees.
 
-    A plugin must never hold the shared `ToolRegistry`: its public surface mints turn-control
-    authority (`register_turn_control`) and can deregister or override host tools, so handing
-    it over lets untrusted code grant itself the capability instead of merely claiming it.
+    A plugin must never hold the shared `ToolRegistry`: it can deregister or override host tools, and
+    reaching it at all must never be a step toward turn-control authority — which is why
+    minting lives on the host-held TurnControlRegistrar port and not on the registry.
     This facade also FORCES `source`, because `source` is caller-supplied and is trusted
     elsewhere — a forged `source="builtin"` would claim the built-in-only ReachSteer proof
     that an exception happened before any effect, and a forged `source="host"` would satisfy
