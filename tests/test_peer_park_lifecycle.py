@@ -183,3 +183,31 @@ def test_a_graph_with_no_park_is_returned_unchanged():
     same, expired = expire_peer_waits(graph, {"review-1": 9_999.0})
     assert expired == ()
     assert same is graph
+
+
+def test_a_workspace_transition_does_not_destroy_the_park():
+    """linglong's find: the CLI passes transitioned=True for workspace handoff.
+
+    An earlier ordering checked `transitioned` before park preservation, so a handoff
+    silently produced in_progress + peer_wait=None with resolve_peer_wait=False.
+    """
+    root = parked_graph().seal_current(
+        "workspace_transition", transitioned=True
+    ).request_roots[-1]
+    assert root.status == "waiting_peer"
+    assert root.peer_wait == PARK
+
+
+def test_a_workspace_transition_can_still_resolve_the_park_explicitly():
+    root = parked_graph().seal_current(
+        "workspace_transition", transitioned=True, resolve_peer_wait=True
+    ).request_roots[-1]
+    assert root.status == "in_progress"
+    assert root.peer_wait is None
+
+
+@pytest.mark.parametrize("truthy", ["yes", 1, [0]])
+def test_non_bool_resolve_peer_wait_is_refused(truthy):
+    """An authority flag must be an exact bool, not anything truthy."""
+    with pytest.raises(GraphValidationError):
+        parked_graph().seal_current("end_turn", resolve_peer_wait=truthy)

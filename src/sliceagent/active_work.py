@@ -927,14 +927,22 @@ class WorkGraph:
         # response ref, silently destroyed the park so the peer's eventual reply could never land.
         # Resolution is now always EXPLICIT: pass `resolve_peer_wait=True` (or resume through
         # resume_waiting_peer). Anything else preserves the park.
+        # `resolve_peer_wait` is an authority flag, so it must be an exact bool: a truthy
+        # string/int from a wire or a caller's kwargs must not silently discard a durable park.
+        if not isinstance(resolve_peer_wait, bool):
+            raise GraphValidationError("seal_current resolve_peer_wait must be a bool")
         parked = current.status == "waiting_peer"
-        if transitioned:
-            status: WorkStatus = "in_progress"
+        # Park preservation is checked FIRST, ahead of `transitioned`. The CLI passes
+        # transitioned=True for a workspace handoff, and an earlier ordering let that branch
+        # silently drop a durable park (in_progress + peer_wait=None) even with
+        # resolve_peer_wait=False — a workspace transition must not destroy a peer wait.
+        if parked and not resolve_peer_wait and stop_reason != "waiting_peer":
+            status: WorkStatus = "waiting_peer"
+        elif transitioned:
+            status = "in_progress"
         elif stop_reason == "waiting_user":
             status = "waiting_user"
         elif stop_reason == "waiting_peer":
-            status = "waiting_peer"
-        elif parked and not resolve_peer_wait:
             status = "waiting_peer"
         elif response_ref is not None and not unresolved_children:
             status = "delivered"
