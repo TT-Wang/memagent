@@ -41,6 +41,14 @@ control carrier, not just a tool result:
   as an ordinary tool result while the loop continues;
 - **exclusivity**: at most one park per turn; a second call in the same turn is a typed
   error, not a silent overwrite;
+- **batch semantics**: co-batching `ask_collaborator` with any **mutating** tool is a typed
+  error and the whole batch is rejected atomically, executing nothing. Parking ends the turn,
+  so a co-batched mutation has no correct ordering — running it first commits state the model
+  may reason about differently after a suspension it did not anticipate, and skipping it
+  leaves the model believing it ran. Partial execution across a suspension boundary is state
+  nobody can reconstruct later, so the failure is raised loudly at the point of ambiguity.
+  **Read-only tools may be co-batched** and execute before the park; they carry no state
+  across the boundary;
 - **ordering under crash**: the delegation record is prepared before dispatch, so a crash
   between prepare and dispatch is recoverable and cannot orphan either side.
 
@@ -129,7 +137,13 @@ Ownership, since these stores cannot share a transaction:
 
 Minimum saga (each step idempotent, keyed by `park_id`/generation):
 
-`raw ingress persisted` → `host match decision bound to park_id/generation + peer/correlation/artifact_digest/arrival` → `graph CAS resume-or-expire` → `deterministic turn admission` → `typed semantic-input receipt`
+`delegation prepared (durable, pre-dispatch)` → `dispatched` → `server-confirmed → deadline armed` → *[wait]* → `raw ingress persisted` → `host match decision bound to park_id/generation + peer/correlation/artifact_digest/arrival` → `graph CAS resume-or-expire` → `durable schedule/delivery outbox entry` → `deterministic turn admission` → `typed semantic-input receipt`
+
+The outbound prefix and the post-CAS tail are load-bearing, not bookkeeping. **prepared →
+server-confirmed → armed** makes "not yet armed" an *observable* state: a crash between
+prepare and confirm must recover to unarmed, never to a silently-bounded park whose deadline
+is anchored to nothing. The **post-CAS outbox** closes the window where a crash between the
+CAS and the scheduling would lose the wake entirely, or double it on retry.
 
 - **Resume and expire are mutually exclusive**, decided by CAS against graph revision.
 - **Park identity** is a host-minted `park_id` scoped to checkpoint/binding, with generation
@@ -158,8 +172,9 @@ Minimum saga (each step idempotent, keyed by `park_id`/generation):
 6. Exact-boundary, post-expiry, wrong-peer, wrong-correlation, `wake="none"` visibility,
    duplicate idempotence, **`message_id` reuse failing loudly**, out-of-order, cancel,
    supersede-cancel reconciliation, concurrent parks.
-7. **Crash injected after every saga phase** — delegation prepared, graph parked, delegation
-   dispatched, ingress persisted, graph resumed/expired, turn scheduled, receipt committed —
+7. **Crash injected after every saga phase** — delegation prepared, dispatched, server-confirmed,
+   deadline armed, graph parked, ingress persisted, match decided, graph resumed/expired,
+   schedule outbox committed, turn scheduled, receipt committed —
    converging with no lost delegation, no park without delegation, no double payload, no
    double turn.
 8. **Revert-red per wiring**: bridge seal, durable timer, idle ingress, scheduler wake,
