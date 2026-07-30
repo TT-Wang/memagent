@@ -151,3 +151,21 @@ def test_sealing_waiting_peer_without_the_park_is_refused():
     graph = WorkGraph().open_request("evt-1", "ask the SRE")
     with pytest.raises(GraphValidationError):
         graph.seal_current("waiting_peer")
+
+
+def test_waiting_peer_is_a_typed_status_not_a_loose_string():
+    from sliceagent.execution import TurnStatus, ToolStatus
+
+    assert TurnStatus("waiting_peer") is TurnStatus.WAITING_PEER
+    # It belongs to the TURN vocabulary only; a tool never has this status.
+    assert not hasattr(ToolStatus, "WAITING_PEER")
+
+
+def test_the_result_boundary_enforces_the_paired_invariant():
+    """Either half alone is a lie: an unresumable park, or a park for finished work."""
+    from sliceagent.execution import TurnOutcome
+
+    with pytest.raises(ValueError):
+        TurnOutcome("waiting_peer", 1, {})                      # parked, no wait
+    with pytest.raises(ValueError):
+        TurnOutcome("end_turn", 1, {}, peer_wait=PARK)          # wait, not parked

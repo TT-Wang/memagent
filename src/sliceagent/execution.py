@@ -182,6 +182,9 @@ class TurnStatus(str, Enum):
     FILTERED = "filtered"
     ERROR = "error"
     INDETERMINATE = "indeterminate"
+    # The turn ended parked on a peer (task #101). Typed rather than a loose string so the
+    # status/peer_wait biconditional can be enforced at the result boundary.
+    WAITING_PEER = "waiting_peer"
 
 
 @dataclass(frozen=True)
@@ -303,8 +306,8 @@ class TurnOutcome:
     leftover_steers: tuple = ()
     # Set when the turn ended PARKED on a peer (stop_reason "waiting_peer"). Carries the typed
     # PeerWait so the host's seal can persist the park durably. None for every ordinary stop, so
-    # existing consumers are unchanged. The paired invariant — status waiting_peer iff this is
-    # set — is enforced by the work graph, which is the authority for the durable park.
+    # existing consumers are unchanged. The paired invariant — status WAITING_PEER iff this is
+    # set — is enforced below AND again by the work graph at the durable seal.
     peer_wait: object | None = None
 
     def __post_init__(self) -> None:
@@ -314,6 +317,15 @@ class TurnOutcome:
             status = str(self.status)
         object.__setattr__(self, "status", status)
         object.__setattr__(self, "usage", Usage.from_value(self.usage))
+        # Paired invariant at the RESULT boundary, mirroring the work graph's own rule: a turn is
+        # parked exactly when it carries the typed wait. Either half alone is a lie — a
+        # waiting_peer status with no wait cannot be resumed, and a wait on a finished turn would
+        # have the host persist a park for work that already ended.
+        parked = status is TurnStatus.WAITING_PEER
+        if parked != (self.peer_wait is not None):
+            raise ValueError(
+                "TurnOutcome: status WAITING_PEER and peer_wait must be present together"
+            )
 
     @property
     def stop_reason(self) -> str:
