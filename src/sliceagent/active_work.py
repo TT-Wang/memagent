@@ -1103,6 +1103,12 @@ __all__ = [
 ]
 
 
+# AUTHORITY BOUNDARY (task #101). The work graph's peer park is a PROJECTION of the durable
+# collaboration state: it records that this request is waiting and on what correlation, so the
+# frontier renders truthfully and the wait survives restart. It is NOT the terminal authority.
+# The host's PeerParkStore decides resume/expire/cancel under a generation-fenced CAS; this graph
+# follows that decision. Anything here that starts deciding terminal outcomes has created a second
+# source of truth, which is how a park and its store disagree after a crash.
 def expire_peer_waits(
     graph: "WorkGraph",
     elapsed_by_correlation: Mapping[str, float],

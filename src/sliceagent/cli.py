@@ -1553,6 +1553,8 @@ def main() -> None:
         # A turn that ended parked on a peer persists that park durably here, so the wait
         # survives restart and the peer's eventual reply has something to resume. Without this
         # the kernel would report waiting_peer and the durable record would forget it.
+        # This seal RECORDS the wait; it decides nothing terminal. Resume/expire/cancel authority
+        # belongs to the host's PeerParkStore, so this projection must never race it.
         sealed_target.active_work = sealed_target.active_work.seal_current(
             stop_reason, response_ref=response_ref, transitioned=transitioned,
             logical_id=active.logical_id, peer_wait=peer_wait,
