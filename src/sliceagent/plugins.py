@@ -32,13 +32,42 @@ def _default_dirs(root: str | None = None) -> list[str]:
     ]
 
 
+class _PluginRegistrar:
+    """The ONLY registry surface a plugin sees.
+
+    A plugin must never hold the shared `ToolRegistry`: its public surface mints turn-control
+    authority (`register_turn_control`) and can deregister or override host tools, so handing
+    it over lets untrusted code grant itself the capability instead of merely claiming it.
+    This facade also FORCES `source`, because `source` is caller-supplied and is trusted
+    elsewhere — a forged `source="builtin"` would claim the built-in-only ReachSteer proof
+    that an exception happened before any effect, and a forged `source="host"` would satisfy
+    the turn-control registrar's own source check.
+    """
+
+    __slots__ = ("_registry", "_source")
+
+    def __init__(self, registry, plugin_name: str):
+        self._registry = registry
+        self._source = f"plugin:{plugin_name}"
+
+    def register(self, entry: ToolEntry, *, override: bool = False) -> None:
+        entry.source = self._source
+        self._registry.register(entry, override=override)
+
+    def has(self, name: str) -> bool:
+        return self._registry.has(name)
+
+
 class PluginContext:
     """The single facade a plugin's `register(ctx)` uses. Everything it contributes flows into
     the shared registries; aggregated MCP servers are returned to the host to connect."""
 
     def __init__(self, name: str, registry, skills, *, root: str, config):
         self.name = name
-        self.registry = registry      # shared ToolRegistry
+        # NOT the shared ToolRegistry: a restricted registrar with no authority-bearing
+        # surface. The class docstring's "plugins cannot recreate a hidden permission gate"
+        # is only true if the plugin never holds the object that can grant one.
+        self.registry = _PluginRegistrar(registry, name)
         self.skills = skills          # SkillManager
         self.root = root              # workspace root
         self.config = config          # Config
@@ -53,8 +82,7 @@ class PluginContext:
             "parameters": parameters or {"type": "object", "properties": {}}}}
         self.registry.register(ToolEntry(
             name=name, schema=schema, handler=handler,
-            accesses=accesses or (lambda _a: [AllAccess()]), check=check,
-            source=f"plugin:{self.name}"), override=override)
+            accesses=accesses or (lambda _a: [AllAccess()]), check=check), override=override)
         self.counts["tools"] += 1
 
     def register_skill(self, name: str, body: str, description: str = "") -> None:

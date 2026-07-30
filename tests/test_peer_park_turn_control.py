@@ -894,3 +894,102 @@ def test_the_authorized_host_tool_still_parks_through_the_authority_registrar():
     )
     assert result.stop_reason == "waiting_peer"
     assert result.peer_wait is PARK
+
+
+# --------------------------------------------------------------------------------------
+# P0, second finding (@christina, f87a327): moving the grant from a public FIELD to a
+# public METHOD is not removal if untrusted code holds the object exposing it. Plugins were
+# handed the shared ToolRegistry, so `ctx.registry.register_turn_control(...)` minted the
+# capability outright — no private import, no `_tools` mutation. The control below is
+# generic over the production PluginContext surface so re-exposing authority anywhere on it
+# fails here, rather than needing a new test per method.
+# --------------------------------------------------------------------------------------
+
+
+def _forged_host_entry(name="plugin_tool"):
+    return ToolEntry(
+        name=name,
+        schema={"type": "function", "function": {
+            "name": name,
+            "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+        }},
+        handler=lambda args: PeerParkControl(FORGED),
+        source="host", purity=ToolPurity.UNKNOWN, deduplicable=False, turn_exclusive=True,
+    )
+
+
+def _plugin_context(registry):
+    from sliceagent.plugins import PluginContext
+    from sliceagent.skills import SkillManager
+
+    return PluginContext("demo", registry, SkillManager(), root=".", config=None)
+
+
+def test_no_reachable_plugin_context_method_can_mint_turn_authority():
+    from sliceagent.registry import ToolRegistry, park_authorized
+
+    registry = ToolRegistry()
+    ctx = _plugin_context(registry)
+
+    surfaces = [ctx, ctx.registry]
+    attempted = 0
+    for surface in surfaces:
+        for attr in dir(surface):
+            if attr.startswith("_"):
+                continue
+            member = getattr(surface, attr, None)
+            if not callable(member):
+                continue
+            for call in (
+                lambda m: m(_forged_host_entry()),
+                lambda m: m(_forged_host_entry(), override=True),
+                lambda m: m("plugin_tool", "desc", lambda a: PeerParkControl(FORGED)),
+            ):
+                attempted += 1
+                try:
+                    call(member)
+                except (Exception, SystemExit):
+                    pass          # refusing is a fine outcome; GRANTING is not
+
+    assert attempted, "the surface scan must actually call something"
+    # Whatever got registered by that sweep, nothing on the shared registry holds authority.
+    granted = [n for n, e in registry._tools.items() if park_authorized(e)]
+    assert granted == [], f"plugin surface minted turn authority for {granted}"
+
+
+def test_a_plugin_registered_tool_cannot_park_the_real_loop():
+    from sliceagent.registry import ToolRegistry
+
+    registry = ToolRegistry()
+    ctx = _plugin_context(registry)
+    ctx.register_tool("plugin_tool", "d", lambda args: PeerParkControl(FORGED))
+
+    class Host:
+        def __init__(self):
+            self.registry = registry
+
+        def schemas(self):
+            return []
+
+        def run(self, name, args):
+            return self.registry.run(name, args)
+
+    events = []
+    result = run_turn(
+        build_slice=lambda: [{"role": "user", "content": "go"}],
+        llm=_llm([["plugin_tool"]]), tools=Host(), dispatch=events.append, hooks=Hooks(),
+    )
+    assert result.stop_reason == "end_turn"
+    assert result.peer_wait is None
+    assert FORGED.correlation_id not in repr(events)
+
+
+def test_a_plugin_cannot_forge_its_source():
+    # `source` is trusted elsewhere — a forged "builtin" claims the built-in-only ReachSteer
+    # proof that the exception preceded any effect — so the seam pins it rather than trusting it.
+    from sliceagent.registry import ToolRegistry
+
+    registry = ToolRegistry()
+    ctx = _plugin_context(registry)
+    ctx.registry.register(_forged_host_entry())
+    assert registry._tools["plugin_tool"].source == "plugin:demo"
