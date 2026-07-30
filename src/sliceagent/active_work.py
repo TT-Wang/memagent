@@ -554,8 +554,12 @@ _ALLOWED_TRANSITIONS: dict[str, frozenset[str]] = {
     }),
     # A peer-parked request resumes to in_progress on a correlated PeerResult (the horizontal
     # analogue of waiting_user); it may also be delivered/cancelled/superseded like any wait.
+    # `waiting_user` is reachable too: once a park is EXPLICITLY resolved, the same request may
+    # legitimately end that segment waiting on the user instead. Omitting it made an explicit
+    # resolution into a user wait raise, so the two wait axes could not hand off to each other.
     "waiting_peer": frozenset({
-        "waiting_peer", "in_progress", "ready", "delivered", "verified", "cancelled", "superseded",
+        "waiting_peer", "waiting_user", "in_progress", "ready", "delivered", "verified",
+        "cancelled", "superseded",
     }),
     # ``ready`` says a child contribution is prepared. It may be model-maintained for local work or derived
     # by the host from a bound child's successful immutable seal. Only the host can attach the real response

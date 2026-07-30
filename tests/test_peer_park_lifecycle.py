@@ -211,3 +211,26 @@ def test_non_bool_resolve_peer_wait_is_refused(truthy):
     """An authority flag must be an exact bool, not anything truthy."""
     with pytest.raises(GraphValidationError):
         parked_graph().seal_current("end_turn", resolve_peer_wait=truthy)
+
+
+def test_a_park_survives_a_user_wait_by_default():
+    """Explicit disposition of the parked -> waiting_user finding.
+
+    Default: the durable park wins; the segment ending on a user wait does not discard it.
+    """
+    root = parked_graph().seal_current("waiting_user").request_roots[-1]
+    assert root.status == "waiting_peer"
+    assert root.peer_wait == PARK
+
+
+def test_an_explicitly_resolved_park_may_hand_off_to_a_user_wait():
+    """The transition table omitted waiting_peer -> waiting_user, so this used to raise.
+
+    The two wait axes must be able to hand off: a resolved peer park can legitimately end
+    the segment waiting on the user instead.
+    """
+    root = parked_graph().seal_current(
+        "waiting_user", resolve_peer_wait=True
+    ).request_roots[-1]
+    assert root.status == "waiting_user"
+    assert root.peer_wait is None
