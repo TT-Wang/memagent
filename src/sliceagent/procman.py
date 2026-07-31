@@ -88,6 +88,20 @@ class ProcManager:
             **popen_group_kwargs(),
         )
 
+    def adopt(self, popen, command: str, cwd: str, log_path: str, log_fh) -> str:
+        """Take over a LIVE process whose blocking caller hit its deadline; return a handle.
+
+        The process is NOT reaped: its work so far is preserved, and because the caller's output
+        already streamed to this same logfile from the start, the log is complete and in order and
+        new output keeps landing with zero plumbing. Group/poll/kill semantics are identical to a
+        proc_start child — the one divergence the timeout path used to make unrecoverable by
+        killing the tree.
+        """
+        self._n += 1
+        handle = f"p{self._n}"
+        self._procs[handle] = _Proc(handle, command, popen, log_path, log_fh, capture_pgid(popen))
+        return handle
+
     def poll(self, handle: str) -> str:
         p = self._get(handle)
         rc = p.popen.poll()

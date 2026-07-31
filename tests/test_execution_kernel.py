@@ -1423,7 +1423,7 @@ def unkillable_effectful_timeout_waits_before_later_barrier():
 
 
 @check
-def local_command_timeout_is_failed_and_reaps_background_tree():
+def local_command_timeout_is_adopted_with_progress_preserved():
     from sliceagent.tools import LocalToolHost
 
     with tempfile.TemporaryDirectory(prefix="command-timeout-") as root:
@@ -1431,19 +1431,18 @@ def local_command_timeout_is_failed_and_reaps_background_tree():
         host = LocalToolHost(root=root, timeout=1)
         command = f"(sleep 1.4; echo late > {shlex.quote(target)}) & sleep 10"
         outcome = host.run("run_command", {"command": command, "timeout": 1})
-        # A deadline reap is a deliberate, bounded stop with a known cause — FAILED, so the turn
-        # stays alive and the model can act on the escalation (bigger timeout / proc_start). The
-        # result text carries the partial-write warning. INDETERMINATE (and its turn-wide park) is
-        # reserved for genuinely unknown outcomes.
-        assert outcome.status is ToolStatus.FAILED
-        assert "still on disk" in str(outcome)
-        time.sleep(0.6)
-        # POSIX killpg reaps the whole group synchronously; on Windows taskkill /T is best-effort and a
-        # detached `&` subshell can escape the PID-tree walk — there the FAILED text's "still on disk /
-        # re-read before relying on it" warning is the mitigation, so only assert the strong reap
-        # off-Windows.
+        # The deadline now ADOPTS the live process into the background registry (Kimi Code's
+        # autoBackgroundOnTimeout) instead of reaping it: not ✗, not a verdict, and the descendant
+        # finish line is PRESERVED — the reap path could never produce it.
+        assert outcome.status is ToolStatus.SUCCEEDED
+        assert "was NOT killed" in str(outcome)
+        time.sleep(1.2)
         if os.name != "nt":
-            assert not os.path.exists(target), "a timed-out command descendant mutated after return"
+            assert os.path.exists(target), (
+                "adoption must preserve late work; only a reap would make this file absent")
+        import re as _re
+        handle = _re.search(r"background as (p\d+)", str(outcome)).group(1)
+        host.run("proc_kill", {"handle": handle})
 
 
 @check

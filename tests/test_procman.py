@@ -126,7 +126,10 @@ def run_command_timeout_arg():
     wd, h = _host()
     assert h.run("run_command", {"command": "echo hi", "timeout": 5}).strip() == "hi"
     slow = h.run("run_command", {"command": f'{PY} -c "import time; time.sleep(2)"', "timeout": 1})
-    assert "124" in slow or "timed out" in slow, f"short timeout should trip: {slow!r}"
+    # the deadline trips and the live process is adopted into the background registry
+    assert "was NOT killed" in str(slow) and "background as p" in str(slow), \
+        f"short timeout should trip into adoption: {str(slow)[:160]!r}"
+    h.run("proc_kill", {"handle": re.search(r"background as (p\d+)", str(slow)).group(1)})
 
 
 @check
@@ -152,19 +155,78 @@ def cleanup_kills_all():
 # at the same limit. Both blocking runners must instead hand back the escalation (raise timeout →
 # proc_start) so long work can always finish somewhere.
 @check
+def a_deadline_hit_is_adopted_not_reaped_and_progress_survives():
+    """FIELD (Kimi Code's autoBackgroundOnTimeout, sliceagent style): a 600s build was REAPED at the
+    deadline, losing all progress — the escalation even said "use proc_start" after killing the work.
+    Now the deadline ADOPTS the live process into the background registry: the result names the
+    handle (never "reaped", never a failure verdict), and the process finishes on its own with its
+    full output in the proc log."""
+    wd, h = _host()
+    open(os.path.join(wd, "slow.py"), "w").write(
+        "import time\nprint('phase-1', flush=True)\ntime.sleep(3)\nprint('phase-2-done', flush=True)\n")
+    out = h.run("run_command", {"command": f"{PY} slow.py", "timeout": 1})
+    text = str(out)
+    assert "was NOT killed" in text and "background as p" in text, text[:200]
+    assert "reaped" not in text and "Exit code 124" not in text, text[:200]
+    handle = re.search(r"background as (p\d+)", text).group(1)
+    # the adopted process keeps running past the deadline and finishes WITH its late output —
+    # the reap path could never produce this line
+    m, last = _wait_for(lambda: h.run("proc_tail", {"handle": handle}), r"exited 0", timeout=10)
+    assert m, f"adopted process never completed: {last[:200]}"
+    assert "phase-2-done" in last and "phase-1" in last, last[:300]
+
+
+@check
+def an_adopted_process_can_be_followed_and_killed_like_any_proc():
+    wd, h = _host()
+    open(os.path.join(wd, "s.py"), "w").write("import time\ntime.sleep(30)\n")
+    out = h.run("run_command", {"command": f"{PY} s.py", "timeout": 1})
+    handle = re.search(r"background as (p\d+)", str(out)).group(1)
+    assert "running" in h.run("proc_poll", {"handle": handle})
+    killed = h.run("proc_kill", {"handle": handle})
+    assert f"killed {handle}" in killed, killed
+    assert "exited" in h.run("proc_poll", {"handle": handle}) or "killed" in killed
+
+
+@check
+def the_oracle_and_plain_shell_timeouts_keep_the_bounded_reap():
+    """Adoption is opt-in per call site: a VERIFY command timing out must stay a bounded failure
+    (a verify has no business continuing in the background), and the sandbox without the hook
+    reaps exactly as before."""
+    wd, h = _host()
+    open(os.path.join(wd, "s.py"), "w").write("import time\ntime.sleep(30)\n")
+    from sliceagent.oracle import CommandOracle
+    from sliceagent.execution import ToolStatus
+    result = CommandOracle(f"{PY} s.py", timeout=1, root=wd).verify()
+    assert result.status is ToolStatus.INDETERMINATE, result.status
+    from sliceagent.sandbox import SANDBOX_TIMEOUT, LocalSandbox
+    code, out = LocalSandbox(scrub_secrets=False).run(f"{PY} s.py", cwd=wd, timeout=1)
+    assert code == SANDBOX_TIMEOUT and "reaped" in out, (code, out[:120])
+
+
+@check
 def timeout_result_carries_the_escalation():
     wd, h = _host()
     open(os.path.join(wd, "slow.py"), "w").write("import time\ntime.sleep(30)\n")
-    for name, args in (("run_command", {"command": f"{PY} slow.py", "timeout": 1}),
-                       ("execute_code", {"code": f"print(run({PY!r} + ' slow.py'))", "timeout": 1})):
-        out = h.run(name, args)
-        assert "124" in out, f"{name}: lost the timeout sentinel — {out!r}"
-        assert "proc_start" in out, f"{name}: no escalation to the unbounded runner — {out!r}"
-        # A deadline reap is a deliberate, bounded stop with a known cause: FAILED, so the model can
-        # act on the escalation (larger timeout / proc_start). INDETERMINATE parked the whole turn
-        # here and stranded that advice — the park is reserved for genuinely unknown outcomes.
-        assert getattr(out.status, "value", out.status) == "failed", (
-            f"{name}: a deadline reap is a bounded failure, not an unknown effect — {out.status!r}")
+    # run_command: the deadline now DETACHES instead of killing — the escalation made automatic.
+    out = h.run("run_command", {"command": f"{PY} slow.py", "timeout": 1})
+    text = str(out)
+    assert "was NOT killed" in text and "background as p" in text, (
+        f"run_command: a deadline must detach the live process, not kill it — {text[:200]!r}")
+    assert "reaped" not in text and "Exit code 124" not in text
+    assert getattr(out.status, "value", out.status) == "succeeded", (
+        f"an adopted deadline is not a failure verdict: {out.status!r}")
+    h.run("proc_kill", {"handle": re.search(r"background as (p\d+)", text).group(1)})
+    # execute_code (a batch of edits that must not keep writing unseen) keeps the bounded failure
+    # plus the escalation text: re-run bigger, or move to proc_start by hand.
+    out = h.run("execute_code", {"code": f"print(run({PY!r} + ' slow.py', timeout=1))"})
+    assert "124" in out, f"execute_code: lost the timeout sentinel — {out!r}"
+    assert "proc_start" in out, f"execute_code: no escalation to the unbounded runner — {out!r}"
+    # A deadline reap is a deliberate, bounded stop with a known cause: FAILED, so the model can
+    # act on the escalation (larger timeout / proc_start). INDETERMINATE parked the whole turn
+    # here and stranded that advice — the park is reserved for genuinely unknown outcomes.
+    assert getattr(out.status, "value", out.status) == "failed", (
+        f"execute_code: a deadline reap is a bounded failure, not an unknown effect — {out.status!r}")
 
 
 @check

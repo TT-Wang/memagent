@@ -20,6 +20,7 @@ import re
 import signal
 import subprocess
 import sys
+import tempfile
 import uuid
 from typing import Protocol, runtime_checkable
 
@@ -37,9 +38,13 @@ _OUTPUT_CAP = 1_000_000  # chars; head+tail kept, middle elided. Sized ABOVE rea
 #                          page-out blob (the recall-on-demand promise) captures the FULL output for normal
 #                          large results; this is only the last-resort OOM/disk ceiling for pathological dumps.
 
-# Internal sentinel distinct from a command that legitimately exits 124. ToolHost projects this as typed
-# INDETERMINATE because a timeout cannot prove that a deliberately detached descendant stopped.
+# Internal sentinel distinct from a command that legitimately exits 124. ToolHost projects this as a
+# bounded FAILURE with the escalation text (a deadline reap is deliberate and known) — INDETERMINATE
+# is reserved for genuinely unknown outcomes.
 SANDBOX_TIMEOUT = -124
+# The deadline fired but the process was ADOPTED into the background process registry instead of
+# being reaped — its work continues under a proc handle. Never a failure verdict.
+SANDBOX_ADOPTED = -125
 
 
 @runtime_checkable
@@ -68,11 +73,11 @@ class BaseSandbox:
     def __init__(self, *, scrub_secrets: bool = True):
         self.scrub_secrets = scrub_secrets
 
-    def run(self, command: str, *, cwd: str, timeout: float) -> tuple[int, str]:
-        code, out = self._exec(command, cwd=cwd, timeout=timeout)
+    def run(self, command: str, *, cwd: str, timeout: float, on_timeout=None) -> tuple[int, str]:
+        code, out = self._exec(command, cwd=cwd, timeout=timeout, on_timeout=on_timeout)
         return code, _cap(out)
 
-    def _exec(self, command: str, *, cwd: str, timeout: float) -> tuple[int, str]:
+    def _exec(self, command: str, *, cwd: str, timeout: float, on_timeout=None) -> tuple[int, str]:
         raise NotImplementedError
 
 
@@ -82,21 +87,33 @@ class LocalSandbox(BaseSandbox):
     python_cmd = sys.executable
 
     @staticmethod
-    def _stop_and_reap(process) -> tuple[str, str]:
+    def _stop_and_reap(process) -> None:
         """Best-effort process-group teardown used by both deadlines and interactive Ctrl-C."""
         kill_tree(process, signal.SIGTERM)
         try:
-            return process.communicate(timeout=0.5)
+            process.wait(timeout=0.5)
         except subprocess.TimeoutExpired:
             kill_tree(process, SIG_KILL)
             try:
-                return process.communicate(timeout=2)
+                process.wait(timeout=2)
             except subprocess.TimeoutExpired:
-                return "", ""
+                pass
 
-    def _exec(self, command: str, *, cwd: str, timeout: float) -> tuple[int, str]:
+    @staticmethod
+    def _read_log_fh(log_fh) -> str:
+        log_fh.flush()
+        log_fh.seek(0)
+        return log_fh.read()
+
+    def _exec(self, command: str, *, cwd: str, timeout: float, on_timeout=None) -> tuple[int, str]:
         env = _scrub_env() if self.scrub_secrets else None
         process = None
+        adopted_ok = False
+        # Output goes to a temp FILE from the start (never pipes): the child can never block on a
+        # full pipe, wait() alone bounds the call, and a timeout can hand the SAME log — complete and
+        # in order — to the background registry instead of a mid-thought pipe remnant.
+        log_fd, log_path = tempfile.mkstemp(prefix=".sliceagent-run-", suffix=".log")
+        log_fh = os.fdopen(log_fd, "w+", encoding="utf-8", errors="replace")
         try:
             process = subprocess.Popen(
                 **_sh(command), **popen_group_kwargs(), cwd=cwd, env=env,
@@ -107,14 +124,23 @@ class LocalSandbox(BaseSandbox):
                 # indistinguishable from a slow command, and fighting the TUI for the terminal.
                 # DEVNULL makes the prompt fail fast and readably instead.
                 stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                stdout=log_fh, stderr=subprocess.STDOUT, text=True,
             )
-            stdout, stderr = process.communicate(timeout=timeout)
+            process.wait(timeout=timeout)
+            return process.returncode, self._read_log_fh(log_fh)
         except subprocess.TimeoutExpired:
+            if on_timeout is not None:
+                # The deadline does not have to be terminal (Kimi Code's autoBackgroundOnTimeout):
+                # offer the LIVE process AND its complete, in-order log to the adopter (the
+                # background registry). Only an adoption failure falls through to the ordinary reap.
+                adopted = on_timeout(process, log_path, log_fh)
+                if adopted is not None:
+                    adopted_ok = True
+                    return SANDBOX_ADOPTED, str(adopted)
             # Own and reap the shell's process group. This stops ordinary background descendants; the typed
             # result remains conservative because a command can deliberately escape into another session.
-            stdout, stderr = self._stop_and_reap(process)
-            partial = ((stdout or "") + (stderr or "")).strip()
+            self._stop_and_reap(process)
+            partial = self._read_log_fh(log_fh).strip()
             suffix = f"\n{partial}" if partial else ""
             return SANDBOX_TIMEOUT, f"Command timed out after {timeout:g}s; process tree was reaped{suffix}"
         except KeyboardInterrupt:
@@ -125,7 +151,17 @@ class LocalSandbox(BaseSandbox):
             raise
         except OSError as e:
             return 127, f"Could not run command: {e}"
-        return process.returncode, (stdout or "") + (stderr or "")
+        finally:
+            # On adoption the log's ownership moved to the registry; everywhere else it dies here.
+            if not adopted_ok:
+                try:
+                    log_fh.close()
+                except Exception:  # noqa: BLE001
+                    pass
+                try:
+                    os.unlink(log_path)
+                except OSError:
+                    pass
 
 
 class DockerSandbox(BaseSandbox):
@@ -164,7 +200,10 @@ class DockerSandbox(BaseSandbox):
         args += [self.image, "sh", "-c", command]
         return args
 
-    def _exec(self, command: str, *, cwd: str, timeout: float) -> tuple[int, str]:
+    def _exec(self, command: str, *, cwd: str, timeout: float, on_timeout=None) -> tuple[int, str]:
+        # on_timeout (adoption into the host proc registry) is a local-subprocess concept; a
+        # container child cannot join it meaningfully, so the docker backend keeps the plain
+        # named-kill timeout path.
         # Name the container so a timeout can reap it: subprocess.run only SIGKILLs the local `docker run`
         # CLI; the daemon-side container keeps running. With a name we can `docker kill` it (and --rm then
         # removes it), instead of leaking an orphan container per timeout.

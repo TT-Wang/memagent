@@ -39,7 +39,7 @@ from .platform_compat import (IS_WINDOWS, ProcessGroupTerminationError, is_win_a
 from .procman import ProcManager
 from .reach import ReachSet, ReachSteer, SENSITIVE_DIR_NAMES
 from .registry import ToolEntry, ToolRegistry, ToolText
-from .sandbox import SANDBOX_TIMEOUT, LocalSandbox
+from .sandbox import SANDBOX_ADOPTED, SANDBOX_TIMEOUT, LocalSandbox
 from .sensory_cortex import _is_ignored
 from .terminal import SessionManager
 from .workspace_handoff import WorkspaceScheduleDecision
@@ -1861,13 +1861,35 @@ class LocalToolHost:
                       "+ proc_wait/proc_tail, which this deadline does not bound"),
         )
 
+    def _adopt_on_timeout(self, command: str, timeout_s: float):
+        """The sandbox on_timeout hook: adopt the LIVE process into the background registry instead
+        of reaping it (Kimi Code's autoBackgroundOnTimeout — a deadline detaches, it does not kill).
+        Adoption failure returns None, which falls back to the ordinary bounded-failure reap."""
+        def adopt(process, log_path, log_fh):
+            try:
+                handle = self.procs.adopt(process, command, self.root(), log_path, log_fh)
+            except Exception:  # noqa: BLE001 — never let adoption itself fail the command
+                return None
+            return (f"Timed out after {timeout_s:g}s — but the command was NOT killed. It now runs "
+                    f"in the background as {handle}: its work so far is preserved in its log and "
+                    f"new output keeps landing there. Follow with proc_tail {handle}, wait with "
+                    f"proc_wait {handle}, stop with proc_kill {handle}. Side effects it already "
+                    f"produced remain on disk; more may still land while it runs.")
+        return adopt
+
     def _t_run_command(self, args: dict) -> str:
         # Optional per-call timeout (default self.timeout, hard ceiling 600s) so slow builds don't
         # die at the 30s default and come back as exit 124. Long-lived processes use proc_start.
         t = self._call_timeout(args.get("timeout"))
-        code, out = self.sandbox.run(args["command"], cwd=self.root(), timeout=t)
+        code, out = self.sandbox.run(args["command"], cwd=self.root(), timeout=t,
+                                     on_timeout=self._adopt_on_timeout(args["command"], t))
         self._grant_shell_paths(args.get("command", ""))  # I2 reach=action: dirs the shell touched
         out = out.strip()
+        if code == SANDBOX_ADOPTED:
+            # The deadline passed but NOTHING was killed: the live process joined the background
+            # registry with its progress intact. Not ✗ and not a verdict — the handle and the
+            # follow-up tools are the result.
+            return ToolText(out)
         if code == SANDBOX_TIMEOUT:
             # A deadline reap is a DELIBERATE, bounded stop with a known cause — not an unknown
             # effect. Typing it indeterminate parked the whole turn and made the escalation below
