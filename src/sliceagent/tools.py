@@ -64,7 +64,6 @@ HOST_ERROR_SENTINELS = (
 # source), so a genuine match is never altered; used as a fallback in _t_str_replace.
 _LINENO_PREFIX = re.compile(r"^[ \t]*\d+\t")
 
-
 def _strip_line_numbers(text: str) -> str:
     lines = text.split("\n")
     nonblank = [ln for ln in lines if ln.strip()]
@@ -72,12 +71,10 @@ def _strip_line_numbers(text: str) -> str:
         return text
     return "\n".join(_LINENO_PREFIX.sub("", ln) if ln.strip() else ln for ln in lines)
 
-
 def _number_lines(lines, start: int = 1) -> str:
     """cat -n number a LIST of lines from `start` (1-based) — ABSOLUTE numbers so a windowed read still
     gives correct file:line evidence."""
     return "\n".join(f"{i:>6}\t{ln}" for i, ln in enumerate(lines, start))
-
 
 def _numbered(text: str) -> str:
     """cat -n line numbers for read_file's RETURN, so the model gets file:line evidence IMMEDIATELY in-turn
@@ -85,11 +82,9 @@ def _numbered(text: str) -> str:
     strips a pasted prefix via _strip_line_numbers, so editing from a numbered read still matches."""
     return _number_lines(text.splitlines(), 1)
 
-
 _READ_MAX_LINES = 1500   # default in-slice VIEW cap for read_file; the full file ALWAYS stays on disk (bound the view, not the file)
 _READ_SLURP_CAP = 8 * 1024 * 1024     # bytes: above this, read_file streams the window instead of materializing the whole file
 _READ_STREAM_CHUNK = 1024 * 1024      # streaming block size for huge-file window reads
-
 
 def _coerce_int(v):
     """Tolerant int() for model-supplied args (str/float/None) — never raises."""
@@ -97,7 +92,6 @@ def _coerce_int(v):
         return int(v) if v is not None else None
     except (TypeError, ValueError, OverflowError):
         return None
-
 
 # so `import <workspace_module>` works for testing freshly-written code.
 _CODE_PRELUDE = '''\
@@ -195,14 +189,12 @@ def run(cmd, timeout=120):
     return _o if _p.returncode == 0 else f"[exit {_p.returncode}]\\n{_o}"
 '''
 
-
 def _fn(name: str, desc: str, props: dict, req: list[str]) -> dict:
     return {
         "type": "function",
         "function": {"name": name, "description": desc,
                      "parameters": {"type": "object", "properties": props, "required": req}},
     }
-
 
 # The FINDINGS-capture seam. Every tool call carries a 'note' — the model's distilled conclusion
 # for this turn. It rides on the call the model is ALREADY making (no extra round-trip, unlike a
@@ -221,12 +213,10 @@ NOTE_PROP = {
     }
 }
 
-
 _LEGACY_SEMANTIC_STATE_TOOLS = frozenset({
     "world_set", "world_clear", "require", "requirement_done", "supersede_requirement",
     "drop_requirement",
 })
-
 
 def with_note(schema: dict) -> dict:
     """Inject the 'note' arg (first, OPTIONAL) into a tool schema — the FINDINGS capture seam.
@@ -239,7 +229,6 @@ def with_note(schema: dict) -> dict:
     props = {**NOTE_PROP, **(params.get("properties") or {})}
     req = [r for r in (params.get("required") or []) if r != "note"]
     return {**schema, "function": {**fn, "parameters": {**params, "properties": props, "required": req}}}
-
 
 # _IGNORE_NAMES/_IGNORE_SUFFIX/_is_ignored (the ignore-aware directory-walk primitive shared with
 # repo_map) now live in sensory_cortex.py — "ignore-aware walking" is itself a SENSORY CORTEX concern
@@ -260,16 +249,13 @@ _OUTPUT_TAIL = 4000
 _CONTROL_DROP = {c: None for c in range(0x20) if c not in (0x09, 0x0a, 0x0d)}
 _CONTROL_DROP[0x7f] = None
 
-
 def _strip_control(s: str) -> str:
     return s.translate(_CONTROL_DROP)
 # Credential/secret dirs the shell-path auto-grant (#31) must never widen file-tool reach into.
 _SECRET_DIRS = set(SENSITIVE_DIR_NAMES)
 
-
 class BinaryTextError(ValueError):
     """A text-edit request targeted bytes that cannot be safely round-tripped as text."""
-
 
 TOOL_SCHEMAS = [
     _fn("read_file",
@@ -468,14 +454,12 @@ TOOL_SCHEMAS = [
         }, ["changes"]),
 ]
 
-
 # NOTE: waiting_peer is intentionally ABSENT here. It is a HOST-managed park set only via
 # WorkGraph.seal_current(peer_wait=...) because it requires typed PeerWait correlation state the
 # model cannot express as a prose status (like verified/delivered, the model never sets it directly).
 _MODEL_WORK_STATUSES = frozenset({
     "open", "in_progress", "waiting_user", "ready", "cancelled", "superseded",
 })
-
 
 _VERIFY_OSCILLATION_WINDOW = 4     # identical failure signatures within this window => stop retrying
 
@@ -519,7 +503,6 @@ def _shell_segments(command: str) -> list[str]:
         i += 1
     segments.append("".join(current))
     return segments
-
 
 def _unrunnable_verify_program(command: str) -> str:
     """First program in `command` that cannot run — a bare name missing from PATH, or an absolute
@@ -565,12 +548,10 @@ def _unrunnable_verify_program(command: str) -> str:
             return program
     return ""
 
-
 def _verify_failure_signature(command: str, output: str) -> str:
     """Stable signature of one failed check: the command + the normalized tail of its output."""
     tail = " ".join(str(output or "").split())[-240:]
     return f"{command}::{tail}"
-
 
 def run_item_verification(candidates, runner, attempts: dict) -> tuple[frozenset, str]:
     """Host-run the acceptance checks for items landing on 'ready' (P2 of PLAN-MODE-DESIGN).
@@ -626,7 +607,6 @@ def run_item_verification(candidates, runner, attempts: dict) -> tuple[frozenset
             return frozenset(), message
         green.add(item_id)
     return frozenset(green), ""
-
 
 def build_work_delta(
     graph: WorkGraph,
@@ -773,7 +753,6 @@ def build_work_delta(
         ))
     return WorkDelta(expected_revision=expected, creates=tuple(creates), updates=tuple(updates))
 
-
 def _plan_progress_payload(graph: WorkGraph, logical_id: str) -> dict[str, object]:
     """Project the current request's Active Work into UI-only plan position.
 
@@ -825,12 +804,10 @@ def _plan_progress_payload(graph: WorkGraph, logical_id: str) -> dict[str, objec
         ],
     }
 
-
 def _default_ask_user(question: str, options) -> str:
     """Fallback when no interactive user is wired (headless/eval) — never hangs."""
     return ("(no interactive user is available to answer; proceed with your best assumption and "
             "STATE it explicitly, or stop with a clear summary of what you need)")
-
 
 def _sniff_image_mime(raw: bytes) -> str | None:
     """Identify an image by MAGIC BYTES (not extension). Returns the MIME type or None if not an image."""
@@ -845,7 +822,6 @@ def _sniff_image_mime(raw: bytes) -> str | None:
     if raw[:2] == b"BM":
         return "image/bmp"
     return None
-
 
 def _numbered_window(text: str, start_line: int, end_line: int, *, ctx: int = 4, cap: int = 40) -> str:
     """A cat -n numbered snippet of `text` around [start_line..end_line] (0-based), ±ctx lines, capped at
@@ -862,6 +838,33 @@ def _numbered_window(text: str, start_line: int, end_line: int, *, ctx: int = 4,
     if b < len(lines):
         snippet += f"\n  … (+{len(lines) - b} more lines)"
     return snippet
+
+_SIGNAL_CLEANUP = {"fn": None, "installed": False}
+
+
+def _install_signal_cleanup(fn) -> None:
+    """SIGTERM/SIGHUP must not orphan every background process: atexit does not run on a signal,
+    so a plain SIGTERM leaked the whole registry (the review's Family I — and the only escape from
+    a wedged turn IS a signal, so this fires on the common path). One process-wide handler running
+    the LATEST host's atexit cleanup, then the conventional 128+signum exit — bounded, like Kimi
+    Code's 130/143."""
+    _SIGNAL_CLEANUP["fn"] = fn
+    if _SIGNAL_CLEANUP["installed"] or os.name == "nt":
+        return
+
+    def _handler(signum, _frame):
+        try:
+            cb = _SIGNAL_CLEANUP.get("fn")
+            if cb is not None:
+                cb()
+        except Exception:  # noqa: BLE001 — cleanup must never delay the exit
+            pass
+        os._exit(128 + signum)
+
+    import signal as _signal
+    _signal.signal(_signal.SIGTERM, _handler)
+    _signal.signal(_signal.SIGHUP, _handler)
+    _SIGNAL_CLEANUP["installed"] = True
 
 
 class LocalToolHost:
@@ -922,6 +925,8 @@ class LocalToolHost:
         self._closed = False
         self._atexit_cleanup = self.cleanup
         atexit.register(self._atexit_cleanup)  # leaked background procs / PTYs must not survive exit/abort/crash
+        _install_signal_cleanup(self._atexit_cleanup)
+
 
     def cleanup(self) -> None:
         """Tear down background processes + PTY sessions (idempotent; never raises). Wired to atexit AND

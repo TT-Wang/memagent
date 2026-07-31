@@ -341,6 +341,23 @@ def slash_plan_objective_runs_a_planning_turn_not_a_palette_query():
         + out[-1500:])
 
 
+
+
+def a_failed_required_seal_marks_a_nonzero_exit():
+    """FIELD (the review's L5): a turn whose required seal could not complete exited with status 0 —
+    a wrapper (script, Makefile, git hook, CI) read data loss as success. The wiring: every
+    _DurabilityStop raise marks the exit code, the REPL seal-failure funnel marks it too, and
+    main's end exits with it (Kimi Code's non-completed-turn → exit 1 shape; the e2e proof is the
+    seal-failure drive in the goal thread — 'required local seal failed' → rc 2)."""
+    import inspect
+    import sliceagent.cli as _cli
+    src_text = inspect.getsource(_cli)
+    assert src_text.count('_exit_code["code"] = 2') >= 8, (
+        "every _DurabilityStop raise AND the REPL seal-failure funnel must mark the exit code")
+    assert "sys.exit(_exit_code[" in src_text, "main's end must exit with the marked code"
+    assert '_exit_code = {"code": 0}' in src_text
+
+
 if __name__ == "__main__":
     main_reaches_prompt_without_crashing()
     print("PASS main_reaches_prompt_without_crashing")
@@ -364,3 +381,5 @@ if __name__ == "__main__":
     print("PASS durable_debug_log_is_created_and_repaired_private")
     slash_plan_objective_runs_a_planning_turn_not_a_palette_query()
     print("PASS slash_plan_objective_runs_a_planning_turn_not_a_palette_query")
+    a_failed_required_seal_marks_a_nonzero_exit()
+    print("PASS a_failed_required_seal_marks_a_nonzero_exit")

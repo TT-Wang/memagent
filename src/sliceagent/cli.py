@@ -1446,10 +1446,13 @@ def main() -> None:
         """Open the target-local segment journal and reinstall the same exact request without re-admission."""
         logical = session.logical_turn
         if logical is None or logical.id != transition.logical_turn_id:
+            _exit_code["code"] = 2
             raise _DurabilityStop("workspace continuation lost its logical-turn identity")
         if session.active_id != transition.task_id or logical.task_id != transition.task_id:
+            _exit_code["code"] = 2
             raise _DurabilityStop("workspace continuation lost its task identity")
         if logical.workspace_switches >= MAX_WORKSPACE_TRANSITIONS:
+            _exit_code["code"] = 2
             raise _DurabilityStop("workspace continuation exhausted its transition budget")
         from dataclasses import replace
         next_index = logical.segment_index + 1
@@ -1473,6 +1476,7 @@ def main() -> None:
             workspace_path=transition.target_root,
         )
         if continued.segment_index != next_index or continued.workspace_epoch != session.workspace_epoch:
+            _exit_code["code"] = 2
             raise _DurabilityStop("workspace continuation published inconsistent segment identity")
         transition = _workspace_transitions.mark_continuing(
             transition, target_artifact_id=active.artifact_id,
@@ -1669,6 +1673,12 @@ def main() -> None:
 
     class _DurabilityStop(RuntimeError):
         stop_session = True
+
+    # A failed required seal is a DURABILITY FAILURE, not a clean exit: wrappers (scripts, Makefiles,
+    # CI) read only the exit code, and 0 would report data loss as success (the review's L5; Kimi
+    # Code exits 1 for any non-completed turn with the same rationale). Set at every _DurabilityStop
+    # raise and applied at main's end — after cleanup, never instead of it.
+    _exit_code = {"code": 0}
 
     # optional rich TUI (the `tui` extra). Output via Rich, input via prompt_toolkit — temporally
     # separate from the synchronous run_turn, so no patch_stdout/threading. Off when piped (eval).
@@ -2480,6 +2490,7 @@ def main() -> None:
                         _workspace_transitions.clear(transition)
                     session.finish_logical_turn()
                     return
+                _exit_code["code"] = 2
                 raise _DurabilityStop("required local seal failed after cancellation")
             except Exception as exc:  # noqa: BLE001 — preparation is inside the required durability lifecycle
                 message = f"context preparation failed ({type(exc).__name__}: {exc})"
@@ -2490,6 +2501,7 @@ def main() -> None:
                         _workspace_transitions.clear(transition)
                     session.finish_logical_turn()
                     return
+                _exit_code["code"] = 2
                 raise _DurabilityStop("required local seal failed after a context-preparation error")
             llm.set_delta_sink(sink.on_delta)
             segment_artifact_id = local_store.active.artifact_id if local_store.active else ""
@@ -2516,6 +2528,7 @@ def main() -> None:
             ):
                 _rec.clear(root)                           # clear WAL only after this segment's required commit
             else:
+                _exit_code["code"] = 2
                 raise _DurabilityStop(
                     "required local seal could not complete; the recovery journal is retained. "
                     "Restart SliceAgent after fixing storage so recovery can finish before new work.")
@@ -2800,6 +2813,7 @@ def main() -> None:
                     reviewer.review(session.session_id)
                 break
             if stop_inline_session:
+                _exit_code["code"] = 2
                 break
 
     # Session end: retire the current workspace once, consolidate every session visited by this long-lived
@@ -2863,6 +2877,8 @@ def main() -> None:
     except KeyboardInterrupt:
         _workspace_handoff["ready"] = False
         print("\n  · exiting (skipped remaining cleanup)")
+    if _exit_code["code"]:
+        sys.exit(_exit_code["code"])
 
 
 if __name__ == "__main__":

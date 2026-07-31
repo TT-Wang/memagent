@@ -290,5 +290,50 @@ def main():
     sys.exit(1 if failed else 0)
 
 
+
+
+@check
+def sigterm_runs_the_same_cleanup_as_atexit_then_exits_128_plus_signal():
+    """FIELD (the review's Family I): the CLI installed no SIGTERM handler, so every abnormal exit
+    orphaned every background process — and the only escape from a wedged turn IS a signal, so this
+    leak fires on the common path. The handler runs the host's atexit cleanup (procs killed, logs
+    removed), then exits 128+signum (Kimi Code's 130/143 shape)."""
+    import subprocess
+    import sys as _sys
+    wd, _ = _host()
+    pidfile = os.path.join(wd, "child.pid")
+    script = (
+        "import sys, time, os; sys.path.insert(0, 'src')\n"
+        "from sliceagent.tools import LocalToolHost\n"
+        "h = LocalToolHost()\n"
+        "handle = h.procs.start('sleep 60', cwd='.')\n"
+        "proc = h.procs._procs[handle]\n"
+        f"open({pidfile!r}, 'w').write(str(proc.popen.pid))\n"
+        "print('READY', flush=True)\n"
+        "time.sleep(30)\n"
+    )
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.path.join(os.path.dirname(__file__), "..", "src")
+    p = subprocess.Popen([_sys.executable, "-c", script], cwd=wd, env=env,
+                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    try:
+        assert p.stdout.readline().strip() == "READY", "child never started"
+        child_pid = int(open(pidfile).read())
+        os.kill(child_pid, 0)                    # the background proc is alive pre-signal
+        p.send_signal(15)                        # SIGTERM
+        rc = p.wait(timeout=15)
+        assert rc == 143, f"expected 128+SIGTERM, got {rc}"
+        try:
+            os.kill(child_pid, 0)
+            alive = True
+        except OSError:
+            alive = False
+        assert not alive, "SIGTERM left the background proc orphaned"
+    finally:
+        if p.poll() is None:
+            p.kill()
+            p.wait()
+
+
 if __name__ == "__main__":
     main()
