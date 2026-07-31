@@ -261,6 +261,20 @@ class ScopedResult:
             return "absent"
         return "partial" if self.status in ("partial", "indeterminate") else "complete"
 
+    @property
+    def explorer_evidence_status(self) -> str:
+        """The typed evidence label for the TUI matrix (tui_projection vocabulary).
+
+        The report body travels INLINE in the delegation ToolResult, so at settle time the
+        parent's context already holds it: a complete report is ``content_retained``, a cut-off
+        one ``content_partial``, and no report means there was nothing to retain (``none``).
+        The label is informational — never an acceptance gate.
+        """
+        return {
+            "complete": "content_retained",
+            "partial": "content_partial",
+        }.get(self.report_completion, "none")
+
     def to_record(self) -> dict:
         """THE canonical projection of a child outcome — the single source every surface derives
         from: the parent's typed effects, the durable seal, the recall view, and the TUI matrix.
@@ -282,6 +296,7 @@ class ScopedResult:
             "report": self.report,
             "report_bytes": len(self.report.encode("utf-8")),
             "report_completion": self.report_completion,
+            "explorer_evidence_status": self.explorer_evidence_status,
             "partial": self.status in ("partial", "indeterminate"),
             "usage": dict(self.usage or {}),
         }

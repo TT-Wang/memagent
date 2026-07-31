@@ -395,7 +395,8 @@ class ScopedSpawnHost:
             # already-sealed child's completed work as lost. receipts/event_ledger/cli journal it.
             effects.append(ToolEffect(f"{identity}:child-artifact", "child_artifact", {
                 **{k: outcome[k] for k in ("status", "stop_reason", "stop_cause",
-                                           "report_completion", "report_bytes") if k in outcome},
+                                           "report_completion", "report_bytes",
+                                           "explorer_evidence_status") if k in outcome},
                 "artifact_id": handle,
                 "report_handle": f"subagents/{handle}.md",
                 **({"work_item_id": work_item_id} if work_item_id else {}),

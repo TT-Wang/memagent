@@ -29,8 +29,8 @@ from .events import (
     TurnStarted,
     make_dispatcher,
 )
-from .hooks import (BudgetHook, CatastrophicSafeguardHook, CompositeHooks, Hooks,
-                    OracleHook, ToolPreflight)
+from .hooks import (BudgetHook, CatastrophicSafeguardHook, CompositeHooks,
+                    DeliverableCompletionHook, Hooks, OracleHook, ToolPreflight)
 from .execution import ToolStatus
 from .mentions import workspace_mentions
 from .receipts import (compact_receipt_projection, receipt_completion_label,
@@ -2118,6 +2118,12 @@ def main() -> None:
         # explicit resource controls. Active Work and deliverable metadata are context—not publication gates.
         hook_list = [
             _WorkspaceHandoffHook(_workspace_handoff),
+            # One bounded response-only nudge for an obvious non-delivery (empty prose, a pointer
+            # to private tool/child output, a deferred-work update). Never a completion gate.
+            DeliverableCompletionHook(lambda: (
+                hook_session.active().task.deliverable_requirement,
+                str(getattr(hook_session.logical_turn, "id", "") or ""),
+            )),
             CatastrophicSafeguardHook(),
         ]
         if hook_cfg.verify_cmd:

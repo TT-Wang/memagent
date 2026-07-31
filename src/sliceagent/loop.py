@@ -1508,8 +1508,6 @@ def run_turn(*, build_slice, llm, tools, dispatch: Dispatcher, hooks: Hooks | No
     SteerDelivered; the in-flight model call is never aborted."""
     hooks = hooks or Hooks()
     total = Usage()
-    peak_call_input = 0    # moat counters (owner's h2h fixes): peak single-call window + call count
-    model_calls = 0
     steps = 0
     messages: list = []      # defined BEFORE the seed build so _park's closure is safe even if it throws
     seed_len = 0
@@ -1518,6 +1516,7 @@ def run_turn(*, build_slice, llm, tools, dispatch: Dispatcher, hooks: Hooks | No
     model_attempts: dict[int, int] = {}
     repeated_observation = _ObservationRepeatAdvisory()
     failure_origin = ""
+    response_only_next = False
     should_cancel = signal.is_set if signal is not None else None
 
     steer_state = {"broken": False}
@@ -1668,23 +1667,20 @@ def run_turn(*, build_slice, llm, tools, dispatch: Dispatcher, hooks: Hooks | No
         return observe
 
     def _account(usage: dict) -> None:
-        nonlocal total, peak_call_input, model_calls
+        nonlocal total
         typed = Usage.from_value(usage)
-        total = total + typed
         # Moat-measuring counters (owner's h2h fixes): the peak SINGLE-CALL context window —
         # cache-agnostic, the number that stays bounded for a slice and balloons for a transcript —
-        # and the apple-to-apple model-call count. Tracked at this single funnel so steps,
-        # closeouts, retries, and child work all count exactly once per physical call.
+        # and the apple-to-apple model-call count. They ride the Usage OBJECT (max/sum semantics in
+        # Usage.__add__) so the sealed turn record — not just the TurnEnd event — carries them.
         call_input = typed.input_other + typed.input_cache_read + typed.input_cache_creation
-        peak_call_input = max(peak_call_input, call_input)
-        if usage:
-            model_calls += 1
+        typed = Usage.from_value(
+            {**typed.as_dict(), "peak_call_input": call_input, "model_calls": 1 if usage else 0}
+        )
+        total = total + typed
 
     def _turn_usage() -> dict:
-        out = total.as_dict()
-        out["peak_call_input"] = peak_call_input
-        out["model_calls"] = model_calls
-        return out
+        return total.as_dict()
 
     def _park(reason: str, msg: str | None, *, closeout: bool = True,
               error_origin: str = "", error_kind: str = "") -> TurnResult:
@@ -1743,7 +1739,8 @@ def run_turn(*, build_slice, llm, tools, dispatch: Dispatcher, hooks: Hooks | No
                 return _park("max_steps", BUDGET_EXHAUSTED("max_steps"))
 
             steps += 1
-            call_schemas = schemas
+            call_schemas = [] if response_only_next else schemas
+            response_only_next = False
             before = _safe_advisory("before_step", lambda: hooks.before_step(steps))
             if before and before.get("stop_turn"):
                 # The built-in producer is the explicit token ceiling. Tool preflight stops belong to typed
@@ -1946,6 +1943,28 @@ def run_turn(*, build_slice, llm, tools, dispatch: Dispatcher, hooks: Hooks | No
                     if cont and cont.get("continue"):
                         messages.append({"role": "user", "content": cont.get("feedback") or "Continue."})
                         continue
+                    # Lifecycle completion and response delivery are distinct. Only procedures that
+                    # explicitly declared a typed output envelope participate here; ordinary turns remain
+                    # untouched. An exclusive lifecycle edge (notably workspace transport) owns this segment
+                    # and defers the logical request's deliverable to the resumed target workspace.
+                    candidate_check = None
+                    if stop == "end_turn" and not (cont and cont.get("exclusive")):
+                        candidate_check = _safe_advisory(
+                            "assess_terminal_candidate",
+                            lambda: hooks.assess_terminal_candidate(stop, candidate),
+                        )
+                    if candidate_check and candidate_check.get("continue"):
+                        # A response nudge is optional presentation help, never a reason to replace the
+                        # ordinary max-step boundary with an interruption. If no pass remains, publish the
+                        # model's candidate. The withheld candidate stays in the private trajectory only.
+                        if steps < max_steps:
+                            response_only_next = bool(candidate_check.get("response_only"))
+                            messages.append({
+                                "role": "user",
+                                "content": candidate_check.get("feedback")
+                                           or "Answer the user's request now.",
+                            })
+                            continue
                     if stop in ("max_tokens", "filtered"):
                         # #11: a truncated (length) or content-filtered response is INCOMPLETE — park it as
                         # interrupted instead of sealing a partial answer as a clean turn. Surface any partial

@@ -102,7 +102,7 @@ def _run(llm, hooks, *, max_steps=4):
     return result, events
 
 
-def test_first_tool_free_response_publishes_without_a_host_rewrite():
+def test_exact_missing_report_incident_gets_one_unpublished_correction():
     requirement = _requirement()
     hook = DeliverableCompletionHook(lambda: (requirement, requirement.logical_id))
     llm = _SequenceLLM(INCIDENT_META, VALID_REPORT)
@@ -111,9 +111,9 @@ def test_first_tool_free_response_publishes_without_a_host_rewrite():
 
     published = [event.content for event in events if isinstance(event, AssistantText)]
     assert result.stop_reason == "end_turn"
-    assert llm.calls == 1
-    assert len(llm.schemas[0]) == 1
-    assert published == [INCIDENT_META]
+    assert llm.calls == 2
+    assert len(llm.schemas[0]) == 1 and llm.schemas[1] == []
+    assert published == [VALID_REPORT]
     assert len([event for event in events if isinstance(event, TurnEnd)]) == 1
 
 
@@ -129,21 +129,21 @@ def test_normal_reports_need_no_template_and_finish_in_one_call():
         assert [event.content for event in events if isinstance(event, AssistantText)] == [report]
 
 
-def test_contract_assessment_never_creates_a_hidden_second_model_call():
+def test_second_placeholder_publishes_instead_of_becoming_a_completion_gate():
     requirement = _requirement()
-    llm = _SequenceLLM(INCIDENT_META, VALID_REPORT)
+    llm = _SequenceLLM(INCIDENT_META, INCIDENT_META)
 
     result, events = _run(
         llm, DeliverableCompletionHook(lambda: (requirement, requirement.logical_id)),
     )
 
     assert result.stop_reason == "end_turn"
-    assert llm.calls == 1
+    assert llm.calls == 2
     assert [event.content for event in events if isinstance(event, AssistantText)] == [INCIDENT_META]
     assert len([event for event in events if isinstance(event, TurnEnd)]) == 1
 
 
-def test_contract_assessment_does_not_consume_the_last_available_step():
+def test_nudge_never_turns_the_last_available_step_into_an_interruption():
     requirement = _requirement()
     llm = _SequenceLLM(INCIDENT_META, "a closeout that must never be requested")
     result, events = _run(
@@ -159,34 +159,23 @@ def test_contract_assessment_does_not_consume_the_last_available_step():
 def test_contract_scope_isolated_and_workspace_transport_can_own_its_edge():
     ordinary = _SequenceLLM(INCIDENT_META, PLAIN_REPORT)
     result, events = _run(ordinary, DeliverableCompletionHook(lambda: (None, "logical")))
-    assert result.stop_reason == "end_turn" and ordinary.calls == 1
-    assert [event.content for event in events if isinstance(event, AssistantText)] == [INCIDENT_META]
+    assert result.stop_reason == "end_turn" and ordinary.calls == 2
+    assert [event.content for event in events if isinstance(event, AssistantText)] == [PLAIN_REPORT]
 
     class _Handoff(Hooks):
-        def __init__(self):
-            self.continued = False
-
         def should_continue_after_stop(self, _stop_reason):
-            if self.continued:
-                return None
-            self.continued = True
-            return {
-                "continue": True,
-                "exclusive": True,
-                "feedback": "The workspace transport requires one continuation.",
-            }
+            return {"exclusive": True}
 
     requirement = _requirement()
-    transport = _SequenceLLM(INCIDENT_META, PLAIN_REPORT)
-    result, transport_events = _run(
+    transport = _SequenceLLM(INCIDENT_META)
+    result, _events = _run(
         transport,
         CompositeHooks(
             _Handoff(),
             DeliverableCompletionHook(lambda: (requirement, requirement.logical_id)),
         ),
     )
-    assert result.stop_reason == "end_turn" and transport.calls == 2
-    assert [event.content for event in transport_events if isinstance(event, AssistantText)] == [PLAIN_REPORT]
+    assert result.stop_reason == "end_turn" and transport.calls == 1
 
 
 def test_assessor_only_nudges_private_pointers_and_deferred_progress_updates():
@@ -212,6 +201,24 @@ Coverage is complete and there are no gaps.
     assert not assess_deliverable(requirement, deferred).complete
     assert assess_deliverable(requirement, vague).complete
     assert assess_deliverable(requirement, PLAIN_REPORT).complete
+
+
+def test_deferred_progress_update_after_a_wave_gets_one_response_only_nudge():
+    """The reported incident shape: children settled, the terminal candidate is a progress
+    update promising more inspection (or one that only answers a mid-wave steer) instead of
+    the deliverable — the turn continues once, response-only, and the real answer publishes."""
+    requirement = _requirement()
+    deferred = "Good, I have the Wave 1 findings. Let me confirm the Wave 2 reports before answering."
+    llm = _SequenceLLM(deferred, VALID_REPORT)
+
+    result, events = _run(
+        llm, DeliverableCompletionHook(lambda: (requirement, requirement.logical_id)),
+    )
+
+    assert result.stop_reason == "end_turn"
+    assert llm.calls == 2
+    assert llm.schemas[1] == []   # the nudge pass is response-only: no tool surface
+    assert [event.content for event in events if isinstance(event, AssistantText)] == [VALID_REPORT]
 
 
 def test_skill_metadata_emits_typed_activation_without_changing_workgraph_revision(tmp_path):

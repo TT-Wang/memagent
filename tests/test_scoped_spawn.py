@@ -494,8 +494,13 @@ def every_scoped_result_field_reaches_every_parent_surface():
     _Settled.effects = host._effects(result, "explorer", 1, "", "", "inv-2")   # seal failed
     assert not _has_committed_child(_Settled()), "no seal means nothing to protect"
     outcome = next(e.payload for e in effects if e.kind == "child_outcome")
-    for key in ("status", "stop_reason", "stop_cause", "report_completion", "partial", "steps"):
+    for key in ("status", "stop_reason", "stop_cause", "report_completion", "partial", "steps",
+                "explorer_evidence_status"):
         assert key in outcome, f"the progress reducer reads {key!r}; it is absent"
+    assert outcome["explorer_evidence_status"] == "content_partial"   # status="partial" above
+    artifact = next(e.payload for e in effects if e.kind == "child_artifact")
+    assert artifact["explorer_evidence_status"] == "content_partial", (
+        "the artifact effect must carry the same evidence label as the outcome effect")
     assert "report" not in outcome, "the body travels once, as prose — never duplicated into effects"
     usage = next(e.payload for e in effects if e.kind == "model_usage")
     assert usage.get("prompt_tokens") == 10, "child tokens must reach the parent's turn budget"
@@ -560,6 +565,42 @@ def the_coverage_display_counts_real_reports_end_to_end():
     row, _ = drive(truncated)
     assert row.phase == "partial" and row.report_completion == "partial", (row.phase,
                                                                           row.report_completion)
+
+
+@check
+def the_matrix_evidence_label_is_declared_by_the_child_end_to_end():
+    """FIELD REGRESSION: a 5-explorer review showed "evidence not assessed" on every row even
+    though all five reports reached the parent inline. Since 0.3 no producer declared
+    `explorer_evidence_status`, so the matrix defaulted to `not_assessed` forever. The label is
+    derived from the one canonical projection (ScopedResult.to_record): the report body travels
+    inline in the ToolResult, so a complete report is content_retained at settle time.
+    """
+    from sliceagent.events import TurnStarted
+    from sliceagent.progress import TurnProgress
+    from sliceagent.scoped_agent import ScopedResult
+    import sliceagent.scoped_spawn as sp
+
+    def drive(result):
+        host = _host(_workspace())
+        progress = TurnProgress(await_commit=False)
+        progress.reduce(TurnStarted(request="r", task_id="t", turn_id="t-1"))
+        orig = sp.run_scoped_agent
+        sp.run_scoped_agent = lambda *a, **k: result
+        try:
+            run_tool_batch([_TC({"agent": "explorer", "task": "review"})],
+                           host, progress.reduce, Hooks(), step=1, turn_id="t-1")
+        finally:
+            sp.run_scoped_agent = orig
+        return list(progress.snapshot().subagents)[-1]
+
+    healthy = ScopedResult(report="findings", status="ok", stop_reason="end_turn", steps=3)
+    assert drive(healthy).evidence_status == "content_retained"
+
+    truncated = ScopedResult(report="half", status="partial", stop_reason="max_tokens", steps=6)
+    assert drive(truncated).evidence_status == "content_partial"
+
+    empty = ScopedResult(report="", status="failed", stop_reason="error", steps=1)
+    assert drive(empty).evidence_status == "none"
 
 
 @check

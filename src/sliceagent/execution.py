@@ -209,6 +209,11 @@ class Usage(Mapping[str, int | float]):
     input_cache_creation: int = 0
     output: int = 0
     cost_usd: float | None = None
+    # Moat counters (owner's h2h fixes): peak SINGLE-CALL context window (max, not additive) and the
+    # apple-to-apple model-call count. First-class fields so the sealed turn record carries them —
+    # the TurnEnd EVENT dict alone never reaches the seal, which reads this object.
+    peak_call_input: int = 0
+    model_calls: int = 0
 
     def __post_init__(self) -> None:
         # Provider accounting is untrusted telemetry. Negative or malformed counters must never refund a
@@ -216,6 +221,7 @@ class Usage(Mapping[str, int | float]):
         for name in (
             "prompt_tokens", "completion_tokens", "input_other",
             "input_cache_read", "input_cache_creation", "output",
+            "peak_call_input", "model_calls",
         ):
             try:
                 value = max(0, int(getattr(self, name) or 0))
@@ -259,6 +265,8 @@ class Usage(Mapping[str, int | float]):
             input_cache_creation=integer("input_cache_creation"),
             output=integer("output"),
             cost_usd=cost,
+            peak_call_input=integer("peak_call_input"),
+            model_calls=integer("model_calls"),
         )
 
     def as_dict(self) -> dict[str, int | float]:
@@ -274,6 +282,8 @@ class Usage(Mapping[str, int | float]):
             out["cached_tokens"] = self.input_cache_read
         if self.cost_usd is not None:
             out["cost_usd"] = self.cost_usd
+        out["peak_call_input"] = self.peak_call_input
+        out["model_calls"] = self.model_calls
         return out
 
     def __getitem__(self, key: str) -> int | float:
@@ -296,6 +306,8 @@ class Usage(Mapping[str, int | float]):
             input_cache_creation=self.input_cache_creation + rhs.input_cache_creation,
             output=self.output + rhs.output,
             cost_usd=cost,
+            peak_call_input=max(self.peak_call_input, rhs.peak_call_input),  # a PEAK, never a sum
+            model_calls=self.model_calls + rhs.model_calls,
         )
 
 
