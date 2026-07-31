@@ -449,6 +449,45 @@ def seal_failure_never_gates_the_inline_report():
     assert "subagents/" not in str(out), "no locator may be advertised for a failed seal"
 
 
+@check
+def a_steer_cancelled_child_keeps_its_partial_report_typed_partial():
+    """FIX 1 child-side typing: cut off mid-flight by a STEER (a redirect, not a revocation), the
+    child settles with its sealed partial report — typed partial, never failed; with no report it
+    stays CANCELLED (↷). Parent-Esc (reason "cancel") keeps its discard semantics, so the
+    reclassification must key on the lease reason, not on the cancelled status alone."""
+    from sliceagent.loop import _ChildCancellationLease
+    from sliceagent.scoped_agent import ScopedResult
+    from sliceagent.execution import CHILD_CANCEL_SIGNAL_ARG
+    import sliceagent.scoped_spawn as sp
+
+    def drive(reason, report):
+        host = _host(_workspace())
+        lease = _ChildCancellationLease()
+        lease.request(reason)
+        orig = sp.run_scoped_agent
+        sp.run_scoped_agent = lambda *a, **k: ScopedResult(
+            report=report, status="cancelled", stop_reason="aborted", steps=4)
+        try:
+            return host.run("spawn_agent", {"agent": "explorer", "task": "x",
+                                            CHILD_CANCEL_SIGNAL_ARG: lease})
+        finally:
+            sp.run_scoped_agent = orig
+
+    out = drive("steer", "half findings")
+    assert "half findings" in str(out), "a steer-cancelled child's partial report was discarded"
+    assert out.status is not ToolStatus.CANCELLED
+    payload = next(e.payload for e in out.effects if e.kind == "child_outcome")
+    assert payload["status"] == "partial" and payload["partial"] is True
+    assert payload["stop_reason"] == "steer"
+
+    out = drive("steer", "")
+    assert out.status is ToolStatus.CANCELLED, "a no-report steer-cancelled child stays ↷ CANCELLED"
+
+    out = drive("cancel", "half findings")
+    assert "half findings" not in str(out), "parent-Esc must keep its discard semantics"
+    assert out.status is ToolStatus.CANCELLED
+
+
 # ── typed error edges ────────────────────────────────────────────────────────────────────────────
 
 @check

@@ -570,6 +570,78 @@ def per_job_reap_outranks_a_later_parent_cancel_in_assembly():
 
 
 @check
+def a_queued_steer_cuts_the_wave_early_and_keeps_every_report():
+    """FIELD REGRESSION: a steer typed during a 5-child fan-out had no drain point inside the batch,
+    so it waited for every child (measured 15+ min in live use). The scheduler's steer_probe cuts the
+    wave at its next boundary with kind "steer": in-flight children get their cancel lease + full seal
+    grace, the queued tail is abandoned as CANCELLED (↷ — a redirect, never ✗), and every report that
+    already completed survives untouched."""
+    fast_inv = ToolInvocation("fast-child", "spawn_agent", {}, 0)
+    partial_inv = ToolInvocation("partial-child", "spawn_agent", {}, 1)
+    quiet_inv = ToolInvocation("quiet-child", "spawn_agent", {}, 2)
+    start = time.monotonic()
+
+    def fast():
+        return ToolOutcome(fast_inv, ToolStatus.SUCCEEDED, "full report A")
+
+    def blocking(inv, report):
+        lease = threading.Event()
+
+        def run():
+            deadline = start + 30                       # natural settle: 30s from now
+            while time.monotonic() < deadline and not lease.is_set():
+                time.sleep(0.02)
+            if report:
+                # the child sealed a partial report inside its cancel grace — typed, kept
+                return ToolOutcome(inv, ToolStatus.SUCCEEDED, f"[partial] {report}")
+            return ToolOutcome(inv, ToolStatus.CANCELLED,
+                             "Not run to completion: the delegation was cancelled")
+        return run, lease
+
+    partial_run, partial_lease = blocking(partial_inv, "half findings B")
+    quiet_run, quiet_lease = blocking(quiet_inv, "")
+    tasks = [
+        ScheduledTool(fast_inv, ToolPurity.PURE_READ, fast, timeout_safe=False,
+                      request_cancel=lambda _kind: None, cancel_grace=0.2),
+        ScheduledTool(partial_inv, ToolPurity.PURE_READ, partial_run, timeout_safe=False,
+                      request_cancel=lambda _kind: partial_lease.set(), cancel_grace=0.2),
+        ScheduledTool(quiet_inv, ToolPurity.PURE_READ, quiet_run, timeout_safe=False,
+                      request_cancel=lambda _kind: quiet_lease.set(), cancel_grace=0.2),
+    ]
+    probe_at = start + 0.4
+    outcomes = run_ordered(tasks, lifecycle_timeout=30.0, lifecycle_absolute=60.0,
+                           steer_probe=lambda: time.monotonic() >= probe_at)
+    elapsed = time.monotonic() - start
+    assert elapsed < 10, f"the steer was held hostage by the wave for {elapsed:.1f}s (natural: 30s)"
+    assert len(outcomes) == 3
+    assert "full report A" in outcomes[0].text, "a completed report must survive the cutoff"
+    assert "half findings B" in outcomes[1].text, (
+        f"a steer-cancelled child's sealed partial report was discarded: {outcomes[1].text[:100]!r}")
+    assert outcomes[2].status is ToolStatus.CANCELLED, outcomes[2].status
+    for out in outcomes:
+        assert out.status is not ToolStatus.FAILED, (
+            f"a steer is a redirect — nothing may paint ✗: {out.status} {out.text[:80]!r}")
+
+
+@check
+def the_wave_runs_to_natural_settle_without_a_steer_probe():
+    """The negative-control shape: with no probe wired, the same wave holds every child to natural
+    completion — the pre-fix behaviour the probe exists to eliminate."""
+    inv = ToolInvocation("slow-child", "spawn_agent", {}, 0)
+    start = time.monotonic()
+
+    def slow():
+        time.sleep(1.2)
+        return ToolOutcome(inv, ToolStatus.SUCCEEDED, "slow done")
+
+    outcomes = run_ordered([
+        ScheduledTool(inv, ToolPurity.PURE_READ, slow, timeout_safe=False,
+                      request_cancel=lambda _kind: None, cancel_grace=0.1),
+    ], lifecycle_timeout=30.0, lifecycle_absolute=60.0)
+    assert time.monotonic() - start >= 1.2 and outcomes[0].status is ToolStatus.SUCCEEDED
+
+
+@check
 def queued_child_inactivity_starts_at_physical_admission():
     first_activity = ChildActivity()
     second_activity = ChildActivity()

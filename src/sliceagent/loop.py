@@ -854,7 +854,8 @@ def _audit_outcome(out, body_free_ids):
 
 
 def run_tool_batch(tool_calls, tools, dispatch: Dispatcher, hooks: Hooks, *, step: int = 0,
-                   turn_id: str = "", signal=None, call_namespace: str = ""):
+                   turn_id: str = "", signal=None, call_namespace: str = "",
+                   steer_probe=None):
     """Preflight and execute one provider batch through canonical typed outcomes.
 
     The return value retains its legacy ``(0, legacy_dicts)`` shape for callers; pre-handler rejections are
@@ -862,6 +863,10 @@ def run_tool_batch(tool_calls, tools, dispatch: Dispatcher, hooks: Hooks, *, ste
     synthetic error count. Only consecutive pure reads overlap; mutations and unknowns are ordered barriers. Generic
     deadlines apply only to declared pure reads: a reader settling during bounded grace is a normal failure,
     while one still running after grace is indeterminate and cancels every later wave.
+
+    ``steer_probe`` (optional, non-consuming) reports a user steer queued for this turn; a delegation
+    wave is one blocking batch with no drain point inside it, so a probe hit cuts the wave at its next
+    scheduler boundary with kind "steer" — the turn then delivers the steer at the upcoming step boundary.
     """
     # Freeze dynamic workspace/session routers for this physical batch. A daemon read whose start journal
     # crosses a deadline may finish its callback after the caller has sealed or switched workspace; bound
@@ -1264,6 +1269,7 @@ def run_tool_batch(tool_calls, tools, dispatch: Dispatcher, hooks: Hooks, *, ste
             lifecycle_absolute=_delegation_absolute(),
             on_outcomes=publish,
             should_cancel=(signal.is_set if signal is not None else None),
+            steer_probe=steer_probe,
         )
     except KeyboardInterrupt:
         # Finish every missing rejection/settlement/result edge for all known physical outcomes. The scheduler
@@ -1505,7 +1511,10 @@ def run_turn(*, build_slice, llm, tools, dispatch: Dispatcher, hooks: Hooks | No
     ``steer_queue`` (optional, e.g. queue.Queue) carries user input typed WHILE the turn runs. Drained
     only at step boundaries (top of loop, and once more before a clean exit so a last-second steer keeps
     the turn alive), each steer is appended as a plain user-role message and announced with
-    SteerDelivered; the in-flight model call is never aborted."""
+    SteerDelivered; the in-flight model call is never aborted. A delegation wave is one blocking tool
+    batch with no drain point inside it, so a queued steer ALSO reaches the scheduler through
+    ``_steer_pending``: the wave takes its ordinary cancellation cutoff (kind "steer", full seal grace,
+    completed reports kept) and the steer lands at the upcoming boundary in seconds, not after the wave."""
     hooks = hooks or Hooks()
     total = Usage()
     steps = 0
@@ -1648,6 +1657,22 @@ def run_turn(*, build_slice, llm, tools, dispatch: Dispatcher, hooks: Hooks | No
             dispatch(SteerDelivered(text, admission_id=admission_id))
             landed += 1
         return landed
+
+    def _steer_pending() -> bool:
+        """NON-CONSUMING peek: is a USER steer waiting in the queue?
+
+        Passed to the scheduler as ``steer_probe`` so a delegation wave can cut itself short at its
+        next boundary (kind "steer") instead of holding the steer hostage until every child settles.
+        A peer message is another agent's input, not a redirect — it never cuts a wave.
+        """
+        if steer_queue is None or steer_state["broken"]:
+            return False
+        try:
+            with steer_queue.mutex:
+                items = list(steer_queue.queue)
+        except Exception:  # noqa: BLE001 — a queue that fails to peek is treated as empty, never fatal
+            return False
+        return any(_classify_steer_item(item)[0] != "peer" for item in items)
     # Direct child reports are ordinary tool-result messages, but unlike reconstructible reads they are the
     # result of expensive delegated computation. Keep only their small identities here so overflow handling
     # can protect the corresponding message bodies without creating a second report store or fan-in packet.
@@ -1992,7 +2017,7 @@ def run_turn(*, build_slice, llm, tools, dispatch: Dispatcher, hooks: Hooks | No
                 tool_phase = True
                 _, results = run_tool_batch(
                     resp.tool_calls, tools, dispatch, hooks, step=steps, turn_id=turn_id,
-                    signal=signal, call_namespace=call_namespace,
+                    signal=signal, call_namespace=call_namespace, steer_probe=_steer_pending,
                 )
                 tool_phase = False
                 catastrophic_stop: str | None = None

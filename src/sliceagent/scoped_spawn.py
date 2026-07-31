@@ -380,6 +380,15 @@ class ScopedSpawnHost:
         if emitter is not None:
             emitter.settling()
 
+        if (result.status == "cancelled" and result.report
+                and str(getattr(cancel, "reason", "") or "") == "steer"):
+            # A steer is a redirect, not a revocation: a child cut off mid-flight keeps the partial
+            # report it produced — typed PARTIAL (never FAILED) — while a no-report child stays
+            # CANCELLED (↷). Reclassified BEFORE the seal/effects so every surface derives the same
+            # projection; parent-Esc discard semantics are untouched.
+            from dataclasses import replace as _replace
+            result = _replace(result, status="partial", stop_reason="steer")
+
         work_item_id = str(args.get("work_item_id") or "").strip()
         handle = self._seal(spec.name, brief, result, launch, work_item_id)
         effects = self._effects(result, spec.name, launch, work_item_id, handle,

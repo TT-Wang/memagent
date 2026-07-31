@@ -307,6 +307,7 @@ def _run_read_wave(
     absolute_timeout: float | None = None,
     should_cancel: Callable[[], bool] | None,
     on_partial: Callable[[list[ToolOutcome]], None] | None = None,
+    steer_probe: Callable[[], bool] | None = None,
 ) -> list[ToolOutcome]:
     """Run pure reads on cancellable daemon workers.
 
@@ -314,6 +315,11 @@ def _run_read_wave(
     launched worker that has not crossed that boundary is marked abandoned and can never run or announce
     later; an entered worker is honestly indeterminate if it cannot settle. This prevents post-settlement
     starts from contaminating a later task/workspace through the live dispatcher routers.
+
+    ``steer_probe`` (optional, non-consuming) reports a USER steer waiting in the turn's queue. A
+    delegation wave is one blocking tool batch with no drain point inside it, so a probe hit runs the
+    SAME per-job cutoff path a parent cancel uses — with kind ``steer`` — letting the loop reach its
+    next step boundary (and deliver the steer) in seconds instead of after the whole wave.
     """
     jobs = [_DaemonReadJob(task) for task in tasks]
     condition = threading.Condition()
@@ -614,12 +620,19 @@ def _run_read_wave(
             cutoff = False
             while True:
                 cancelled = should_cancel is not None and should_cancel()
+                steered = steer_probe is not None and steer_probe()
                 now = time.monotonic()
                 if not cancelled:
                     process_job_timeouts(now)
                 expired = deadline is not None and now >= deadline
-                if cancelled or expired:
-                    establish_cutoff("cancel" if cancelled else "deadline", now if cancelled else deadline)
+                if cancelled or expired or steered:
+                    # A pending user steer cuts the wave like a parent cancel — the user redirected.
+                    # In-flight children get their cancel lease (and full seal grace below); the
+                    # queued tail is abandoned; completed work is already a fact and survives.
+                    establish_cutoff(
+                        "cancel" if cancelled else "deadline" if expired else "steer",
+                        now if (cancelled or steered) else deadline,
+                    )
                     break
 
                 # Harvest typed uncertainty before reusing a worker slot. In particular, a child model
@@ -735,7 +748,9 @@ def _run_read_wave(
             # Ordinary reads retain the short deadline grace. A lifecycle child advertises enough additional
             # time for its cancellable SSE/tool stack to prove closure. Parent cancellation uses the same lease:
             # returning immediately would recreate the late-provider/occupied-slot bug under a different cause.
-            if not per_job_liveness or cancelled or expired:
+            # A steer cutoff keeps the SAME grace — the user redirected scope, and the child must still get
+            # its full window to seal a partial report; nothing about the redirect shortens it.
+            if not per_job_liveness or cancelled or expired or cutoff_kind == "steer":
                 lifecycle_graces = [
                     max(0.0, float(jobs[index].task.cancel_grace or 0.0))
                     for index in late if jobs[index].task.request_cancel is not None
@@ -782,6 +797,8 @@ def _run_read_wave(
 
     if cutoff_kind == "cancel":
         not_started_reason = "turn cancellation requested before execution started"
+    elif cutoff_kind == "steer":
+        not_started_reason = "a user steer redirected the turn before execution started"
     else:
         not_started_reason = "deadline elapsed before execution started"
 
@@ -830,7 +847,7 @@ def _run_read_wave(
                 ))
             else:
                 outcomes.append(_indeterminate_read(
-                    job.task, timeout, cancelled=cutoff_kind == "cancel",
+                    job.task, timeout, cancelled=cutoff_kind in ("cancel", "steer"),
                 ))
         elif index in late:
             # The deadline invalidates an otherwise ordinary late result, but it cannot erase stronger typed
@@ -845,8 +862,13 @@ def _run_read_wave(
                     if job_timeout_kind.get(index) == "absolute" else
                     "delegation deadline"
                 )
+                boundary = (
+                    limit if cutoff_kind == "deadline" else
+                    "a user steer" if cutoff_kind == "steer" else
+                    "parent cancellation"
+                )
                 outcomes.append(settled.with_text(
-                    f"{settled.text} (the {limit if cutoff_kind == 'deadline' else 'parent cancellation'} "
+                    f"{settled.text} (the {boundary} "
                     "also elapsed without a proven clean child result)"
                 ))
             elif _has_committed_child(settled):
@@ -858,20 +880,27 @@ def _run_read_wave(
                 timeout_value = (
                     absolute_timeout if job_timeout_kind.get(index) == "absolute" else timeout
                 )
-                outcomes.append(
-                    # An existing PER-JOB reap outranks a later wave-level cancel: the child's
-                    # inactivity/absolute cutoff is a recorded fact about the child, and assembling it
-                    # as plain parent-cancel discarded both the classification and the typed
-                    # timeout_kind (the reap→settle→sibling-live→parent-cancel race).
-                    _closed_lifecycle_timeout(
-                        job.task, settled, timeout_value, job_timeout_kind.get(index, "deadline"),
+                if cutoff_kind == "steer":
+                    # A steer is a redirect, not a revocation: the child typed its own outcome — a
+                    # partial report it sealed during grace (kept, typed partial), or a clean cancel
+                    # (↷, never ✗). Discarding late deliverables like a parent cancel would throw away
+                    # exactly the partial work the user still wants.
+                    outcomes.append(settled)
+                else:
+                    outcomes.append(
+                        # An existing PER-JOB reap outranks a later wave-level cancel: the child's
+                        # inactivity/absolute cutoff is a recorded fact about the child, and assembling it
+                        # as plain parent-cancel discarded both the classification and the typed
+                        # timeout_kind (the reap→settle→sibling-live→parent-cancel race).
+                        _closed_lifecycle_timeout(
+                            job.task, settled, timeout_value, job_timeout_kind.get(index, "deadline"),
+                        )
+                        if cutoff_kind == "deadline" or index in job_timeout_kind else
+                        _closed_lifecycle_cancel(job.task, settled)
                     )
-                    if cutoff_kind == "deadline" or index in job_timeout_kind else
-                    _closed_lifecycle_cancel(job.task, settled)
-                )
             else:
                 outcomes.append(_late_read(
-                    job.task, timeout, cancelled=cutoff_kind == "cancel",
+                    job.task, timeout, cancelled=cutoff_kind in ("cancel", "steer"),
                 ))
         else:
             outcomes.append(_job_result(job))
@@ -886,6 +915,7 @@ def _run_wave(
     absolute_timeout: float | None = None,
     should_cancel: Callable[[], bool] | None = None,
     on_partial: Callable[[list[ToolOutcome]], None] | None = None,
+    steer_probe: Callable[[], bool] | None = None,
 ) -> list[ToolOutcome]:
     if not tasks:
         return []
@@ -904,6 +934,7 @@ def _run_wave(
             tasks, max_workers=wave_workers, timeout=timeout, absolute_timeout=absolute_timeout,
             should_cancel=should_cancel,
             on_partial=on_partial,
+            steer_probe=steer_probe,
         )
     if len(tasks) != 1:
         raise RuntimeError("an effectful scheduler wave must contain exactly one barrier")
@@ -919,6 +950,7 @@ def run_ordered(
     lifecycle_absolute: float | None = None,
     on_outcomes: Callable[[list[ToolOutcome]], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
+    steer_probe: Callable[[], bool] | None = None,
 ) -> list[ToolOutcome]:
     """Run pure-read waves and ordered barriers, preserving provider result order.
 
@@ -926,6 +958,8 @@ def run_ordered(
     a proven ``cancelled`` outcome so every provider invocation still has one reply. Lifecycle
     waves always retain a final absolute leak guard: callers that omit the optional override or
     pass ``None`` receive the same fail-closed 3600-second default as the production host.
+    ``steer_probe`` reports a queued user steer mid-wave; a hit cuts the wave at its next
+    boundary with kind ``steer`` so the turn can deliver it promptly.
     """
     effective_lifecycle_absolute = (
         DEFAULT_LIFECYCLE_ABSOLUTE
@@ -1016,6 +1050,7 @@ def run_ordered(
                 # ordinary publication callback before the interrupt propagates, so a finished sibling's sealed
                 # work is never re-labelled indeterminate by the caller's synthesizer.
                 on_partial=on_outcomes,
+                steer_probe=steer_probe,
             )
             executed_by_task = {id(task): outcome for task, outcome in zip(ready, executed)}
             wave_outcomes = [prepared.get(id(task), executed_by_task.get(id(task))) for task in wave]
