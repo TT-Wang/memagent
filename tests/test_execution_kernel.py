@@ -642,6 +642,44 @@ def the_wave_runs_to_natural_settle_without_a_steer_probe():
 
 
 @check
+def a_prompting_command_fails_fast_instead_of_hanging_to_the_deadline():
+    """FIELD: `npx tsc --noEmit && npm run build` sat at 0% CPU for 4+ minutes — a child in the
+    chain was reading the INHERITED TTY stdin, invisible behind the TUI, until the deadline reaped
+    it. One-shot runs have no stdin BY CONTRACT (terminal.py says so, procman enforces it): DEVNULL
+    makes a prompt fail fast and readably, and stops the child competing with the TUI."""
+    from sliceagent.tools import LocalToolHost
+
+    with tempfile.TemporaryDirectory(prefix="stdin-contract-") as root:
+        host = LocalToolHost(root=root)
+        start = time.monotonic()
+        out = host.run("run_command", {"command": "read -r answer", "timeout": 10})
+        elapsed = time.monotonic() - start
+        assert elapsed < 8, f"a prompt hung for {elapsed:.1f}s — stdin is still being inherited"
+        assert "timed out" not in str(out).lower(), str(out)[:160]
+        assert "ok" in host.run("run_command", {"command": "echo ok"}), "ordinary commands unaffected"
+        if os.name != "nt":
+            # deterministic pin: the child's fd 0 must BE /dev/null. Point the PARENT's fd 0 at a
+            # real file first, so an inheriting child provably sees NOT-/dev/null regardless of what
+            # the harness's own stdin happens to be.
+            with open(os.path.join(root, "probe_stdin.py"), "w", encoding="utf-8") as f:
+                f.write("import os\n"
+                        "print('NULL' if os.fstat(0).st_rdev == os.stat('/dev/null').st_rdev "
+                        "else 'OTHER')\n")
+            saved_fd = os.dup(0)
+            real_file = os.open(os.path.join(root, "probe_stdin.py"), os.O_RDONLY)
+            os.dup2(real_file, 0)
+            try:
+                out = host.run("run_command", {"command": "python3 probe_stdin.py"})
+                assert "NULL" in str(out), str(out)[:120]
+                out = host.run("execute_code", {"code": "print(run('python3 probe_stdin.py'))"})
+                assert "NULL" in str(out), f"the execute_code prelude inherits stdin too: {str(out)[:160]}"
+            finally:
+                os.dup2(saved_fd, 0)
+                os.close(saved_fd)
+                os.close(real_file)
+
+
+@check
 def queued_child_inactivity_starts_at_physical_admission():
     first_activity = ChildActivity()
     second_activity = ChildActivity()

@@ -100,6 +100,13 @@ class LocalSandbox(BaseSandbox):
         try:
             process = subprocess.Popen(
                 **_sh(command), **popen_group_kwargs(), cwd=cwd, env=env,
+                # One-shot runs have NO stdin by contract (terminal.py: "Sandbox.run is one-shot and
+                # has no stdin"; procman already launches with DEVNULL; interactive work belongs to
+                # terminal_open's pty). Inheriting the parent's real TTY let a prompting child (npm,
+                # git credential helpers, ssh, sudo) hang invisibly at 0% CPU until the deadline —
+                # indistinguishable from a slow command, and fighting the TUI for the terminal.
+                # DEVNULL makes the prompt fail fast and readably instead.
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             )
             stdout, stderr = process.communicate(timeout=timeout)

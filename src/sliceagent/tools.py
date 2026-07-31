@@ -165,6 +165,9 @@ def _kill_run_tree(process, force=False):
 
 def run(cmd, timeout=120):
     _p = _sp.Popen(cmd, shell=True, stdout=_sp.PIPE, stderr=_sp.PIPE, text=True,
+                   # same contract as sandbox.run: one-shot, no stdin — a prompt fails fast
+                   # instead of hanging invisibly until the deadline
+                   stdin=_sp.DEVNULL,
                    **_run_group_kwargs())
     try:
         _stdout, _stderr = _p.communicate(timeout=timeout)
