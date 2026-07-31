@@ -3043,6 +3043,31 @@ def an_abandoned_readers_slot_is_released_so_the_session_never_blinds():
             _TIMEOUT_READER_SLOTS.release()
 
 
+@check
+def a_running_command_emits_a_byte_evidence_heartbeat():
+    """FIELD (the review's Family H): a running command showed nothing but a spinner until exit —
+    120s default, 600s ceiling, and a degraded-but-alive command was indistinguishable from a hung
+    one. The wait loop now reports the output byte count ~1/s over the presentation-only
+    host_activity channel: a growing count names progress, a frozen one names a stall."""
+    from sliceagent.tools import LocalToolHost
+
+    root = tempfile.mkdtemp(prefix="heartbeat-")
+    beats = []
+    host = LocalToolHost(root=root)
+    host._verify_notify = beats.append
+    out = host.run("run_command",
+                   {"command": "for i in 1 2 3; do printf 'tick-%4096s' x; echo; sleep 1.2; done",
+                    "timeout": 10})
+    assert "tick-" in str(out)
+    assert len(beats) >= 2, f"no heartbeat reached the host channel: {beats}"
+    sizes = [float(b.split("·")[-1].strip().split(" ")[0]) for b in beats if " KB output" in b]
+    assert len(sizes) >= 2 and sizes[-1] > sizes[0], f"the byte count must GROW with output: {beats}"
+    # and without the channel, nothing fires (presentation is opt-in)
+    host2 = LocalToolHost(root=root)
+    out2 = host2.run("run_command", {"command": "echo done", "timeout": 5})
+    assert "done" in str(out2)
+
+
 if __name__ == "__main__":
     main()
 

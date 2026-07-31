@@ -76,6 +76,10 @@ class BaseSandbox:
         # interrupted. run_turn binds the turn's signal event here so a blocking wait can be
         # aborted from the LIVE UI, where no real SIGINT reaches the turn's worker thread.
         self.cancel_poll = None
+        # Optional liveness heartbeat: called with the command's current output byte count (~1/s)
+        # while the wait runs — the status line then shows EVIDENCE of progress (bytes growing =
+        # alive; frozen = stalled) instead of a bare spinner (the review's Family H).
+        self.activity_cb = None
 
     def run(self, command: str, *, cwd: str, timeout: float, on_timeout=None) -> tuple[int, str]:
         code, out = self._exec(command, cwd=cwd, timeout=timeout, on_timeout=on_timeout)
@@ -109,7 +113,7 @@ class LocalSandbox(BaseSandbox):
         log_fh.seek(0)
         return log_fh.read()
 
-    def _wait_or_cancel(self, process, timeout: float) -> None:
+    def _wait_or_cancel(self, process, timeout: float, size_probe=None) -> None:
         """Bounded wait that also watches the turn's cancel token.
 
         process.wait(timeout=…) is a single uninterruptible syscall: in the LIVE UI (the turn runs
@@ -117,10 +121,13 @@ class LocalSandbox(BaseSandbox):
         that nothing inside this wait could see — the user was held for the command's full remaining
         runtime. The poll loop (Hermes' base.py pattern) re-checks the token every 50 ms and
         converts it into the same KeyboardInterrupt a physical Ctrl-C raises on the plain path, so
-        the ONE existing reaper serves both frontends.
+        the ONE existing reaper serves both frontends. ``size_probe`` (optional) returns the
+        command's current output byte count and is reported to activity_cb ~1/s — liveness as
+        EVIDENCE, not a spinner.
         """
         import time as _time
         deadline = _time.monotonic() + max(0.0, timeout)
+        next_beat = _time.monotonic() + 1.0
         while True:
             rc = process.poll()
             if rc is not None:
@@ -133,6 +140,13 @@ class LocalSandbox(BaseSandbox):
                     cancelled = False
                 if cancelled:
                     raise KeyboardInterrupt
+            if size_probe is not None and self.activity_cb is not None \
+                    and _time.monotonic() >= next_beat:
+                next_beat = _time.monotonic() + 1.0
+                try:
+                    self.activity_cb(size_probe())
+                except Exception:  # noqa: BLE001 — liveness must never affect the command
+                    pass
             remaining = deadline - _time.monotonic()
             if remaining <= 0:
                 raise subprocess.TimeoutExpired(process.args, timeout)
@@ -159,7 +173,8 @@ class LocalSandbox(BaseSandbox):
                 stdin=subprocess.DEVNULL,
                 stdout=log_fh, stderr=subprocess.STDOUT, text=True,
             )
-            self._wait_or_cancel(process, timeout)
+            self._wait_or_cancel(process, timeout,
+                                 size_probe=lambda: os.path.getsize(log_path))
             return process.returncode, self._read_log_fh(log_fh)
         except subprocess.TimeoutExpired:
             if on_timeout is not None:

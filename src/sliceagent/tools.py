@@ -2034,11 +2034,30 @@ class LocalToolHost:
         # Optional per-call timeout (default self.timeout, hard ceiling 600s) so slow builds don't
         # die at the 30s default and come back as exit 124. Long-lived processes use proc_start.
         t = self._call_timeout(args.get("timeout"))
-        code, out = self.sandbox.run(
-            args["command"], cwd=self.root(), timeout=t,
-            on_timeout=(self._adopt_on_timeout(args["command"], t)
-                        if self._proc_tools_available() else None),
-        )
+        activity_cb = None
+        if callable(self._verify_notify):
+            # Liveness as EVIDENCE (the review's Family H): the status line shows the output byte
+            # count growing ~1/s while the command runs — a frozen counter names a stall, a growing
+            # one names progress. Rides the presentation-only host_activity channel, never the journal.
+            label = " ".join(str(args.get("command") or "").split())[:40]
+            def activity_cb(nbytes):
+                try:
+                    kb = nbytes / 1024
+                    self._verify_notify(f"run · {label} · {kb:.1f} KB output")
+                except Exception:  # noqa: BLE001 — liveness must never affect the command
+                    pass
+        prev_cb = getattr(self.sandbox, "activity_cb", None)
+        if activity_cb is not None:
+            self.sandbox.activity_cb = activity_cb
+        try:
+            code, out = self.sandbox.run(
+                args["command"], cwd=self.root(), timeout=t,
+                on_timeout=(self._adopt_on_timeout(args["command"], t)
+                            if self._proc_tools_available() else None),
+            )
+        finally:
+            if activity_cb is not None:
+                self.sandbox.activity_cb = prev_cb
         self._grant_shell_paths(args.get("command", ""))  # I2 reach=action: dirs the shell touched
         out = out.strip()
         if code == SANDBOX_ADOPTED:
