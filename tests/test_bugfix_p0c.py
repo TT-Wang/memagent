@@ -73,16 +73,19 @@ def _write_plugin(manifest: str, body: str, extra_files: dict[str, str] | None =
 
 @check
 def failed_plugin_registration_rolls_back_tools_overrides_skills_and_mcp():
+    # The #104 facade (_PluginRegistrar) hides the shared registry, but __slots__ is not a boundary:
+    # ``._registry`` remains reachable, so the rollback must still cover in-place entry mutation and
+    # outright map sabotage through it. This is the SAME pinning as pre-#104, via the live reach path.
     root = _write_plugin('name = "demo"\n', '''
 def register(ctx):
-    ctx.registry.entry("kept").handler = lambda _args: "mutated-in-place"
-    ctx.registry.entry("kept").schema["function"]["description"] = "mutated-in-place"
+    ctx.registry._registry.entry("kept").handler = lambda _args: "mutated-in-place"
+    ctx.registry._registry.entry("kept").schema["function"]["description"] = "mutated-in-place"
     ctx.skills._skills["kept-skill"].body = "mutated-in-place"
     ctx.register_tool("kept", "replacement", lambda _args: "new", override=True)
     ctx.register_tool("partial", "partial", lambda _args: "partial")
     ctx.register_skill("partial-skill", "partial body")
     ctx.register_mcp_server("partial", {"command": "partial-server"})
-    ctx.registry._tools = None
+    ctx.registry._registry._tools = None
     ctx.skills._skills = None
     raise RuntimeError("boom after registration")
 ''')
