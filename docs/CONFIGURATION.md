@@ -2,7 +2,7 @@
 
 _Auto-generated from `src/sliceagent/envspec.py` — do not edit by hand (`python scripts/gen_config_reference.py`)._
 
-sliceagent reads **60** environment variables across **6** groups; every value is validated at startup (a misspelled enum warns instead of silently defaulting). Run `sliceagent config --list` to see the resolved value of each on your machine. Secrets (🔒) are read from the environment / config and never printed.
+sliceagent reads **61** environment variables across **6** groups; every value is validated at startup (a misspelled enum warns instead of silently defaulting). Run `sliceagent config --list` to see the resolved value of each on your machine. Secrets (🔒) are read from the environment / config and never printed.
 
 ## agent
 
@@ -25,6 +25,7 @@ sliceagent reads **60** environment variables across **6** groups; every value i
 | `AGENT_ROOT` | — | Workspace root override (defaults to the current directory). |
 | `AGENT_ROUTER` | `lexical` | Topic router: lexical (instant, no LLM) or llm (classifier round-trip). _(choices: lexical, llm)_ |
 | `AGENT_SANDBOX` | `local` | Tool sandbox backend; docker requires POSIX/WSL2 (native Windows: use local or run under WSL2). _(choices: local, docker)_ |
+| `AGENT_SPAWN_SCOPE_MAX_TOKENS` | `40000` | Hard ceiling on one spawned child's MEASURED scope size in source tokens (bytes/4, ignore-aware). Over the ceiling the spawn is rejected with a steer telling the model to split the partition. The 20-30k guidance stays advisory; this gate only catches gross overshoot. scope absent/unmeasurable → no gate. |
 | `AGENT_SUBAGENT_DEPTH` | `1` | Max delegation depth for spawn_agent (0=off). |
 | `AGENT_THINKING` | — | Set to 'off' to disable reasoning (alias for AGENT_REASONING=fast). |
 | `AGENT_TOOL_TIMEOUT` | — | Outer deadline for declared pure-read tools in seconds (0/unset = off). |

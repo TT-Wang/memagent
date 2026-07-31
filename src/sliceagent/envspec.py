@@ -40,6 +40,11 @@ REGISTRY: list[EnvVar] = [
     EnvVar("AGENT_MINE", "agent", "Opt-in lesson/skill-candidate mining mode for end-of-session "
            "consolidation: deterministic, llm, or off. Automatic skill candidates stay inactive.", "off"),
     EnvVar("AGENT_SUBAGENT_DEPTH", "agent", "Max delegation depth for spawn_agent (0=off).", "1"),
+    EnvVar("AGENT_SPAWN_SCOPE_MAX_TOKENS", "agent", "Hard ceiling on one spawned child's MEASURED "
+           "scope size in source tokens (bytes/4, ignore-aware). Over the ceiling the spawn is "
+           "rejected with a steer telling the model to split the partition. The 20-30k guidance "
+           "stays advisory; this gate only catches gross overshoot. scope absent/unmeasurable → "
+           "no gate.", "40000"),
     EnvVar("AGENT_TOPIC_TOOLS", "agent", "Expose model-callable topic switching (off by default; host "
            "routing and slash commands remain available).", ""),
     EnvVar("AGENT_ADVANCED_TOOLS", "agent", "Expose persistent process and interactive terminal tools; "

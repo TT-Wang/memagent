@@ -20,6 +20,7 @@ existing subagents/sub-N.md reader, FTS mirror, and recall surface consume it un
 """
 from __future__ import annotations
 
+import os
 import threading
 from collections.abc import Iterable, Mapping
 
@@ -61,6 +62,72 @@ def _steered(message: str) -> ToolText:
     if text.startswith("Error: "):
         text = text[len("Error: "):]
     return ToolText(text, status=ToolStatus.STEERED)
+
+
+# The project's existing source-weight estimate (comprehensive-code-review skill and the spawn
+# schema's own guidance: "20–30k source tokens, or 80–120 KB of source" — i.e. ~4 bytes per token).
+# ONE ratio, documented here — not a second estimator.
+_SOURCE_BYTES_PER_TOKEN = 4
+
+
+def _spawn_scope_max_tokens() -> int:
+    """Hard ceiling on one child's measured scope (AGENT_SPAWN_SCOPE_MAX_TOKENS, default 40000).
+
+    The 20–30k advice lives in prose and is ignored under pressure — a live review produced 80–116k
+    partitions, and a child that size cannot finish inside the delegation window (p90 ≈ 16 min vs
+    the 900s inactivity reap), so every large wave read as a hang. The gate catches gross overshoot;
+    the soft advice is unchanged. 0/invalid → the default.
+    """
+    import os
+    raw = os.environ.get("AGENT_SPAWN_SCOPE_MAX_TOKENS", "").strip()
+    try:
+        v = int(raw)
+        return v if v > 0 else 40000
+    except ValueError:
+        return 40000
+
+
+def _scope_source_bytes(root: str, entries) -> tuple[int, int]:
+    """Measured source size of the named scope paths: (bytes, file_count). Unresolvable entries
+    count as zero — scope stays prose for them; only measurable paths gate.
+
+    Prefer `rg --files` (ignore-aware: .gitignore/vendor/build output never inflates the count);
+    fall back to a plain walk when ripgrep is unavailable (conservative: counts everything).
+    Task-agnostic by construction — bytes only, no language or task-type logic.
+    """
+    import shutil
+    import subprocess
+
+    total, files = 0, 0
+    for entry in entries:
+        path = os.path.join(root, entry)
+        if os.path.isfile(path):
+            total += os.path.getsize(path)
+            files += 1
+        elif os.path.isdir(path):
+            if shutil.which("rg") is not None:
+                try:
+                    out = subprocess.run(["rg", "--files", path], capture_output=True, text=True,
+                                         timeout=30).stdout
+                    names = [ln for ln in out.splitlines() if ln.strip()]
+                except Exception:  # noqa: BLE001 — fall through to the plain walk
+                    names = None
+                if names is not None:
+                    for name in names:
+                        try:
+                            total += os.path.getsize(name)
+                            files += 1
+                        except OSError:
+                            continue
+                    continue
+            for dirpath, _dirnames, filenames in os.walk(path):
+                for filename in filenames:
+                    try:
+                        total += os.path.getsize(os.path.join(dirpath, filename))
+                        files += 1
+                    except OSError:
+                        continue
+    return total, files
 
 
 def _standing_constraints(intent_state) -> tuple[str, ...]:
@@ -341,6 +408,27 @@ class ScopedSpawnHost:
         brief, err = self._brief(task, args)
         if err is not None:
             return err
+        scope_entries = args.get("scope") or ()
+        scope_entries = ((scope_entries,) if isinstance(scope_entries, str)
+                         else tuple(str(s) for s in scope_entries if str(s).strip()))
+        if scope_entries:
+            # The 20–30k source-token guidance is prose and is ignored under pressure (a live review
+            # produced 80–116k partitions; p90 child ≈ 16 min vs the 900s inactivity reap — every
+            # large wave read as a hang). Measure what is measurable and reject gross overshoot
+            # LOUDLY. Unresolvable entries measure as zero: scope stays optional, so an unmeasurable
+            # scope keeps the old behavior rather than failing closed.
+            ceiling = _spawn_scope_max_tokens()
+            root_fn = getattr(self._inner, "root", None)
+            root = root_fn() if callable(root_fn) else os.getcwd()
+            src_bytes, src_files = _scope_source_bytes(root, scope_entries)
+            measured = src_bytes // _SOURCE_BYTES_PER_TOKEN
+            if src_bytes and measured > ceiling:
+                return _steered(
+                    f"scope too large to finish: ~{measured:,} source tokens measured "
+                    f"({src_bytes:,} bytes across {src_files} files), ceiling {ceiling:,} "
+                    "(AGENT_SPAWN_SCOPE_MAX_TOKENS). A child that size cannot settle inside the "
+                    "delegation window — SPLIT this scope into smaller partitions and spawn one "
+                    "child per partition (guidance: 20–30k source tokens each).")
         cancel = args.get(CHILD_CANCEL_SIGNAL_ARG)          # loop-injected; Event-like, parent-composed
         activity = args.get(CHILD_ACTIVITY_ARG)             # loop-injected; shared monotonic liveness cell
         invocation_id = str(args.get(CHILD_INVOCATION_ID_ARG) or "")

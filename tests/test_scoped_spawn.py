@@ -488,6 +488,45 @@ def a_steer_cancelled_child_keeps_its_partial_report_typed_partial():
     assert out.status is ToolStatus.CANCELLED
 
 
+@check
+def oversized_scope_is_rejected_loudly_with_the_measured_number():
+    """FIX 2 (field: p90 child ≈ 16 min vs the 900s window — partitions of 80–116k tokens against a
+    20–30k prose guidance that is ignored). scope is already first-class; it is now MEASURED and
+    gated: over the ceiling the spawn is steered loudly with the measured size, never launched;
+    under it, business as usual; scope absent → ungated by design."""
+    root = _workspace()
+    os.makedirs(os.path.join(root, "small"))
+    os.makedirs(os.path.join(root, "big"))
+    with open(os.path.join(root, "small", "s.py"), "w", encoding="utf-8") as f:
+        f.write("x = 1\n" * 9000)        # 54,000 bytes ≈ 13,500 tokens
+    with open(os.path.join(root, "big", "b.py"), "w", encoding="utf-8") as f:
+        f.write("y = 2\n" * 80000)       # 480,000 bytes ≈ 120,000 tokens
+    host = _host(root)
+
+    out = host.run("spawn_agent", {"agent": "explorer", "task": "review", "scope": ["big/"]})
+    assert out.status == ToolStatus.STEERED, f"an oversized scope must never launch: {out.status}"
+    text = str(out)
+    assert "120,000" in text, f"the measured size must be named: {text[:200]!r}"
+    assert "40,000" in text and "SPLIT" in text, text[:240]
+
+    out = host.run("spawn_agent", {"agent": "explorer", "task": "review", "scope": ["small/"]})
+    assert out.status != ToolStatus.STEERED and "REPORT" in str(out), str(out)[:160]
+
+    out = host.run("spawn_agent", {"agent": "explorer", "task": "review"})
+    assert "REPORT" in str(out), "scope absent → unchanged behaviour"
+
+    prior = os.environ.get("AGENT_SPAWN_SCOPE_MAX_TOKENS")
+    os.environ["AGENT_SPAWN_SCOPE_MAX_TOKENS"] = "10000"
+    try:
+        out = host.run("spawn_agent", {"agent": "explorer", "task": "review", "scope": ["small/"]})
+        assert out.status == ToolStatus.STEERED and "13,500" in str(out), str(out)[:200]
+    finally:
+        if prior is None:
+            os.environ.pop("AGENT_SPAWN_SCOPE_MAX_TOKENS", None)
+        else:
+            os.environ["AGENT_SPAWN_SCOPE_MAX_TOKENS"] = prior
+
+
 # ── typed error edges ────────────────────────────────────────────────────────────────────────────
 
 @check
