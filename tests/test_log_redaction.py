@@ -62,5 +62,28 @@ def main():
     sys.exit(1 if failed else 0)
 
 
+def no_proxy_is_not_a_credential_and_survives_the_env_scrub():
+    """The _PROXY$ alternative in the secret-scrub regex also matched NO_PROXY — a routing list, not
+    a credential. On a proxy-only network every network command then stalled to the deadline and
+    came back a false FAILED with no hint the cause was a deleted environment variable (the
+    review's F2). Proxy credentials still get scrubbed."""
+    import os
+    from sliceagent.sandbox import _scrub_env
+    old = dict(os.environ)
+    try:
+        os.environ["NO_PROXY"] = "internal.corp,localhost"
+        os.environ["HTTP_PROXY"] = "http://user:pass@proxy:8080"
+        os.environ["MY_API_KEY"] = "sk-secret"
+        env = _scrub_env()
+        assert env.get("NO_PROXY") == "internal.corp,localhost", "NO_PROXY must survive — it is not a credential"
+        assert "HTTP_PROXY" not in env, "a credential-bearing proxy URL must still be scrubbed"
+        assert "MY_API_KEY" not in env
+    finally:
+        os.environ.clear(); os.environ.update(old)
+
+
+CHECKS.append(no_proxy_is_not_a_credential_and_survives_the_env_scrub)
+
+
 if __name__ == "__main__":
     main()

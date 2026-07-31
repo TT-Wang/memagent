@@ -30,7 +30,7 @@ from .platform_compat import (IS_WINDOWS, SIG_KILL, kill_tree,
 # env var names whose values are secrets the child shouldn't see by default
 _SECRET_RE = re.compile(
     r"(API_KEY|SECRET|TOKEN|PASSWORD|PASSWD|CREDENTIAL|ACCESS_KEY|PRIVATE_KEY|"
-    r"_PROXY$|^HTTPS?_PROXY$|^ALL_PROXY$)",
+    r"(?<!NO)_PROXY$|^HTTPS?_PROXY$|^ALL_PROXY$)",
     re.IGNORECASE,
 )
 

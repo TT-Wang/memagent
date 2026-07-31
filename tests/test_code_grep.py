@@ -236,5 +236,38 @@ def main():
     sys.exit(1 if failed else 0)
 
 
+def rg_exit2_with_results_is_partial_success_not_failure():
+    """FIELD (the review's Family F): one unreadable directory anywhere in the workspace made rg
+    exit 2, and BOTH grep and glob typed it as total failure — discarding correct matches,
+    permanently disabling search for the session, and (measured) +52% wall / +34% tokens while the
+    agent retried a permanently-failing tool. Hermes' rule: an error only when NO payload remains."""
+    if os.name == "nt" or os.geteuid() == 0:
+        return  # chmod 000 has no effect on Windows / for root
+    root = tempfile.mkdtemp(prefix="rg-partial-")
+    with open(os.path.join(root, "calc.py"), "w") as f:
+        f.write("def add(a, b):\n    return a + b\n")
+    os.mkdir(os.path.join(root, "secret"))
+    with open(os.path.join(root, "secret", "hidden.py"), "w") as f:
+        f.write("def hidden():\n    pass\n")
+    os.chmod(os.path.join(root, "secret"), 0)
+    try:
+        host = _Host(root)
+        out = make_grep_tool(host).handler({"pattern": "def "})
+        assert "calc.py" in str(out), str(out)[:200]
+        assert "partial results" in str(out), str(out)[:200]
+        assert getattr(out, "status", None) is not ToolStatus.FAILED
+        out = make_glob_tool(host).handler({"pattern": "*.py"})
+        assert "calc.py" in str(out), str(out)[:200]
+        assert "partial results" in str(out), str(out)[:240]
+        # a genuine error (bad regex, empty stdout) is still a hard failure
+        out = make_grep_tool(host).handler({"pattern": "(unclosed"})
+        assert getattr(out, "status", None) is ToolStatus.FAILED
+    finally:
+        os.chmod(os.path.join(root, "secret"), 0o755)
+
+
+CHECKS.append(rg_exit2_with_results_is_partial_success_not_failure)
+
+
 if __name__ == "__main__":
     main()

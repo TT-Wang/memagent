@@ -138,10 +138,15 @@ def make_grep_tool(host) -> ToolEntry:
             return ToolText(f"grep: search failed ({e}); search was not completed.",
                             status=ToolStatus.FAILED)
 
-        # rg exit codes: 0 = matches, 1 = no matches (not an error), 2 = real error.
+        # rg exit codes: 0 = matches, 1 = no matches (not an error), 2 = error. BUT ripgrep also
+        # uses 2 for "finished WITH results, and some paths were unreadable" — those matches sit in
+        # stdout. Treating any 2 as total failure throws away correct results and disables grep for
+        # the rest of the session over one unreadable file (the review's Family F). Hermes' rule:
+        # an error only when NO payload remains; otherwise return the matches and name the cause.
+        lines = [ln for ln in proc.stdout.splitlines() if ln]
         if proc.returncode == 1:
             return "grep: no matches found."
-        if proc.returncode not in (0, 1):
+        if proc.returncode not in (0, 1) and not lines:
             err = (proc.stderr or "").strip()
             detail = f" ({err})" if err else ""
             return ToolText(
@@ -149,7 +154,6 @@ def make_grep_tool(host) -> ToolEntry:
                 status=ToolStatus.FAILED,
             )
 
-        lines = [ln for ln in proc.stdout.splitlines() if ln]
         if not lines:
             return "grep: no matches found."
 
@@ -162,6 +166,10 @@ def make_grep_tool(host) -> ToolEntry:
         if offset + limit < total:
             next_offset = offset + limit
             body += f"\n\n[truncated; use offset={next_offset} to see more]"
+        if proc.returncode != 0:
+            err = " ".join((proc.stderr or "").split())[:240]
+            note = "[partial results — ripgrep hit errors on some paths (exit 2)"
+            body = (note + (f": {err}]" if err else "]") + "\n" + body) if lines else body
         return body
 
     return ToolEntry(
@@ -290,6 +298,7 @@ def make_glob_tool(host) -> ToolEntry:
 
         rg = shutil.which("rg")
         files: list = []
+        glob_partial_note = ""
         if rg:
             cmd = [rg] + _RG_BASE + (["--path-separator", "/"] if IS_WINDOWS else []) + ["--files", "--sortr", "modified", "-g", pattern, target]
             try:
@@ -297,6 +306,9 @@ def make_glob_tool(host) -> ToolEntry:
                                        errors="replace", cwd=host.root(), timeout=30)
                 if proc.returncode in (0, 1):          # 0 = files, 1 = none (not an error)
                     files = [ln for ln in proc.stdout.splitlines() if ln]
+                elif proc.stdout.strip():              # exit 2 WITH results: partial success —
+                    files = [ln for ln in proc.stdout.splitlines() if ln]  # keep them, name the cause below
+                    glob_partial_note = " ".join((proc.stderr or "").split())[:240]
                 else:
                     err = (proc.stderr or "").strip()
                     detail = f" ({err})" if err else ""
@@ -323,6 +335,9 @@ def make_glob_tool(host) -> ToolEntry:
         body = "\n".join(results[:limit])
         if total > limit:
             body += f"\n\n[{total - limit} more not shown; narrow the pattern or path]"
+        if glob_partial_note:
+            body = (f"[partial results — ripgrep hit errors on some paths (exit 2): "
+                    f"{glob_partial_note}]\n" + body)
         return body
 
     return ToolEntry(
