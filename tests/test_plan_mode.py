@@ -203,12 +203,19 @@ def verify_naming_a_missing_program_never_runs_and_never_blames_the_work():
     from sliceagent.tools import LocalToolHost, _unrunnable_verify_program
     assert _unrunnable_verify_program("definitely-not-installed-xyz --check") == "definitely-not-installed-xyz"
     assert _unrunnable_verify_program("cd frontend && definitely-not-installed-xyz") == "definitely-not-installed-xyz"
-    # conservative: shell words, paths and variables are never adjudicated, and real programs pass
+    # an absolute path whose file is absent is equally confident: the check can never run (field
+    # drive: AGENT_VERIFY_CMD=/nonexistent/verify-program), while real absolute programs still pass
+    assert _unrunnable_verify_program("/nonexistent/verify-program --check") == "/nonexistent/verify-program"
+    assert _unrunnable_verify_program("/bin/echo ok") == ""
+    # conservative: shell words, relative paths and variables are never adjudicated, and real programs pass
     for benign in ("cd build && echo ok", "./scripts/verify.sh", "$MY_RUNNER --check",
                    "CI=1 python -c 'pass'"):
         assert _unrunnable_verify_program(benign) == "", benign
     host = LocalToolHost()
     result = host._run_verify_command("definitely-not-installed-xyz --check")
+    assert getattr(result, "status", None) is ToolStatus.INDETERMINATE, result
+    assert "not on PATH" in result.output
+    result = host._run_verify_command("/nonexistent/verify-program --check")
     assert getattr(result, "status", None) is ToolStatus.INDETERMINATE, result
     assert "not on PATH" in result.output
 

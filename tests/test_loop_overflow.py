@@ -309,6 +309,43 @@ def indeterminate_oracle_parks_without_another_model_call():
                for event in events)
 
 
+@check
+def missing_verify_program_parks_instead_of_looping_fix_cycles():
+    """FIELD REGRESSION (drive: AGENT_VERIFY_CMD=/nonexistent/verify-program): the completion oracle
+    answered FAILED for a shell 127 ('command not found'), so every stop was answered with
+    'Verification failed — fix this' and the turn burned 50+ model steps 'fixing' correct work on
+    its way to the 100-step ceiling. The update_work verify path resolves the program first
+    (127 is indistinguishable from a real red check); the completion oracle now shares that guard —
+    an unrunnable verifier is NO VERDICT, and NO VERDICT parks instead of minting fix cycles."""
+    from sliceagent.oracle import CommandOracle
+
+    llm = _ScriptLLM([_Resp(content="done", finish_reason="stop")])
+    events = []
+    hooks = CompositeHooks(OracleHook(
+        CommandOracle("definitely-not-installed-xyz --check"), lambda _out: None,
+    ))
+    result = run_turn(build_slice=_build(), llm=llm, tools=_Tools(),
+                      dispatch=events.append, hooks=hooks, max_steps=10)
+    assert result.stop_reason == "indeterminate", result.stop_reason
+    assert len(llm.seen) == 1, \
+        f"an unrunnable verifier must not mint fix cycles ({len(llm.seen)} model calls)"
+    assert any(isinstance(event, TurnInterrupted) and event.reason == "indeterminate"
+               for event in events)
+
+
+@check
+def verify_guard_never_adjudicates_quoted_payloads():
+    """The segment splitter must not cut inside quotes: `python3 -c "import sys,time; print(1)"`
+    split at the `;` inside the string, and the next segment's first word (`print(1)`) was reported
+    as a program missing from PATH — a runnable verify command misread as NO VERDICT. (Exposed by
+    test_bughunt_fixes.oracle_timeout_with_output_no_crash once the guard ran at oracle time.)"""
+    from sliceagent.tools import _shell_segments, _unrunnable_verify_program
+    assert _unrunnable_verify_program('python3 -u -c "import sys,time; print(1); time.sleep(5)"') == ""
+    assert _unrunnable_verify_program("python3 -c 'import os; raise SystemExit(1)' || echo fallback") == ""
+    # the operators themselves still split outside quotes
+    assert _shell_segments('a -c "x;y" && b | c') == ['a -c "x;y" ', ' b ', ' c']
+
+
 class _CountLLM:
     def __init__(self):
         self.calls = 0

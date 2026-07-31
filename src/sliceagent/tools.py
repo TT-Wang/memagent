@@ -479,21 +479,58 @@ _SHELL_NONPROGRAMS = frozenset({
     "[", "if", "then", "else", "elif", "fi", "for", "while", "do", "done", "case", "esac", "return",
     "shift", "trap", "wait", "read", "local", "declare", "alias", "umask", "pushd", "popd", "time",
 })
-_SHELL_SPLIT = re.compile(r"&&|\|\||[;|\n]")
+
+def _shell_segments(command: str) -> list[str]:
+    """Split on shell sequencing operators (`&&` `||` `;` `|` newline) that appear OUTSIDE quotes.
+
+    The bare regex split also cut inside quoted payloads — `python3 -c "import sys,time; print(1)"`
+    split at the `;` inside the string and the next segment's first word (`print(1)`) was then
+    mis-adjudicated as an unresolvable program. Operator detection is quote-aware; anything
+    ambiguous (unbalanced quotes, escapes) is left for shlex/the shell to reject downstream.
+    """
+    segments: list[str] = []
+    current: list[str] = []
+    quote = ""
+    i = 0
+    while i < len(command):
+        ch = command[i]
+        if quote:
+            current.append(ch)
+            if ch == quote:
+                quote = ""
+        elif ch in ("'", '"'):
+            quote = ch
+            current.append(ch)
+        elif ch in ";|\n":
+            segments.append("".join(current))
+            current = []
+        elif ch == "&" and command[i + 1:i + 2] == "&":
+            segments.append("".join(current))
+            current = []
+            i += 1
+        else:
+            current.append(ch)
+        i += 1
+    segments.append("".join(current))
+    return segments
 
 
 def _unrunnable_verify_program(command: str) -> str:
-    """First bare program name in `command` that does not resolve on PATH, or "" if all of them do.
+    """First program in `command` that cannot run — a bare name missing from PATH, or an absolute
+    path whose file does not exist — or "" if nothing is confidently unrunnable.
 
     A verify command is the item's ACCEPTANCE CONTRACT, and it is authored during planning — when no
-    shell has run and nothing has checked that the contract is even executable. `which` is a pure read,
-    so it is legal inside a read-only planning turn, and catching `npm`/`pytest`/`cargo` missing HERE
-    costs one probe instead of a full implementation cycle that ends at an unrunnable ✓.
+    shell has run and nothing has checked that the contract is even executable. `which`/`isfile` are
+    pure reads, so they are legal inside a read-only planning turn, and catching `npm`/`pytest`/`cargo`
+    missing HERE costs one probe instead of a full implementation cycle that ends at an unrunnable ✓.
 
-    Deliberately conservative — it only reports a BARE name (no slash, no variable, not a shell word).
-    Anything it cannot resolve confidently is left to fail at run time rather than blocking a plan.
+    Deliberately conservative — it reports a BARE name (no slash, no variable, not a shell word) that
+    does not resolve on PATH, plus an ABSOLUTE path whose file does not exist (equally confident: such a
+    check can never run, and reporting it as red would mint an unbounded fix loop on correct work).
+    Anything it cannot resolve confidently — relative paths, variables, shell words — is left to fail at
+    run time rather than blocking a plan.
     """
-    for segment in _SHELL_SPLIT.split(command):
+    for segment in _shell_segments(command):
         segment = segment.strip()
         if not segment:
             continue
@@ -507,8 +544,16 @@ def _unrunnable_verify_program(command: str) -> str:
         if not words:
             continue
         program = words[0]
-        if (program in _SHELL_NONPROGRAMS or "/" in program or "\\" in program
-                or "$" in program or program.startswith(("(", "{"))):
+        if (program in _SHELL_NONPROGRAMS or "\\" in program or "$" in program
+                or program.startswith(("(", "{"))):
+            continue
+        if program.startswith("/"):
+            # Absolute paths are adjudicable: the file's existence decides, not a later shell's cwd.
+            # (A directory is unrunnable too, so `isfile` is the right probe.)
+            if not os.path.isfile(program):
+                return program
+            continue
+        if "/" in program:
             continue
         if shutil.which(program) is None:
             return program

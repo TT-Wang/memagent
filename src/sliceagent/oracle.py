@@ -57,6 +57,15 @@ class CommandOracle:
         # Verification inherits the caller environment for compatibility, but shares the same owned
         # process-group lifecycle as command tools. A timeout is still conservatively indeterminate:
         # ordinary descendants are reaped, yet a deliberately detached process cannot be disproved.
+        # A command whose program is not on PATH answers 127, which is indistinguishable from a real
+        # red check — the completion gate would then demand code fixes forever because the CHECKER was
+        # never installed (an unbounded fix loop on correct work). Same guard as the update_work
+        # verify path (tools._run_verify_command): resolve first, report the NO-VERDICT class.
+        from .tools import _unrunnable_verify_program  # lazy: tools imports this module lazily too
+        missing = _unrunnable_verify_program(self.cmd)
+        if missing:
+            return OracleResult(ToolStatus.INDETERMINATE,
+                                f"{missing!r} is not on PATH; the verification never ran")
         code, output = LocalSandbox(scrub_secrets=False).run(
             self.cmd, cwd=self.root, timeout=self.timeout,
         )
