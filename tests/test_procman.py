@@ -160,8 +160,11 @@ def timeout_result_carries_the_escalation():
         out = h.run(name, args)
         assert "124" in out, f"{name}: lost the timeout sentinel — {out!r}"
         assert "proc_start" in out, f"{name}: no escalation to the unbounded runner — {out!r}"
-        assert getattr(out.status, "value", out.status) == "indeterminate", (
-            f"{name}: a reaped tree is INDETERMINATE, never failed — {out.status!r}")
+        # A deadline reap is a deliberate, bounded stop with a known cause: FAILED, so the model can
+        # act on the escalation (larger timeout / proc_start). INDETERMINATE parked the whole turn
+        # here and stranded that advice — the park is reserved for genuinely unknown outcomes.
+        assert getattr(out.status, "value", out.status) == "failed", (
+            f"{name}: a deadline reap is a bounded failure, not an unknown effect — {out.status!r}")
 
 
 @check

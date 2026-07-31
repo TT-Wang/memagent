@@ -24,6 +24,14 @@ this project aims for [Semantic Versioning](https://semver.org/).
   nudge maximum; it never becomes a completion gate and never consumes the last available step.
 
 ### Fixed
+- **A sandbox deadline reap is FAILED, never INDETERMINATE.** `run_command`/`execute_code` hitting
+  the wall-clock deadline (exit 124) used to return `status="indeterminate"`, which parked the
+  whole turn — stranding the tool's own escalation advice ("re-run with a larger timeout, or use
+  proc_start"), so one slow read-only scan froze the session until the user typed continue. A
+  deadline reap is a deliberate, bounded stop with a known cause: the model now sees a normal
+  failure with the partial-write warning and can retry per the escalation. The park is reserved
+  for genuinely unknown outcomes (transport loss, unconfirmed close, interrupted tools); the
+  oracle and proc/terminal teardown typings are unchanged.
 - **The matrix evidence label is declared again.** `ScopedResult.to_record()` now derives
   `explorer_evidence_status` from report completeness (the report body travels inline in the
   delegation ToolResult, so a complete report is `content_retained` at settle time), and the

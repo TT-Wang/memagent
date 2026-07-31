@@ -1821,10 +1821,14 @@ class LocalToolHost:
         self._grant_shell_paths(args.get("command", ""))  # I2 reach=action: dirs the shell touched
         out = out.strip()
         if code == SANDBOX_TIMEOUT:
+            # A deadline reap is a DELIBERATE, bounded stop with a known cause — not an unknown
+            # effect. Typing it indeterminate parked the whole turn and made the escalation below
+            # unreachable; FAILED lets the model re-run with a larger timeout or proc_start, exactly
+            # as the message says. The partial-write warning stays because it is true.
             return ToolText(
                 f"{self._timeout_escalation(t, t >= 600.0)}\n"
                 f"{self._page_out(out, label='command output') or '(no output)'}",
-                status="indeterminate",
+                ok=False,
             )
         if code != 0:
             return ToolText(f"Exit code {code}\n{self._page_out(out, label='command output') or '(no output)'}", ok=False)
@@ -2066,7 +2070,10 @@ class LocalToolHost:
             code_n, out = self.sandbox.run(cmd, cwd=root, timeout=t)
             out = out.strip()
             # 124 is reserved by the in-script run() helper after it reaps a timed-out process group.
-            # Like an outer sandbox timeout, deliberate detachment cannot be disproved.
+            # An outer sandbox timeout is the same shape: a DELIBERATE, bounded stop with a known
+            # cause. FAILED (not indeterminate) keeps the turn alive so the model can re-run with a
+            # raised deadline or proc_start, as the escalation says — an indeterminate typing used
+            # to park the turn here and strand that advice.
             if code_n in (SANDBOX_TIMEOUT, 124):
                 return ToolText(
                     # A script is a BATCH of edits: the deadline can land between them, so say so — the
@@ -2074,7 +2081,7 @@ class LocalToolHost:
                     f"{self._timeout_escalation(t, t >= 600.0)}\n"
                     "Edits this script had already applied are on disk; re-read before re-running it.\n"
                     f"{self._page_out(out, label='execute_code output') or '(no output)'}",
-                    status="indeterminate",
+                    ok=False,
                 )
             if code_n != 0:
                 return ToolText(f"Exit code {code_n}\n{self._page_out(out, label='execute_code output') or '(no output)'}", ok=False)

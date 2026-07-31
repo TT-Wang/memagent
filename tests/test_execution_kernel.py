@@ -1313,7 +1313,7 @@ def unkillable_effectful_timeout_waits_before_later_barrier():
 
 
 @check
-def local_command_timeout_is_indeterminate_and_reaps_background_tree():
+def local_command_timeout_is_failed_and_reaps_background_tree():
     from sliceagent.tools import LocalToolHost
 
     with tempfile.TemporaryDirectory(prefix="command-timeout-") as root:
@@ -1321,17 +1321,23 @@ def local_command_timeout_is_indeterminate_and_reaps_background_tree():
         host = LocalToolHost(root=root, timeout=1)
         command = f"(sleep 1.4; echo late > {shlex.quote(target)}) & sleep 10"
         outcome = host.run("run_command", {"command": command, "timeout": 1})
-        assert outcome.status is ToolStatus.INDETERMINATE
+        # A deadline reap is a deliberate, bounded stop with a known cause — FAILED, so the turn
+        # stays alive and the model can act on the escalation (bigger timeout / proc_start). The
+        # result text carries the partial-write warning. INDETERMINATE (and its turn-wide park) is
+        # reserved for genuinely unknown outcomes.
+        assert outcome.status is ToolStatus.FAILED
+        assert "still on disk" in str(outcome)
         time.sleep(0.6)
         # POSIX killpg reaps the whole group synchronously; on Windows taskkill /T is best-effort and a
-        # detached `&` subshell can escape the PID-tree walk. INDETERMINATE + the reconciliation gate is the
-        # documented Windows contract (CORE-DESIGN §11.2), so only assert the strong reap off-Windows.
+        # detached `&` subshell can escape the PID-tree walk — there the FAILED text's "still on disk /
+        # re-read before relying on it" warning is the mitigation, so only assert the strong reap
+        # off-Windows.
         if os.name != "nt":
             assert not os.path.exists(target), "a timed-out command descendant mutated after return"
 
 
 @check
-def execute_code_inner_timeout_is_indeterminate_and_reaps_background_tree():
+def execute_code_inner_timeout_is_failed_and_reaps_background_tree():
     from sliceagent.tools import LocalToolHost
 
     with tempfile.TemporaryDirectory(prefix="execute-inner-timeout-") as root:
@@ -1339,7 +1345,8 @@ def execute_code_inner_timeout_is_indeterminate_and_reaps_background_tree():
         host = LocalToolHost(root=root, timeout=8)
         command = f"(sleep 1.4; echo late > {shlex.quote(target)}) & sleep 10"
         outcome = host.run("execute_code", {"code": f"run({command!r}, timeout=1)"})
-        assert outcome.status is ToolStatus.INDETERMINATE, outcome
+        assert outcome.status is ToolStatus.FAILED, outcome
+        assert "re-read before re-running" in str(outcome)
         time.sleep(0.6)
         if os.name != "nt":   # Windows taskkill /T is best-effort on a detached `&` subshell — see above
             assert not os.path.exists(target), "the nested run() descendant mutated after timeout return"
