@@ -301,7 +301,7 @@ def delegation_guidance_is_compiled_from_the_live_spawn_schema():
     host = ScopedSpawnHost(_Inner(), llm=None, retriever=None, memory=None)
     schema = next(s for s in host.schemas() if s["function"]["name"] == "spawn_agent")
     props = schema["function"]["parameters"]["properties"]
-    assert set(props) == {"agent", "task", "work_item_id", "scope", "exclusions"}
+    assert set(props) == {"agent", "task", "work_item_id", "scope", "exclusions", "background"}
     kinds = props["agent"]["enum"]
     assert "explorer" in kinds and "general" in kinds
     assert "name" not in props and "grants" not in props

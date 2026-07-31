@@ -5,6 +5,31 @@ this project aims for [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Background (detached) delegation.** `spawn_agent` accepts `background: true` for read-only
+  kinds: the call returns immediately with a typed `running` child outcome, the child runs on a
+  bounded manager-owned thread (ceiling 4, absolute leak-guard watchdog), and its finished report
+  re-enters the parent as a typed `PeerMessage` on the ordinary steer queue — drained at the next
+  step boundary under the injection-safe peer envelope, or stashed while idle and flushed into the
+  next turn. The in-band `running` result never tombstones the live matrix row; the terminal settle
+  arrives out-of-band as a typed `SubagentProgress` update carrying the same evidence/report labels
+  a foreground ToolResult would. Detached child tokens still reach the budget hook. A user steer
+  typed while detached children run can now be answered at the parent's next step instead of
+  waiting for a whole blocking wave.
+- **Terminal-candidate assessment is wired again.** The loop consults
+  `Hooks.assess_terminal_candidate` at the completion edge (restored after the 0.3.0 removal), and
+  the CLI installs `DeliverableCompletionHook`: an obvious non-delivery (empty prose, a
+  "findings above" pointer to private tool/child output, or a deferred-work progress update) gets
+  ONE bounded, response-only rewrite — the withheld candidate stays in the private trajectory. One
+  nudge maximum; it never becomes a completion gate and never consumes the last available step.
+
+### Fixed
+- **The matrix evidence label is declared again.** `ScopedResult.to_record()` now derives
+  `explorer_evidence_status` from report completeness (the report body travels inline in the
+  delegation ToolResult, so a complete report is `content_retained` at settle time), and the
+  `child_artifact` effect carries it. Since 0.3.0 no producer wrote the key, so every child row
+  showed "evidence not assessed" forever even when the parent had the full report.
+
 ## [0.3.1] — 2026-07-27
 
 ### Added

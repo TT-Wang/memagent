@@ -96,7 +96,7 @@ def spawn_schema_is_stable_and_kinds_live():
     host = _host(_workspace())
     fn = next(s["function"] for s in host.schemas() if s["function"]["name"] == "spawn_agent")
     assert set(fn["parameters"]["properties"]) == {"agent", "task", "work_item_id", "scope",
-                                                   "exclusions"}
+                                                   "exclusions", "background"}
     assert fn["parameters"]["required"] == ["agent", "task"]
     assert set(fn["parameters"]["properties"]["agent"]["enum"]) >= {"explorer", "general",
                                                                     "debugger", "reviewer"}

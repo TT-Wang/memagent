@@ -9,11 +9,14 @@ from __future__ import annotations
 
 import json
 import os
+import queue as _queue
 import sys
 import threading
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable
+
+from .background import BackgroundChildManager
 
 from .events import (
     ApiRetry,
@@ -651,6 +654,7 @@ def _prepare_workspace_resources(
     session_id: str | None = None,
     on_log: Callable[[str], None] = lambda _message: None,
     notify_host=None,
+    background=None,
 ) -> WorkspaceResources:
     """Stage one complete workspace runtime before publishing it.
 
@@ -770,6 +774,7 @@ def _prepare_workspace_resources(
                     st.active.artifact_id if st.active is not None else ""
                 ),
                 work_provider=lambda s=session: s.active().active_work,
+                background=background,
             )
         if os.environ.get("AGENT_TOPIC_TOOLS", "").strip().lower() in ("1", "on", "true", "yes"):
             for topic_tool in make_topic_tools(session):
@@ -1166,6 +1171,10 @@ def main() -> None:
         fn = _host_render["fn"]
         if fn is not None:
             fn(detail)
+
+    # Process-owned owner of detached (background) spawn_agent children. The live turn ATTACHES its
+    # steer queue; completions arriving while idle are stashed and flushed into the next turn.
+    _bg_children = BackgroundChildManager()
     _ask_user_bridge: dict = {"fn": None}
 
     def _workspace_ask_user(question, options):
@@ -1194,6 +1203,7 @@ def main() -> None:
                 schedule_workspace=_schedule_workspace, notify_subagent=_notify_subagent,
                 ask_user=_workspace_ask_user, on_log=_workspace_log,
                 session_id=_app_session_id or None, notify_host=_notify_host,
+                background=_bg_children,
             )
         # Repository .env is a launch overlay, not process identity. Stage the target with A's injected values
         # temporarily absent, then restore A until atomic publication. We intentionally do not auto-load B's
@@ -1209,6 +1219,7 @@ def main() -> None:
                 schedule_workspace=_schedule_workspace, notify_subagent=_notify_subagent,
                 ask_user=_workspace_ask_user, on_log=_workspace_log,
                 session_id=_app_session_id or None, notify_host=_notify_host,
+                background=_bg_children,
             )
         finally:
             os.environ.update(saved_overlay)
@@ -2135,7 +2146,13 @@ def main() -> None:
                 ),
             ))
         if hook_cfg.max_tokens:
-            hook_list.append(BudgetHook(hook_cfg.max_tokens))
+            budget = BudgetHook(hook_cfg.max_tokens)
+            # Detached (background) children settle outside any tool batch, so their tokens cannot
+            # fold in through the loop's model_usage lane — account them through the same hook.
+            _bg_children.set_usage_sink(budget.record_step_usage)
+            hook_list.append(budget)
+        else:
+            _bg_children.set_usage_sink(None)
         return CompositeHooks(*hook_list)
 
     def _make_workspace_hooks():
@@ -2536,6 +2553,11 @@ def main() -> None:
                 previous_host = _host_render.get("fn")
                 _sub_render["fn"] = sink.subagent_notify
                 _host_render["fn"] = sink.host_notify
+                # Detached-child completions re-enter through THIS turn's steer queue. The TUI's
+                # own retirement rescue (pending_typed_steers) reclaims anything never drained.
+                _live_steer_q = getattr(sink, "steer_queue", None)
+                if _live_steer_q is not None:
+                    _bg_children.attach(_live_steer_q)
                 # Bind before routing/context preparation.  An LLM router may stream;
                 # leaving the previous terminal sink installed lets a late delta clear
                 # the new turn's Preparing state.
@@ -2543,6 +2565,8 @@ def main() -> None:
                 try:
                     return _run_one_turn(text, sink, signal)
                 finally:
+                    if _live_steer_q is not None:
+                        _bg_children.detach()
                     if _sub_render.get("fn") == sink.subagent_notify:
                         _sub_render["fn"] = previous
                     if _host_render.get("fn") == sink.host_notify:
@@ -2716,11 +2740,17 @@ def main() -> None:
                 _esc = _tui.make_esc_sentinel() if _tui else None
                 if _esc is not None:
                     _esc.start()
+                # The inline REPL has no mid-turn user steering, but detached-child completions
+                # still re-enter through a steer queue; whatever the turn never drained is reclaimed
+                # into the manager's stash so it is redelivered at the next turn.
+                _repl_steer_q = _queue.Queue()
+                _bg_children.attach(_repl_steer_q)
+                result = None
                 try:
                     segment_artifact_id = local_store.active.artifact_id if local_store.active else ""
                     result = run_turn(
                         build_slice=build, llm=llm, tools=turn_tools, dispatch=dispatch, hooks=hooks,
-                        max_steps=cfg.max_steps,
+                        max_steps=cfg.max_steps, steer_queue=_repl_steer_q,
                         consolidate=lambda: consolidate_checkpoint(session.active(), compact=False),
                         checkpoint=lambda m, s, _g=line: recovery.record(
                             root, goal=_g, messages=m, step=s,
@@ -2728,6 +2758,13 @@ def main() -> None:
                         turn_id=local_store.active.artifact_id if local_store.active else "",
                     )
                 finally:
+                    _reclaim = list(getattr(result, "leftover_steers", ()) or ())
+                    while True:
+                        try:
+                            _reclaim.append(_repl_steer_q.get_nowait())
+                        except _queue.Empty:
+                            break
+                    _bg_children.detach(reclaim=_reclaim)
                     if _esc is not None:
                         _esc.stop()
                 if not _seal_local_turn(

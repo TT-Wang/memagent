@@ -262,6 +262,11 @@ class SubagentProgress(Event):
     tool_name: str = ""
     terminal_reason: str = ""
     partial: bool = False
+    # Out-of-band TERMINAL settle for a detached (background) child — the in-band ToolResult is not
+    # authoritative there (it only declared "running"), so these carry the labels it would have had.
+    # Empty on ordinary live updates; renderers apply them only on terminal phases.
+    evidence_status: str = ""
+    report_completion: str = ""
 
 
 @dataclass

@@ -77,7 +77,8 @@ def spawn_agent_schema_lists_the_kinds():
     d = sa["function"]["description"]
     props = sa["function"]["parameters"]["properties"]
     assert "explorer" in d and "general" in d            # kinds still enumerated
-    assert set(props) == {"agent", "task", "scope", "exclusions", "work_item_id"}   # P2: optional binding
+    assert set(props) == {"agent", "task", "scope", "exclusions", "work_item_id",
+                          "background"}   # P2: optional binding; optional detach
     assert "name" not in props and "HIRE" not in d       # the standing-specialist hire dial is gone
     assert "complete normalized report" in d and "directly in this tool result" in d
     assert "archive locator is optional" in d

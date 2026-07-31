@@ -26,8 +26,10 @@ from collections.abc import Iterable, Mapping
 from .events import (AssistantText, ModelCallPrepared, StepBegin, StepEnd, SubagentProgress,
                      ToolStarted)
 from .access import AllAccess, ReadAllAccess
+from .background import background_absolute_timeout
 from .execution import (CHILD_ACTIVITY_ARG, CHILD_CANCEL_SIGNAL_ARG, CHILD_INVOCATION_ID_ARG,
                         CHILD_REQUEST_ORDINAL_ARG, ToolEffect, ToolStatus, Usage)
+from .interfaces import PeerMessage
 from .registry import ToolText
 from .scoped_agent import allowed_for, run_scoped_agent
 
@@ -135,6 +137,29 @@ class _ProgressEmitter:
         self._touch()
         self._publish("settling", "")
 
+    def announce(self, phase: str, detail: str) -> None:
+        """Synchronous row creation BEFORE a detached spawn returns: once the spawn ToolResult
+        settles, the call is no longer an active agent tool and the matrix would reject a
+        first-time row arriving from the child thread."""
+        self._publish(phase, detail)
+
+    def terminal(self, phase: str, detail: str, *, evidence_status: str = "",
+                 report_completion: str = "") -> None:
+        """Out-of-band terminal settle for a DETACHED child: the typed label vocabulary the
+        in-band ToolResult would have carried, published on the same identity/sequence channel."""
+        self._touch()
+        with self._lock:
+            self._seq += 1
+            seq, tools = self._seq, self._tools
+        if self._notify is None:
+            return
+        try:
+            self._notify(SubagentProgress(phase=phase, detail=detail, sequence=seq,
+                                          tool_count=tools, evidence_status=evidence_status,
+                                          report_completion=report_completion, **self._identity))
+        except Exception:  # noqa: BLE001 — presentation must never affect the child
+            pass
+
     def _touch(self) -> None:
         if self._activity is not None:
             self._activity.touch()
@@ -164,7 +189,7 @@ class ScopedSpawnHost:
 
     def __init__(self, inner, *, llm, retriever, memory, agents=None, notify=None,
                  session_id: str = "", max_steps: int = 100, intent_provider=None, turn_id_fn=None,
-                 work_provider=None, model_id: str = ""):
+                 work_provider=None, model_id: str = "", background=None):
         from .agents import BUILTIN_AGENTS
         self._inner = inner
         self._llm = llm
@@ -181,6 +206,8 @@ class ScopedSpawnHost:
         self._turn_id_fn = turn_id_fn
         self._work_provider = work_provider
         self._model_id = model_id or str(getattr(llm, "model", "") or "")
+        # Detached-delegation owner (BackgroundChildManager); None disables background spawns.
+        self._background = background
         self._lock = threading.Lock()
         self._n = 0                      # launch ordinal, per host (= per session)
 
@@ -217,6 +244,11 @@ class ScopedSpawnHost:
                     "(done_when/verify) is injected into the brief and the sealed report records the "
                     "binding")},
                 "scope": _SCOPE_PARAM, "exclusions": _EXCLUSIONS_PARAM,
+                "background": {"type": "boolean", "description": (
+                    "OPTIONAL: run this child DETACHED (read-only kinds only) — the call returns "
+                    "immediately and the report arrives later as a peer notification. Use for a long "
+                    "breadth run so you can keep working or answer the user meanwhile; never wait, "
+                    "poll, or re-spawn a detached child.")},
             }, "required": ["agent", "task"]}}}
 
     # ── scheduling contract ───────────────────────────────────────────────────────────────────────
@@ -331,6 +363,12 @@ class ScopedSpawnHost:
                 depth=1, session_id=self._session_id, invocation_id=invocation_id,
                 request_ordinal=request_ordinal, objective=task)
 
+        if bool(args.get("background")):
+            return self._spawn_background(
+                spec, brief, task, cancel=cancel, activity=activity, emitter=emitter,
+                launch=launch, invocation_id=invocation_id,
+                work_item_id=str(args.get("work_item_id") or "").strip())
+
         result = run_scoped_agent(
             brief, tools=self._inner, llm=self._llm, retriever=self._retriever, memory=self._memory,
             allowed_tools=allowed_for(spec, self._inner), model_id=self._model_id,
@@ -367,6 +405,124 @@ class ScopedSpawnHost:
         body = result.report or "(the child produced no report)"
         return ToolText(f"{header}\n\n{body}{locator}", ok=result.status != "failed",
                         effects=effects)
+
+    # ── detached (background) delegation ─────────────────────────────────────────────────────────
+    def _spawn_background(self, spec, brief, task, *, cancel, activity, emitter, launch,
+                          invocation_id, work_item_id):
+        """Start the child on a manager-owned thread and return a typed ``running`` outcome NOW.
+
+        The terminal state re-enters the parent through two typed channels once the child settles:
+        a SubagentProgress terminal update (matrix row) and a PeerMessage on the steer queue (the
+        report, peer-enveloped). The in-band ToolResult only declares ``running`` so the progress
+        reducer leaves the live row alone.
+        """
+        if not spec.read_only:
+            return _steered(
+                "background delegation is limited to read-only kinds — a detached writable child "
+                "would mutate the workspace concurrently with you; run it in the foreground")
+        manager = self._background
+        if manager is None:
+            return _steered("this host does not support background delegation; "
+                            "rerun without 'background'")
+        if not manager.has_capacity():
+            return _steered(
+                "background capacity is full (too many detached children still running); wait for "
+                "a completion notification or run this one in the foreground")
+        if cancel is None:
+            cancel = threading.Event()      # watchdog-reachable even without a loop-injected lease
+        # The row must exist BEFORE the spawn ToolResult can settle: once the call stops being an
+        # active agent tool, the matrix rejects a first-time row arriving from the child thread.
+        if emitter is not None:
+            emitter.announce("starting", "running in background")
+        timer = threading.Timer(background_absolute_timeout(),
+                                getattr(cancel, "request", None) or cancel.set)
+        timer.daemon = True
+
+        def _run():
+            try:
+                result = run_scoped_agent(
+                    brief, tools=self._inner, llm=self._llm, retriever=self._retriever,
+                    memory=self._memory, allowed_tools=allowed_for(spec, self._inner),
+                    model_id=self._model_id, max_steps=self._max_steps, signal=cancel,
+                    reasoning=spec.reasoning or "", system_extra=spec.system_prompt,
+                    on_event=emitter,
+                    transport_activity=(
+                        (lambda *_args, **_kwargs: activity.touch()) if activity is not None else None
+                    ))
+                if emitter is not None:
+                    emitter.settling()
+                handle = self._seal(spec.name, brief, result, launch, work_item_id)
+                self._background_settled(spec, result, launch=launch, handle=handle,
+                                         invocation_id=invocation_id, emitter=emitter,
+                                         manager=manager)
+            except Exception as exc:  # noqa: BLE001 — a detached child must never crash the host
+                try:
+                    if emitter is not None:
+                        emitter.terminal("failed", f"background child error: {type(exc).__name__}")
+                    manager.deliver(PeerMessage(
+                        message_id=f"{invocation_id or f'child-{launch}'}:settled",
+                        peer_id=f"child-{launch}",
+                        content=(f"[child {launch} · {spec.name} · failed · background report]\n"
+                                 f"The detached child crashed before it could report: "
+                                 f"{type(exc).__name__}: {exc}"),
+                        correlation_id=invocation_id, wake="none"))
+                except Exception:  # noqa: BLE001
+                    pass
+            finally:
+                timer.cancel()
+
+        if not manager.start(_run, name=f"bg-child-{launch}"):
+            timer.cancel()
+            return _steered(
+                "background capacity is full (too many detached children still running); wait for "
+                "a completion notification or run this one in the foreground")
+        timer.start()
+        identity = invocation_id or f"child-{launch}"
+        effects = (ToolEffect(f"{identity}:child-outcome", "child_outcome", {
+            "status": "running", "operational_status": "running",
+            "kind": spec.name, "name": spec.name, "launch_ordinal": launch,
+            **({"work_item_id": work_item_id} if work_item_id else {}),
+        }),)
+        return ToolText(
+            f"[child {launch} · {spec.name} · running in background]\n"
+            "The child is detached. Its report arrives as a peer notification when it settles — do "
+            "NOT wait, poll, or re-spawn it. Continue other work or answer the user now; integrate "
+            "the report when the notification lands.",
+            effects=effects)
+
+    def _background_settled(self, spec, result, *, launch, handle, invocation_id, emitter,
+                            manager):
+        """Publish the detached child's terminal state: matrix settle first (same typed labels the
+        in-band ToolResult would have carried), then the report through the peer channel."""
+        detail = result.status
+        if result.status != "ok" and result.stop_reason and result.stop_reason != result.status:
+            detail = f"{result.status} · {result.stop_reason}"
+        phase = {
+            "partial": "partial", "failed": "failed", "cancelled": "cancelled",
+            "indeterminate": "indeterminate",
+        }.get(result.status) or (
+            "report_ready" if result.report_completion in ("complete", "partial") else "completed"
+        )
+        if emitter is not None:
+            emitter.terminal(phase, detail.replace("_", " "),
+                             evidence_status=result.explorer_evidence_status,
+                             report_completion=result.report_completion)
+        manager.account_usage(result.usage or {})
+        header = (f"[child {launch} · {spec.name} · {detail} · {result.steps} steps · "
+                  "background report]")
+        locator = f'\n\nsealed: read_file("subagents/{handle}.md")' if handle else ""
+        body = result.report or "(the child produced no report)"
+        # PeerMessage bodies are bounded (_PEER_CONTENT_MAX); the sealed artifact always holds the
+        # full report, so a truncated preview degrades to the locator, never to data loss.
+        budget = max(1000, 7900 - len(header) - len(locator))
+        truncated = len(body) > budget
+        content = header + "\n\n" + body[:budget] + locator
+        if truncated:
+            content += "\n[preview truncated — the locator above holds the complete report]"
+        manager.deliver(PeerMessage(
+            message_id=f"{invocation_id or f'child-{launch}'}:settled",
+            peer_id=f"child-{launch}", content=content,
+            correlation_id=invocation_id, wake="none"))
 
     def _effects(self, result, kind: str, launch: int, work_item_id: str, handle: str,
                  identity: str) -> tuple:

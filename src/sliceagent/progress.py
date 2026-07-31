@@ -896,26 +896,33 @@ class TurnProgress:
                     child_operational = str(
                         payload.get("operational_status") or payload.get("status") or ""
                     ).strip().casefold()
-                    if status == "succeeded" and child_operational == "partial":
-                        # ok=True because the delegation returned a deliverable; the typed child
-                        # outcome owns the partial label (step-ceiling stop with an accepted report).
-                        status = "partial"
-                    matched_row = self._settle_subagent(event, status, now)
-                    outcome_status = status
-                    report_completion = normalized_report_completion(payload.get("report_completion"))
-                    if status == "succeeded" and report_completion not in {"complete", "partial"}:
-                        outcome_status = "completed"
-                    if status == "failed" and (
-                        _timeout_cause(payload.get("stop_cause"))
-                        or _timeout_cause(payload.get("stop_reason"))
-                    ):
-                        outcome_status = "timed_out"
-                    if not matched_row and (self._child_artifact_id(event) or not was_active):
-                        self._agent_outcomes[outcome_status] = \
-                            self._agent_outcomes.get(outcome_status, 0) + 1
-                    elif not matched_row:
-                        self._agent_unlinked_outcomes[outcome_status] = \
-                            self._agent_unlinked_outcomes.get(outcome_status, 0) + 1
+                    if child_operational == "running":
+                        # A DETACHED (background) child: the spawn call itself settled but the child
+                        # is still running — its terminal state arrives out-of-band as a typed
+                        # SubagentProgress update. Settling (tombstoning) the live row or counting a
+                        # terminal outcome here would lie about work still in flight.
+                        pass
+                    else:
+                        if status == "succeeded" and child_operational == "partial":
+                            # ok=True because the delegation returned a deliverable; the typed child
+                            # outcome owns the partial label (step-ceiling stop with an accepted report).
+                            status = "partial"
+                        matched_row = self._settle_subagent(event, status, now)
+                        outcome_status = status
+                        report_completion = normalized_report_completion(payload.get("report_completion"))
+                        if status == "succeeded" and report_completion not in {"complete", "partial"}:
+                            outcome_status = "completed"
+                        if status == "failed" and (
+                            _timeout_cause(payload.get("stop_cause"))
+                            or _timeout_cause(payload.get("stop_reason"))
+                        ):
+                            outcome_status = "timed_out"
+                        if not matched_row and (self._child_artifact_id(event) or not was_active):
+                            self._agent_outcomes[outcome_status] = \
+                                self._agent_outcomes.get(outcome_status, 0) + 1
+                        elif not matched_row:
+                            self._agent_unlinked_outcomes[outcome_status] = \
+                                self._agent_unlinked_outcomes.get(outcome_status, 0) + 1
                 if bucket in ("read", "edit", "cmd", "agent") and not queued_unstarted:
                     self._counts[bucket] = self._counts.get(bucket, 0) + 1
                 if steered and not queued_unstarted:
@@ -1137,6 +1144,17 @@ class TurnProgress:
                 # Tool count is cumulative physical work. Wrapper terminal updates intentionally carry no
                 # duplicate counter, so zero means "no newer count", never "the child used no tools".
                 tool_count = max(previous.tool_count, tool_count)
+            evidence_status = previous.evidence_status if previous is not None else "not_assessed"
+            report_completion = previous.report_completion if previous is not None else "unknown"
+            if phase in _TERMINAL_AGENT_PHASES:
+                # A DETACHED (background) child's terminal update carries the typed labels its
+                # in-band ToolResult never produced (that result only declared "running").
+                declared_evidence = str(getattr(update, "evidence_status", "") or "")
+                if declared_evidence:
+                    evidence_status = _evidence_status(declared_evidence)
+                declared_completion = str(getattr(update, "report_completion", "") or "")
+                if declared_completion:
+                    report_completion = normalized_report_completion(declared_completion)
             detail = _agent_phase_detail(
                 phase,
                 detail=update.detail,
@@ -1146,7 +1164,7 @@ class TurnProgress:
                 tool_name=tool_name,
                 terminal_reason=terminal_reason,
                 partial=partial,
-                report_completion=(previous.report_completion if previous is not None else "unknown"),
+                report_completion=report_completion,
             )
             finished_at = now if phase in _TERMINAL_AGENT_PHASES else None
             if previous_key and previous_key != agent_id:
@@ -1169,13 +1187,11 @@ class TurnProgress:
                 queued_at=previous.queued_at if previous is not None else None,
                 finished_at=(previous.finished_at if previous is not None and previous.finished_at is not None
                              else finished_at),
-                evidence_status=(
-                    previous.evidence_status if previous is not None else "not_assessed"
-                ),
+                evidence_status=evidence_status,
                 evidence_account=(previous.evidence_account if previous is not None else ()),
                 attempt=attempt, max_attempts=max_attempts, retry_delay_s=retry_delay_s,
                 tool_name=tool_name, terminal_reason=terminal_reason, partial=partial,
-                report_completion=(previous.report_completion if previous is not None else "unknown"),
+                report_completion=report_completion,
             )
             self._replace()
             self._transition(ProgressPhase.DELEGATING, self._agent_activity_detail(), now=now)
