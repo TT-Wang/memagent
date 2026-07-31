@@ -51,6 +51,12 @@ jobs:
       - name: Tests
         run: bash scripts/run_tests.sh
 
+      # The collaboration-core conformance probes are an executable contract, not pytest-collected
+      # (evals/ is intentionally outside tests/). Exit-code gated like the suite: a silent regression
+      # in the peer-collaboration interface fails the build.
+      - name: Conformance — collaboration core
+        run: python evals/collaboration_core_conformance.py
+
       # Users install via `uv tool install` (install.sh / install.ps1) — a DIFFERENT code path from
       # the pip install above (uv writes .exe trampoline shims on Windows; antivirus/permission
       # surface). Validate it from the built wheel on the Windows cell.
