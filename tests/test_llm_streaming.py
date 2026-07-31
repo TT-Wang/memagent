@@ -1504,5 +1504,21 @@ def main():
     sys.exit(1 if failed else 0)
 
 
+@check
+def a_mid_stream_transport_break_is_marked_transport_error_not_length():
+    """The review's L2 at the adapter: a TCP reset mid-stream with salvageable parts used to be
+    laundered into finish_reason='length' — the user was told the answer hit the token limit and
+    advised to narrow the question; the real cause was the network. (Hermes keeps the two apart
+    with its partial-stream stub id.)"""
+    def broke(kind, kwargs, control):
+        control["on_item"](_delta(content="partial answer"))
+        raise ConnectionResetError("tcp reset")
+    obj = _stub([], None)
+    obj._transport_hub = _FakeHub(handler=broke)
+    msg = obj.complete([{"role": "user", "content": "go"}], [])
+    assert msg.finish_reason == "transport_error", msg.finish_reason
+    assert msg.content == "partial answer", repr(msg.content)
+
+
 if __name__ == "__main__":
     main()

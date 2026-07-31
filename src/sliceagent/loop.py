@@ -267,6 +267,8 @@ OVERFLOW_MSG = ("The working context overflowed and could not be compacted furth
 MAX_TOKENS_MSG = ("The response hit the output token limit and was cut off mid-answer — it is INCOMPLETE. "
                   "Continue, or ask a narrower question.")
 FILTERED_MSG = "The response was stopped by the provider's content filter; the turn is incomplete."
+TRANSPORT_MSG = ("The provider connection broke mid-answer — a TRANSPORT failure. "
+                 "This is usually transient: retry the request.")
 
 # finish_reason=length is RESUMED before it is ever parked (bounded — Hermes parity, 3 attempts):
 # the partial text stands in the trajectory as a non-final update, and this host instruction asks
@@ -277,6 +279,11 @@ _LENGTH_CONTINUATION = (
     "Your previous response was cut off at the completion token limit. Continue EXACTLY from where "
     "it stopped — do not repeat earlier content, do not restart. If you were emitting tool calls, "
     "re-issue them as smaller batches (fewer calls per response, smaller arguments)."
+)
+_TRANSPORT_CONTINUATION = (
+    "The provider connection broke mid-response (a transport error — the network, not the answer's "
+    "size). Resume EXACTLY from where the text stopped — do not repeat earlier content. If you "
+    "were emitting tool calls, re-issue them complete in the next response."
 )
 
 # Breadcrumb inserted ONCE when overflow compaction drops the oldest exchange, so the loss is never
@@ -673,6 +680,10 @@ def _normalize_stop(resp) -> str:
         return "max_tokens"
     if fr in ("content_filter", "filtered"):
         return "filtered"
+    if fr == "transport_error":
+        # a mid-stream transport break salvaged with partial content — NOT a token limit; the user
+        # must never be told to "narrow the question" for a network fault
+        return "transport_error"
     return "tool_use" if resp.tool_calls else "end_turn"
 
 
@@ -2011,20 +2022,27 @@ def run_turn(*, build_slice, llm, tools, dispatch: Dispatcher, hooks: Hooks | No
                                            or "Answer the user's request now.",
                             })
                             continue
-                    if stop in ("max_tokens", "filtered"):
-                        if stop == "max_tokens" and length_continuations < _LENGTH_CONTINUATION_LIMIT:
-                            # Bounded auto-continuation (the Hermes pattern): a length-truncated
-                            # response is RESUMED, not parked — the partial text already stands in
-                            # the trajectory as a non-final update; only a cut that outlives the
-                            # budget parks, so a partial answer can never seal as the final one.
+                    if stop in ("max_tokens", "filtered", "transport_error"):
+                        if stop in ("max_tokens", "transport_error") and (
+                                length_continuations < _LENGTH_CONTINUATION_LIMIT):
+                            # Bounded auto-continuation (the Hermes pattern): a length-truncated or
+                            # transport-broken response is RESUMED, not parked — the partial text
+                            # already stands in the trajectory as a non-final update; only a cut that
+                            # outlives the budget parks, so a partial answer can never seal as final.
                             length_continuations += 1
                             if candidate:
                                 dispatch(AssistantText(candidate, final=False))
-                            dispatch(TurnPhaseChanged(
-                                "length_continuation",
-                                f"response hit the completion cap — resuming "
-                                f"({length_continuations}/{_LENGTH_CONTINUATION_LIMIT})"))
-                            messages.append({"role": "user", "content": _LENGTH_CONTINUATION})
+                            if stop == "transport_error":
+                                dispatch(TurnPhaseChanged(
+                                    "transport_continuation",
+                                    "the provider connection broke mid-response — resuming"))
+                                messages.append({"role": "user", "content": _TRANSPORT_CONTINUATION})
+                            else:
+                                dispatch(TurnPhaseChanged(
+                                    "length_continuation",
+                                    f"response hit the completion cap — resuming "
+                                    f"({length_continuations}/{_LENGTH_CONTINUATION_LIMIT})"))
+                                messages.append({"role": "user", "content": _LENGTH_CONTINUATION})
                             continue
                         # #11: a truncated (length) or content-filtered response is INCOMPLETE — park it as
                         # interrupted instead of sealing a partial answer as a clean turn. Surface any partial
@@ -2036,7 +2054,8 @@ def run_turn(*, build_slice, llm, tools, dispatch: Dispatcher, hooks: Hooks | No
                             (MAX_TOKENS_MSG + f" (the cut persisted through "
                              f"{length_continuations} continuation attempt(s))")
                             if stop == "max_tokens" and length_continuations else
-                            MAX_TOKENS_MSG if stop == "max_tokens" else FILTERED_MSG,
+                            MAX_TOKENS_MSG if stop == "max_tokens" else
+                            FILTERED_MSG if stop == "filtered" else TRANSPORT_MSG,
                             closeout=False,
                         )
                     dispatch(AssistantText(
@@ -2167,10 +2186,14 @@ def run_turn(*, build_slice, llm, tools, dispatch: Dispatcher, hooks: Hooks | No
             import sys as _sys
             import traceback as _tb
             _tb.print_exc(file=_sys.stderr)
-        # Carry the actual cause (type AND message, bounded) — the TurnInterrupted sink records it into
-        # last_error so a parked/child 'error' is diagnosable from the seal (was: bare type name only, and
-        # the child artifact then degraded even that to the literal string "error").
+        # Carry the actual cause (type AND message, bounded) — and, for a model-call failure, the
+        # ENDPOINT, since a rate limit, a dead proxy, a wrong base_url and a silent provider are
+        # otherwise indistinguishable (the review's L3: five network faults, one useless sentence).
         cause = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
+        if failure_origin == "model_call":
+            from urllib.parse import urlparse
+            host = urlparse(str(getattr(llm, "_base_url", "") or "")).hostname or "default-endpoint"
+            cause = f"{cause} (endpoint: {host})"
         return _park(
             "error", f"an internal error ended the turn ({cause[:300]})", closeout=False,
             error_origin=failure_origin,

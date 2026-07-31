@@ -172,7 +172,9 @@ def stream_salvages_partial_on_midstream_break():
     llm.client = NS(chat=NS(completions=NS(create=_gen)))
     resp = llm._stream_assemble({})
     assert resp.choices[0].message.content == "partial answer"
-    assert resp.choices[0].finish_reason == "length", "a salvaged partial is marked incomplete"
+    assert resp.choices[0].finish_reason == "transport_error", (
+        "a salvaged partial is marked incomplete — and a transport break must say so, never "
+        "masquerade as a token limit (L2)")
 
 
 @check

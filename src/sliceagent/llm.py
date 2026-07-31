@@ -1786,7 +1786,11 @@ class OpenAILLM:
                 ) from e
             if not parts and not calls:
                 raise                          # nothing salvageable → let with_retry re-roll
-            finish = finish or "length"        # partial assembly → treat as a truncated (incomplete) stop
+            # A mid-stream TRANSPORT break with salvageable parts is marked as its own kind — never
+            # as "length": the user would otherwise be told the answer hit the token limit and be
+            # advised to narrow the question, when the real cause was the network (the review's L2;
+            # Hermes keeps the two apart with its partial-stream stub id).
+            finish = finish or "transport_error"
         # Drop any INCOMPLETE tool call (missing id or name) — a mid-stream break before a tool_call's
         # name/id delta arrived would otherwise yield a ToolCall(name=None) that breaks the dispatcher.
         # If this empties content AND tool_calls, complete() raises EmptyResponseError → with_retry re-rolls.

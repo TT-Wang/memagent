@@ -574,6 +574,59 @@ def run_turn_binds_the_turn_signal_into_the_sandbox_wait():
     assert getattr(host.sandbox, "cancel_poll", None) is None, "the binding must be restored"
 
 
+@check
+def a_transport_break_is_never_mislabeled_a_token_limit():
+    """FIELD (the review's L2): a mid-stream TCP reset was laundered into finish_reason='length' —
+    the user was told the answer hit the token limit and advised to narrow the question; the real
+    cause was the network. The salvage now carries finish_reason='transport_error': the loop RESUMES
+    with a transport-named message, and a relentless break parks with a transport-named reason."""
+    llm = _ScriptLLM([
+        _Resp(content="## Findings\n- one …", finish_reason="transport_error"),
+        _Resp(content="- two. Done.", finish_reason="stop"),
+    ])
+    events = []
+    result = run_turn(build_slice=_build(), llm=llm, tools=_Tools(),
+                      dispatch=events.append, hooks=Hooks(), max_steps=6)
+    assert result.stop_reason == "end_turn", result.stop_reason
+    phases = [e for e in events
+              if isinstance(e, TurnPhaseChanged) and e.phase == "transport_continuation"]
+    assert len(phases) == 1, "the transport resume must be visible"
+    traj = [m for call in llm.seen for m in call if m.get("role") == "user"]
+    assert any("transport error" in str(m.get("content") or "").lower() for m in traj)
+    assert not any("token limit" in str(m.get("content") or "").lower() for m in traj), (
+        "a network fault must never be labeled a token limit")
+
+
+@check
+def a_relentless_transport_break_parks_with_a_transport_reason():
+    """Bounded like length (3 resumes), then a transport-named park — never a 'token limit' verdict."""
+    llm = _ScriptLLM([_Resp(content="still going …", finish_reason="transport_error")])
+    events = []
+    result = run_turn(build_slice=_build(), llm=llm, tools=_Tools(),
+                      dispatch=events.append, hooks=Hooks(), max_steps=6)
+    assert result.stop_reason == "transport_error", result.stop_reason
+    assert "TRANSPORT" in str(getattr(result, "message", "") or "")
+    assert "token limit" not in str(getattr(result, "message", "") or "").lower()
+    assert len(llm.seen) == 4, f"initial + 3 resumes, then park ({len(llm.seen)} calls)"
+    assert not [e for e in events if isinstance(e, AssistantText) and e.final]
+
+
+@check
+def a_model_call_park_names_the_endpoint():
+    """FIELD (the review's L3): a rate limit, a dead proxy, a wrong base_url and a silent provider
+    all read as 'an internal error ended the turn'. The park now names the endpoint."""
+    class _FailLLM:
+        model = "x"
+        _base_url = "https://api.deepseek.com/v1"
+        def complete(self, messages, schemas):
+            raise ConnectionError("proxy refused")
+    events = []
+    result = run_turn(build_slice=_build(), llm=_FailLLM(), tools=_Tools(),
+                      dispatch=events.append, hooks=Hooks(), max_steps=3)
+    assert result.stop_reason == "error", result.stop_reason
+    assert "api.deepseek.com" in str(getattr(result, "message", "") or ""), result.message
+
+
 def main():
     failed = 0
     for fn in CHECKS:
