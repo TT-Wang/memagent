@@ -1539,6 +1539,15 @@ def run_turn(*, build_slice, llm, tools, dispatch: Dispatcher, hooks: Hooks | No
     response_only_next = False
     length_continuations = 0   # bounded finish_reason=length resumes (Hermes parity: 3, then park)
     should_cancel = signal.is_set if signal is not None else None
+    # Bind the turn's cancel token to the sandbox's POLLED wait (Hermes shape). In the live UI the
+    # turn runs on a worker thread, so no real SIGINT can reach it — a Ctrl-C there only sets this
+    # Event, and a blocking process.wait() saw nothing. The poll loop in LocalSandbox converts the
+    # token into the same KeyboardInterrupt the plain path's physical Ctrl-C raises, so both
+    # frontends share the ONE existing reaper and the ONE indeterminate typing.
+    _sandbox = getattr(tools, "sandbox", None)
+    _prev_cancel_poll = getattr(_sandbox, "cancel_poll", None) if _sandbox is not None else None
+    if _sandbox is not None and should_cancel is not None:
+        _sandbox.cancel_poll = should_cancel
 
     steer_state = {"broken": False}
     # Malformed queue items encountered at a mid-turn drain (not a bare str / exact (str,str) pair /
@@ -2168,3 +2177,6 @@ def run_turn(*, build_slice, llm, tools, dispatch: Dispatcher, hooks: Hooks | No
             error_kind=("indeterminate_model_call"
                         if isinstance(e, IndeterminateModelCallError) else ""),
         )
+    finally:
+        if _sandbox is not None and should_cancel is not None:
+            _sandbox.cancel_poll = _prev_cancel_poll

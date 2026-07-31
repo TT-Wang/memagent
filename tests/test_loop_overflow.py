@@ -548,6 +548,32 @@ def max_steps_closeout_forwards_the_same_model_cancellation_and_activity_control
     assert all(observer is activity for _, observer in llm.controls)
 
 
+@check
+def run_turn_binds_the_turn_signal_into_the_sandbox_wait():
+    """The live-UI abort chain end to end: run_turn binds the turn's signal Event into the
+    sandbox's polled wait, so a Ctrl-C (which on the TUI worker thread can only ever set that
+    Event) aborts a blocking run_command in ~a second — not after the command's full runtime —
+    and the turn parks INDETERMINATE exactly like the plain path's physical Ctrl-C. The binding
+    is restored after the turn (a stale token must never cancel a later command)."""
+    from sliceagent.tools import LocalToolHost
+
+    import tempfile
+    host = LocalToolHost(root=tempfile.mkdtemp(prefix="cancel-turn-"))
+    sig = threading.Event()
+    threading.Timer(0.4, sig.set).start()
+    llm = _ScriptLLM([_Resp(tool_calls=[_TC("run_command", {"command": "sleep 30", "timeout": 30}, "c1")])])
+    events = []
+    import time as _t
+    start = _t.monotonic()
+    result = run_turn(build_slice=_build(), llm=llm, tools=host,
+                      dispatch=events.append, hooks=Hooks(), max_steps=5, signal=sig)
+    elapsed = _t.monotonic() - start
+    assert result.stop_reason == "indeterminate", result.stop_reason
+    assert elapsed < 5, f"Ctrl-C held the turn for {elapsed:.1f}s — the Event still can't reach the wait"
+    assert any(isinstance(e, TurnInterrupted) and e.reason == "indeterminate" for e in events)
+    assert getattr(host.sandbox, "cancel_poll", None) is None, "the binding must be restored"
+
+
 def main():
     failed = 0
     for fn in CHECKS:

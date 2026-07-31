@@ -2872,5 +2872,40 @@ def main():
     raise SystemExit(1 if failed else 0)
 
 
+@check
+def a_polled_cancel_aborts_a_blocking_shell_wait_and_reaps():
+    """FIELD (the review's Family A — worst finding): in the live TUI the turn runs on a worker
+    thread, so no real SIGINT can reach it — Ctrl-C only set a cooperative Event that the blocking
+    process.wait() never saw, and the user was held for the command's full remaining runtime
+    (measured 112s; the cancelled command then completed and the seal read '1/1 succeeded'). The
+    sandbox wait now polls the token every 50ms and converts it into the SAME KeyboardInterrupt the
+    plain path raises — one reaper, both frontends."""
+    from sliceagent.sandbox import LocalSandbox
+
+    box = LocalSandbox(scrub_secrets=False)
+    cancel = threading.Event()
+    box.cancel_poll = cancel.is_set
+    root = tempfile.mkdtemp(prefix="cancel-wait-")
+    target = os.path.join(root, "alive.txt")
+    threading.Timer(0.4, cancel.set).start()
+    start = time.monotonic()
+    try:
+        box.run(f"sleep 30; echo late > {shlex.quote(target)}", cwd=root, timeout=30)
+        raise AssertionError("unreachable: the cancel token was ignored")
+    except KeyboardInterrupt:
+        pass
+    elapsed = time.monotonic() - start
+    assert elapsed < 5, f"the polled cancel took {elapsed:.1f}s — the Event still can't reach the wait"
+    time.sleep(0.3)
+    assert not os.path.exists(target), "the reaper must take the process group down with the wait"
+    # and with no token bound, the same wait respects only the deadline
+    box2 = LocalSandbox(scrub_secrets=False)
+    start = time.monotonic()
+    code, _ = box2.run("echo ok", cwd=root, timeout=5)
+    assert code == 0 and time.monotonic() - start < 5
+
+
 if __name__ == "__main__":
     main()
+
+

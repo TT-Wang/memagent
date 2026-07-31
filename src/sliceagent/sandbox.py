@@ -72,6 +72,10 @@ class BaseSandbox:
 
     def __init__(self, *, scrub_secrets: bool = True):
         self.scrub_secrets = scrub_secrets
+        # Optional polled cancel (Hermes shape): a callable returning True when the owning turn was
+        # interrupted. run_turn binds the turn's signal event here so a blocking wait can be
+        # aborted from the LIVE UI, where no real SIGINT reaches the turn's worker thread.
+        self.cancel_poll = None
 
     def run(self, command: str, *, cwd: str, timeout: float, on_timeout=None) -> tuple[int, str]:
         code, out = self._exec(command, cwd=cwd, timeout=timeout, on_timeout=on_timeout)
@@ -105,6 +109,35 @@ class LocalSandbox(BaseSandbox):
         log_fh.seek(0)
         return log_fh.read()
 
+    def _wait_or_cancel(self, process, timeout: float) -> None:
+        """Bounded wait that also watches the turn's cancel token.
+
+        process.wait(timeout=…) is a single uninterruptible syscall: in the LIVE UI (the turn runs
+        on a worker thread, so no real SIGINT can reach it) a Ctrl-C only sets a cooperative Event
+        that nothing inside this wait could see — the user was held for the command's full remaining
+        runtime. The poll loop (Hermes' base.py pattern) re-checks the token every 50 ms and
+        converts it into the same KeyboardInterrupt a physical Ctrl-C raises on the plain path, so
+        the ONE existing reaper serves both frontends.
+        """
+        import time as _time
+        deadline = _time.monotonic() + max(0.0, timeout)
+        while True:
+            rc = process.poll()
+            if rc is not None:
+                return
+            poll = self.cancel_poll
+            if poll is not None:
+                try:
+                    cancelled = poll()
+                except Exception:  # noqa: BLE001 — a broken token is not a reason to kill the child
+                    cancelled = False
+                if cancelled:
+                    raise KeyboardInterrupt
+            remaining = deadline - _time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(process.args, timeout)
+            _time.sleep(min(0.05, remaining))
+
     def _exec(self, command: str, *, cwd: str, timeout: float, on_timeout=None) -> tuple[int, str]:
         env = _scrub_env() if self.scrub_secrets else None
         process = None
@@ -126,7 +159,7 @@ class LocalSandbox(BaseSandbox):
                 stdin=subprocess.DEVNULL,
                 stdout=log_fh, stderr=subprocess.STDOUT, text=True,
             )
-            process.wait(timeout=timeout)
+            self._wait_or_cancel(process, timeout)
             return process.returncode, self._read_log_fh(log_fh)
         except subprocess.TimeoutExpired:
             if on_timeout is not None:
