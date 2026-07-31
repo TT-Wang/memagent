@@ -2,7 +2,7 @@
 
 _Auto-generated from `src/sliceagent/envspec.py` — do not edit by hand (`python scripts/gen_config_reference.py`)._
 
-sliceagent reads **61** environment variables across **6** groups; every value is validated at startup (a misspelled enum warns instead of silently defaulting). Run `sliceagent config --list` to see the resolved value of each on your machine. Secrets (🔒) are read from the environment / config and never printed.
+sliceagent reads **62** environment variables across **6** groups; every value is validated at startup (a misspelled enum warns instead of silently defaulting). Run `sliceagent config --list` to see the resolved value of each on your machine. Secrets (🔒) are read from the environment / config and never printed.
 
 ## agent
 
@@ -33,6 +33,7 @@ sliceagent reads **61** environment variables across **6** groups; every value i
 | `AGENT_VERIFY_CMD` | — | Oracle verify command run after a turn (e.g. 'pytest -q'). |
 | `AGENT_VERIFY_TIMEOUT` | `600` | Deadline in seconds for an acceptance check (a work item's verify command, or the oracle); default 600s, operator-raisable to 3600s. A check that overruns is INDETERMINATE, never failed. |
 | `AGENT_WEB` | `1` | Enable the web tools (fetch_url + web_search, DuckDuckGo, no key); set 0/off to disable network egress from the agent. |
+| `AGENT_WEB_DEADLINE` | `60` | Total wall-clock deadline (seconds) for one fetch_url/web_search call, spanning redirects — a slow-trickle server cannot reset it the way it resets the per-read timeout. |
 | `SLICEAGENT_BASH` | — | Windows only: bash.exe that runs shell commands (default: auto-detect Git Bash). |
 
 ## debug

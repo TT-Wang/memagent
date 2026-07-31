@@ -220,6 +220,9 @@ def finalize_tool_outcome(
 # properties. New/plugin/MCP tools remain UNKNOWN unless they declare otherwise.
 _PURE_READ_BUILTINS = frozenset({
     "read_file", "list_files", "grep", "glob", "search_history", "code_review",
+    # GET-only web reads: pure reads (no side effects), so the generic tool deadline and read waves
+    # apply — classifying them EFFECTFUL made AGENT_TOOL_TIMEOUT silently never fire for them.
+    "fetch_url", "web_search",
 })
 _DEDUPLICABLE_BUILTINS = frozenset({"read_file", "list_files", "grep", "glob", "search_history"})
 

@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import html as _htmlmod
 import ipaddress
+import math
+import time as _time
 import re
 import socket
 from urllib.parse import parse_qs, urlencode, urlparse
@@ -170,11 +172,32 @@ class _Resp:
         self.is_redirect = 300 <= (status_code or 0) < 400
 
 
-def _http_get(url: str, *, timeout: float):
+def _web_deadline() -> float:
+    """Total wall-clock deadline for one fetch (AGENT_WEB_DEADLINE, default 60s).
+
+    The per-read httpx timeout only bounds SILENCE between bytes: a server trickling one byte every
+    few seconds resets it forever (the review's D2 — 40s+ on a '20s timeout', and a normal SSE
+    keepalive stream never tripping). Hermes' shape: one total deadline per URL, enforced inside
+    the read loop. 0/invalid → the default.
+    """
+    import os
+    raw = os.environ.get("AGENT_WEB_DEADLINE", "").strip()
+    try:
+        v = float(raw)
+        return v if math.isfinite(v) and v > 0 else 60.0
+    except ValueError:
+        return 60.0
+
+
+def _http_get(url: str, *, timeout: float, deadline: float = 0.0):
     """One non-redirecting GET, read with a hard byte cap. Isolated so tests can monkeypatch the network.
     Streams the body and stops at _MAX_RAW_BYTES so a hostile server streaming gigabytes can't OOM us
-    (the old httpx.get buffered the WHOLE body before any size check)."""
+    (the old httpx.get buffered the WHOLE body before any size check). ``deadline`` is an absolute
+    monotonic instant shared across redirect hops (0 → per-call default) — a slow-trickle server
+    cannot reset it."""
     import httpx
+    if not deadline:
+        deadline = _time.monotonic() + _web_deadline()
     with httpx.stream("GET", url, timeout=timeout, follow_redirects=False,
                       headers={"User-Agent": _UA, "Accept": "text/html,*/*"}) as r:
         cl = (r.headers.get("content-length") or "").strip()   # strip OWS so a padded length still validates
@@ -182,6 +205,9 @@ def _http_get(url: str, *, timeout: float):
             return _Resp(r.status_code, dict(r.headers), "")   # redirect: don't read body; oversized: reject
         buf = bytearray()
         for chunk in r.iter_bytes():
+            if _time.monotonic() > deadline:
+                raise ValueError(
+                    f"total deadline exceeded after reading {len(buf)} bytes from {url}")
             buf += chunk
             if len(buf) > _MAX_RAW_BYTES:                       # stop the download mid-stream
                 break
@@ -190,13 +216,15 @@ def _http_get(url: str, *, timeout: float):
 
 def _fetch(url: str) -> str:
     """Fetch a page body as text, re-validating SSRF on each redirect hop. Raises ValueError on a blocked
-    target / too-large body; other network errors propagate (the handler catches them)."""
+    target / too-large body / the shared total deadline; other network errors propagate (the handler
+    catches them). The deadline spans every hop (Hermes' per-URL shape)."""
     cur = url
+    deadline = _time.monotonic() + _web_deadline()
     for _ in range(_MAX_REDIRECTS + 1):
         ok, reason = _safe_url(cur)
         if not ok:
             raise ValueError(reason)
-        r = _http_get(ok, timeout=_FETCH_TIMEOUT)
+        r = _http_get(ok, timeout=_FETCH_TIMEOUT, deadline=deadline)
         loc = r.headers.get("location") if hasattr(r, "headers") else None
         if getattr(r, "is_redirect", False) and loc:
             # resolve relative redirects against the current URL, then re-check the next hop
@@ -243,7 +271,8 @@ def parse_ddg_html(html: str, limit: int) -> list[dict]:
 
 
 def _ddg_search(query: str, limit: int) -> list[dict]:
-    r = _http_get(_DDG_HTML + "?" + urlencode({"q": query}), timeout=_SEARCH_TIMEOUT)
+    r = _http_get(_DDG_HTML + "?" + urlencode({"q": query}), timeout=_SEARCH_TIMEOUT,
+                  deadline=_time.monotonic() + _web_deadline())
     # the html endpoint may 30x to itself once; follow a single safe hop
     loc = r.headers.get("location") if hasattr(r, "headers") else None
     if getattr(r, "is_redirect", False) and loc:
@@ -252,7 +281,8 @@ def _ddg_search(query: str, limit: int) -> list[dict]:
         # a private/loopback/link-local host). Only follow when it passes; otherwise keep the original body.
         safe, _ = _safe_url(urljoin(_DDG_HTML, loc))
         if safe:
-            r = _http_get(safe, timeout=_SEARCH_TIMEOUT)
+            r = _http_get(safe, timeout=_SEARCH_TIMEOUT,
+                          deadline=_time.monotonic() + _web_deadline())
     return parse_ddg_html(getattr(r, "text", "") or "", limit)
 
 

@@ -45,6 +45,9 @@ REGISTRY: list[EnvVar] = [
            "rejected with a steer telling the model to split the partition. The 20-30k guidance "
            "stays advisory; this gate only catches gross overshoot. scope absent/unmeasurable → "
            "no gate.", "40000"),
+    EnvVar("AGENT_WEB_DEADLINE", "agent", "Total wall-clock deadline (seconds) for one fetch_url/"
+           "web_search call, spanning redirects — a slow-trickle server cannot reset it the way it "
+           "resets the per-read timeout.", "60"),
     EnvVar("AGENT_TOPIC_TOOLS", "agent", "Expose model-callable topic switching (off by default; host "
            "routing and slash commands remain available).", ""),
     EnvVar("AGENT_ADVANCED_TOOLS", "agent", "Expose persistent process and interactive terminal tools; "
