@@ -128,7 +128,12 @@ def abnormal_turn_stop_fails_acceptance_even_when_repo_verifier_passes():
     old_factory = bench._configured_llm
     try:
         bench._configured_llm = TruncatedLLM
-        result = bench.run(scenario())
+        # A relentless cut is RESUMED up to 3 times (bounded length-continuation), then still parks
+        # max_tokens — the abnormal stop must survive the resume budget, so the scenario gives that
+        # budget room instead of dying at the step ceiling first.
+        probe = scenario()
+        probe["meta"] = {"max_steps_per_turn": 5}
+        result = bench.run(probe)
     finally:
         bench._configured_llm = old_factory
     assert not result["passed"]

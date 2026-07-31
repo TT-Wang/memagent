@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from sliceagent.context_overflow import ContextOverflow                # noqa: E402
 from sliceagent.errors import RetryCancelledError                     # noqa: E402
-from sliceagent.events import StepEnd, TurnInterrupted                 # noqa: E402
+from sliceagent.events import AssistantText, StepEnd, TurnInterrupted, TurnPhaseChanged  # noqa: E402
 from sliceagent.execution import ToolEffect                           # noqa: E402
 from sliceagent.hooks import BudgetHook, CompositeHooks, Hooks, OracleHook  # noqa: E402
 from sliceagent.interfaces import Snippet                              # noqa: E402
@@ -344,6 +344,51 @@ def verify_guard_never_adjudicates_quoted_payloads():
     assert _unrunnable_verify_program("python3 -c 'import os; raise SystemExit(1)' || echo fallback") == ""
     # the operators themselves still split outside quotes
     assert _shell_segments('a -c "x;y" && b | c') == ['a -c "x;y" ', ' b ', ' c']
+
+
+@check
+def a_truncated_response_is_continued_not_parked():
+    """finish_reason=length parked big fan-out/synthesis turns mid-answer (thinking-on V4 spends
+    chain-of-thought from the same completion budget). The Hermes pattern: a cut is RESUMED
+    (bounded, 3) with the partial text standing as a non-final update, and only an unlucky
+    fourth cut parks — so a truncated answer can never silently seal as the final one."""
+    llm = _ScriptLLM([
+        _Resp(content="## Findings\n- item one …", finish_reason="length"),
+        _Resp(content="- item two …", finish_reason="length"),
+        _Resp(content="- item three. Done.", finish_reason="stop"),
+    ])
+    events = []
+    result = run_turn(build_slice=_build(), llm=llm, tools=_Tools(),
+                      dispatch=events.append, hooks=Hooks(), max_steps=10)
+    assert result.stop_reason == "end_turn", result.stop_reason
+    assert len(llm.seen) == 3
+    # each cut appends exactly one host continuation message to the trajectory (they ACCUMULATE:
+    # call 2 sees one, call 3 sees both)
+    def _continuations(call):
+        return sum(1 for m in call
+                   if m.get("role") == "user"
+                   and "cut off at the completion token limit" in str(m.get("content") or ""))
+    assert _continuations(llm.seen[1]) == 1 and _continuations(llm.seen[2]) == 2
+    phases = [e for e in events
+              if isinstance(e, TurnPhaseChanged) and e.phase == "length_continuation"]
+    assert len(phases) == 2, "a silent resume is a bug — the continuation must be visible"
+    finals = [e for e in events if isinstance(e, AssistantText) and e.final]
+    assert len(finals) == 1 and "item three" in finals[0].content
+
+
+@check
+def a_relentless_cut_parks_after_the_continuation_budget():
+    """The budget is the invariant: after 3 resumes the turn still parks max_tokens and the
+    truncated answer is NEVER dispatched as the final one."""
+    llm = _ScriptLLM([_Resp(content="still going …", finish_reason="length")])
+    events = []
+    result = run_turn(build_slice=_build(), llm=llm, tools=_Tools(),
+                      dispatch=events.append, hooks=Hooks(), max_steps=10)
+    assert result.stop_reason == "max_tokens", result.stop_reason
+    assert len(llm.seen) == 4, f"initial + 3 continuations, then park ({len(llm.seen)} calls)"
+    assert "3 continuation" in str(getattr(result, "message", "") or "")
+    assert not [e for e in events if isinstance(e, AssistantText) and e.final]
+    assert any(isinstance(e, TurnInterrupted) and e.reason == "max_tokens" for e in events)
 
 
 class _CountLLM:

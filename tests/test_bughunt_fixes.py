@@ -792,7 +792,10 @@ def limits_target_profile_holds():
     assert capability("claude-sonnet-5").completion_tokens_default == 32768
     assert capability("kimi-k2.7").completion_tokens_default == 32768
     assert capability("mystery-new-model-x").completion_tokens_default == 16384
-    assert capability("deepseek-v4-flash").completion_tokens_default == 8192  # known chat model keeps 8k
+    # V4 thinks by default on the official wire — chain-of-thought spends the SAME completion
+    # budget, so the chat-sized 8k cap truncated big fan-out/synthesis completions mid-response
+    assert capability("deepseek-v4-flash").completion_tokens_default == 32768
+    assert capability("deepseek-chat").completion_tokens_default == 8192  # the non-thinking alias keeps 8k
 
     # context preflight estimates tokens (~3 bytes/token + margin), no longer bytes==tokens
     text = "def handler(request):\n    return service.dispatch(request)\n" * 200

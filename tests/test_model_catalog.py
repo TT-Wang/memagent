@@ -103,7 +103,9 @@ def completion_cap_default_is_model_aware():
     more); AGENT_COMPLETION_TOKENS always overrides (exercised in the llm suite)."""
     assert capability("deepseek-reasoner", "https://api.deepseek.com/v1").completion_tokens_default == 32768
     assert capability("deepseek-chat", "https://api.deepseek.com/v1").completion_tokens_default == 8192
-    assert capability("deepseek-v4-flash", "https://api.deepseek.com/v1").completion_tokens_default == 8192
+    # V4 thinks by default on the official wire — CoT spends the same completion budget, so it
+    # takes the reasoning-sized cap too; the non-thinking alias above keeps the chat-sized one.
+    assert capability("deepseek-v4-flash", "https://api.deepseek.com/v1").completion_tokens_default == 32768
     assert capability("gpt-5.5", "https://api.openai.com/v1").completion_tokens_default == 32768
     assert capability("kimi-k2", "https://api.moonshot.cn/v1").completion_tokens_default == 32768
     assert capability("claude-sonnet-5", "").completion_tokens_default == 32768

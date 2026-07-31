@@ -137,7 +137,13 @@ def capability(model: str, base_url: str = "") -> ModelCapability:
                                supports_reasoning_effort=True, supports_vision=vis,
                                completion_tokens_default=32768)
     if m in {"deepseek-v4-flash", "deepseek-v4-pro"}:
-        return ModelCapability("deepseek", supports_vision=vis, context_window=1_000_000)
+        # V4 emits chain-of-thought into the completion budget whenever thinking is on — and thinking
+        # is ON BY DEFAULT on the official wire (only the "fast" profile disables it). A chat-sized
+        # 8192 cap truncated big fan-out/synthesis completions mid-response (finish_reason=length
+        # parks) — the same defect the deepseek-reasoner rule below already sizes for. A cap is a
+        # ceiling, not a quota, so the reasoning-tier default applies even when a profile thinks less.
+        return ModelCapability("deepseek", supports_vision=vis, context_window=1_000_000,
+                               completion_tokens_default=32768)
     if "deepseek" in m or "deepseek" in b:
         # reasoning via extra_body.thinking; the retiring `deepseek-reasoner` alias emits CoT into the
         # completion budget, so it gets the reasoning-sized default.

@@ -268,6 +268,17 @@ MAX_TOKENS_MSG = ("The response hit the output token limit and was cut off mid-a
                   "Continue, or ask a narrower question.")
 FILTERED_MSG = "The response was stopped by the provider's content filter; the turn is incomplete."
 
+# finish_reason=length is RESUMED before it is ever parked (bounded — Hermes parity, 3 attempts):
+# the partial text stands in the trajectory as a non-final update, and this host instruction asks
+# for the exact continuation. Only a cut that outlives the budget parks, so a truncated answer can
+# never silently seal as the final one.
+_LENGTH_CONTINUATION_LIMIT = 3
+_LENGTH_CONTINUATION = (
+    "Your previous response was cut off at the completion token limit. Continue EXACTLY from where "
+    "it stopped — do not repeat earlier content, do not restart. If you were emitting tool calls, "
+    "re-issue them as smaller batches (fewer calls per response, smaller arguments)."
+)
+
 # Breadcrumb inserted ONCE when overflow compaction drops the oldest exchange, so the loss is never
 # silent: the model is told it happened and how to recover (the episode sink archived it losslessly).
 OVERFLOW_COMPACTED = ("[context note: the oldest step(s) of this turn were compacted out to fit the window. "
@@ -1526,6 +1537,7 @@ def run_turn(*, build_slice, llm, tools, dispatch: Dispatcher, hooks: Hooks | No
     repeated_observation = _ObservationRepeatAdvisory()
     failure_origin = ""
     response_only_next = False
+    length_continuations = 0   # bounded finish_reason=length resumes (Hermes parity: 3, then park)
     should_cancel = signal.is_set if signal is not None else None
 
     steer_state = {"broken": False}
@@ -1991,13 +2003,33 @@ def run_turn(*, build_slice, llm, tools, dispatch: Dispatcher, hooks: Hooks | No
                             })
                             continue
                     if stop in ("max_tokens", "filtered"):
+                        if stop == "max_tokens" and length_continuations < _LENGTH_CONTINUATION_LIMIT:
+                            # Bounded auto-continuation (the Hermes pattern): a length-truncated
+                            # response is RESUMED, not parked — the partial text already stands in
+                            # the trajectory as a non-final update; only a cut that outlives the
+                            # budget parks, so a partial answer can never seal as the final one.
+                            length_continuations += 1
+                            if candidate:
+                                dispatch(AssistantText(candidate, final=False))
+                            dispatch(TurnPhaseChanged(
+                                "length_continuation",
+                                f"response hit the completion cap — resuming "
+                                f"({length_continuations}/{_LENGTH_CONTINUATION_LIMIT})"))
+                            messages.append({"role": "user", "content": _LENGTH_CONTINUATION})
+                            continue
                         # #11: a truncated (length) or content-filtered response is INCOMPLETE — park it as
                         # interrupted instead of sealing a partial answer as a clean turn. Surface any partial
                         # content explicitly as an update, never as the accepted terminal response.
                         if candidate:
                             dispatch(AssistantText(candidate, final=False))
-                        return _park(stop, MAX_TOKENS_MSG if stop == "max_tokens" else FILTERED_MSG,
-                                     closeout=False)
+                        return _park(
+                            stop,
+                            (MAX_TOKENS_MSG + f" (the cut persisted through "
+                             f"{length_continuations} continuation attempt(s))")
+                            if stop == "max_tokens" and length_continuations else
+                            MAX_TOKENS_MSG if stop == "max_tokens" else FILTERED_MSG,
+                            closeout=False,
+                        )
                     dispatch(AssistantText(
                         candidate or "Done — no summary to add.", final=True,
                         synthetic=not bool(candidate),
