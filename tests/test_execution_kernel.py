@@ -2941,6 +2941,108 @@ def a_whole_file_overwrite_is_refused_when_the_file_changed_since_the_read():
     assert "Wrote" in str(out)
 
 
+@check
+def read_file_refuses_a_fifo_instead_of_wedging_the_turn():
+    """FIELD (the review's D1): read_file on a FIFO blocked forever — 1702 samples in __open at 60s,
+    the turn frozen at 0.1% CPU, and one of 32 reader slots burned permanently. Regular-file types
+    are now guarded up front: a FIFO gets a STEERED redirect, never a blocking open."""
+    from sliceagent.tools import LocalToolHost
+    if os.name == "nt":
+        return
+    root = tempfile.mkdtemp(prefix="fifo-guard-")
+    os.mkfifo(os.path.join(root, "tap"))
+    host = LocalToolHost(root=root)
+    start = time.monotonic()
+    out = host.run("read_file", {"path": "tap"})
+    assert time.monotonic() - start < 5, "a FIFO read must fail fast, never block"
+    assert out.status == ToolStatus.STEERED and "FIFO" in str(out), str(out)[:160]
+    # and regular files still read fine
+    with open(os.path.join(root, "a.py"), "w") as f:
+        f.write("x = 1\n")
+    assert "x = 1" in host.run("read_file", {"path": "a.py"})
+
+
+@check
+def a_huge_file_is_viewed_with_bounded_memory_and_the_same_contract():
+    """FIELD (the review's G2): a 159MB file drove RSS ~700MB for a 65KB view — cap-after-buffer.
+    Above _READ_SLURP_CAP the view streams: total lines counted in one bounded pass, only the
+    requested window materialized, same line-number/footer/offset contract."""
+    from sliceagent.tools import LocalToolHost, _READ_SLURP_CAP
+
+    root = tempfile.mkdtemp(prefix="huge-view-")
+    path = os.path.join(root, "big.log")
+    n_lines = (_READ_SLURP_CAP // 10) + 5000   # ~10 bytes per line, comfortably over the cap
+    with open(path, "w") as f:
+        for i in range(1, n_lines + 1):
+            f.write(f"line-{i:08d}\n")
+    host = LocalToolHost(root=root)
+    import resource
+    unit = 1 if sys.platform == "darwin" else 1024   # ru_maxrss: bytes on macOS, kilobytes on Linux
+    rss_before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * unit
+    out = host.run("read_file", {"path": "big.log"})
+    text = str(out)
+    assert "line-00000001" in text, text[:200]
+    assert f"of {n_lines}" in text, text[-300:]
+    assert "memory-bounded streaming read" in text
+    rss_after = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * unit
+    assert (rss_after - rss_before) < _READ_SLURP_CAP * 2, (
+        f"the view materialized ~{(rss_after - rss_before) / 1e6:.0f}MB for a capped view")
+    # the paging contract holds: a mid-file window lands exactly
+    out = host.run("read_file", {"path": "big.log", "offset": n_lines - 10, "limit": 11})
+    assert f"line-{n_lines:08d}" in str(out), str(out)[-200:]
+
+
+@check
+def non_recursive_list_files_is_capped_like_the_recursive_branch():
+    """FIELD (the review's G3): one uncapped non-recursive list_files injected ~27.5k tokens into a
+    turn that reported 1/1 succeeded — the one measured breach of the bounded-slice invariant, nine
+    lines from the recursive cap it was missing."""
+    from sliceagent.tools import LocalToolHost, _LIST_CAP
+
+    root = tempfile.mkdtemp(prefix="list-cap-")
+    for i in range(_LIST_CAP + 50):
+        open(os.path.join(root, f"f{i:04d}.txt"), "w").close()
+    host = LocalToolHost(root=root)
+    out = str(host.run("list_files", {"path": "."}))
+    assert f"capped at {_LIST_CAP}" in out, out[-200:]
+    assert out.count("\n") < _LIST_CAP + 6, f"uncapped listing ({out.count(chr(10))} lines)"
+
+
+@check
+def an_abandoned_readers_slot_is_released_so_the_session_never_blinds():
+    """FIELD (the review's D1 second order): 32 wedged reads permanently consumed every physical
+    reader slot — every later read in the session then failed 'reader capacity remained
+    unavailable' with no explanation. The wave now frees an abandoned reader's slot at settle, so
+    capacity bounds ACTIVE work, not zombies. (Proven by exhaustion: with 31/32 slots pre-held,
+    only the WAVE's early release can free one while the reader is still wedged.)"""
+    from sliceagent.scheduler import _TIMEOUT_READER_SLOTS
+
+    inv = ToolInvocation("wedged-reader", "read_file", {}, 0)
+    gate = threading.Event()
+
+    def wedged():
+        gate.wait(30)
+        return ToolOutcome(inv, ToolStatus.SUCCEEDED, "unblocked")
+
+    held = [_TIMEOUT_READER_SLOTS.acquire(blocking=False) for _ in range(31)]
+    assert all(held), "could not pre-fill the reader pool for the exhaustion proof"
+    try:
+        outcomes = run_ordered([
+            ScheduledTool(inv, ToolPurity.PURE_READ, wedged, timeout_safe=True,
+                          request_cancel=lambda _k: None),
+        ], timeout=0.5, lifecycle_absolute=5.0)
+        assert outcomes[0].status is ToolStatus.INDETERMINATE, outcomes[0].status
+        # the wedged thread is STILL blocked — the slot can only be free if the WAVE released it
+        acquired = _TIMEOUT_READER_SLOTS.acquire(blocking=False)
+        gate.set()
+        assert acquired, "the abandoned reader's slot was not released at wave settle"
+        _TIMEOUT_READER_SLOTS.release()
+    finally:
+        gate.set()
+        for _ in held:
+            _TIMEOUT_READER_SLOTS.release()
+
+
 if __name__ == "__main__":
     main()
 

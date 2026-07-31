@@ -437,10 +437,14 @@ def _run_read_wave(
         finally:
             # ``done`` means the handler produced an outcome; ``slot_released`` proves the outer physical
             # lifecycle lease is also free. The scheduler waits for both before reporting a closed timeout.
-            slot.release()
+            # Idempotent against the wave's early release of an abandoned (wedged) reader's slot.
             with condition:
-                job.slot_released = True
+                already = job.slot_released
+                if not already:
+                    job.slot_released = True
                 condition.notify_all()
+            if not already:
+                slot.release()
 
     def active_count() -> int:
         return sum(job.launched and not job.slot_released for job in jobs)
@@ -773,6 +777,17 @@ def _run_read_wave(
                 index for index in late
                 if not jobs[index].done or not jobs[index].slot_released
             }
+            # A reader abandoned mid-flight (still running after grace) would hold its physical slot
+            # forever — after 32 such events every later read in the session fails with "reader
+            # capacity remained unavailable" and nothing says why (the review's D1 second order:
+            # delayed, invisible blindness). The wave is over, so free the wedged slots here;
+            # capacity must bound ACTIVE work, not zombies. The worker's own finally is idempotent
+            # against this early release.
+            for index in still_running:
+                wedged = jobs[index]
+                if wedged.launched and not wedged.slot_released:
+                    wedged.slot_released = True
+                    (reader_slots if wedged.task.timeout_safe else lifecycle_slots).release()
         except BaseException:
             # SIGINT/KeyboardInterrupt can arrive at any polling point. Freeze the same synchronized start
             # boundary before propagating it: queued/launched workers cannot announce or execute afterward;

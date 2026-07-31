@@ -15,6 +15,7 @@ import posixpath
 import re
 import shlex
 import shutil
+import stat as _stat
 import tempfile
 from dataclasses import replace
 
@@ -86,6 +87,8 @@ def _numbered(text: str) -> str:
 
 
 _READ_MAX_LINES = 1500   # default in-slice VIEW cap for read_file; the full file ALWAYS stays on disk (bound the view, not the file)
+_READ_SLURP_CAP = 8 * 1024 * 1024     # bytes: above this, read_file streams the window instead of materializing the whole file
+_READ_STREAM_CHUNK = 1024 * 1024      # streaming block size for huge-file window reads
 
 
 def _coerce_int(v):
@@ -1444,6 +1447,23 @@ class LocalToolHost:
         if hf is not None:               # read-only VIRTUAL history/ (this session's sealed turns as files)
             return hf.read_file(self._archive_handle(path))
         full = self.resolve_read(path)   # focus copy if present, else search all roots (paged-out blob recall)
+        try:
+            st = os.stat(full)
+        except OSError as e:
+            raise FileNotFoundError(str(e)) from e
+        if not _stat.S_ISREG(st.st_mode):
+            # A FIFO/device/socket never EOFs: a plain read() wedges the turn forever and burns a
+            # reader slot with it (the review's D1). Redirect instead of blocking.
+            kind = ("a FIFO/pipe" if _stat.S_ISFIFO(st.st_mode) else
+                    "a device" if _stat.S_ISCHR(st.st_mode) or _stat.S_ISBLK(st.st_mode) else
+                    "a socket" if _stat.S_ISSOCK(st.st_mode) else "not a regular file")
+            return ToolText(
+                f"read_file: {path} is {kind} — reading it would block forever. Inspect it with "
+                "run_command/execute_code under a timeout (e.g. dd/cat with a bound) instead.",
+                status=ToolStatus.STEERED)
+        offset, limit = _coerce_int(args.get("offset")), _coerce_int(args.get("limit"))
+        if st.st_size > _READ_SLURP_CAP:
+            return self._huge_file_view(path, full, st, offset, limit)
         with open(full, "rb") as f:
             raw = f.read()
         self._mark_read(full)
@@ -1456,7 +1476,6 @@ class LocalToolHost:
         # line window (offset/limit). The FULL file always stays on disk — this bounds the VIEW, not the file.
         lines = raw.decode("utf-8", errors="replace").splitlines()   # consistent with read_text's gate decode
         total = len(lines)
-        offset, limit = _coerce_int(args.get("offset")), _coerce_int(args.get("limit"))
         windowed = offset is not None or limit is not None
         # a paged-out blob recall is the deliberate L1→L2 "give me the FULL output back" channel — never cap
         # it (only the default view of an ordinary file is capped). Still windowable if offset/limit is given.
@@ -1473,19 +1492,79 @@ class LocalToolHost:
                 if end < total else "")
         return f"{body}\n<system>read_file {path}: lines {start}-{end} of {total}{more}</system>"
 
+    def _huge_file_view(self, path: str, full: str, st, offset, limit) -> str:
+        """Memory-bounded view for files above _READ_SLURP_CAP (the review's G2: a 159MB file cost
+        ~700MB RSS to show 65KB; a 1GiB log ~2.4GB). Total lines are counted in one streaming pass
+        and only the requested window is ever materialized — the contract (line numbers, footer,
+        offset/limit paging) is identical to the small-file path."""
+        self._mark_read(full)
+        with open(full, "rb") as f:
+            sample = f.read(8192).decode("utf-8", errors="replace")
+        if looks_binary(path, sample):
+            with open(full, "rb") as f:
+                head = f.read(4096)
+            return (f"{path}: binary file, {st.st_size:,} bytes — text tools can't edit it; "
+                    f"inspect/convert it with run_command/execute_code (the right CLI).\n"
+                    f"magic: {head[:8].hex()}\nhexdump (first 256 bytes):\n"
+                    + "\n".join(self._hexrows(head[:256])))
+        total = 0
+        with open(full, "rb") as f:
+            for chunk in iter(lambda: f.read(_READ_STREAM_CHUNK), b""):
+                total += chunk.count(b"\n")
+        windowed = offset is not None or limit is not None
+        if not windowed:
+            start, end = 1, min(total, _READ_MAX_LINES)
+        else:
+            start = min(max(1, offset or 1), total + 1)
+            end = total if limit is None else min(total, start - 1 + max(1, limit))
+        lines = self._stream_line_window(full, start, end)
+        body = _number_lines(lines, start)
+        more = (f" · +{total - end} more — read_file(path, offset={end + 1}) to continue"
+                if end < total else "")
+        return (f"{body}\n<system>read_file {path}: lines {start}-{end} of {total} "
+                f"({st.st_size:,} bytes; memory-bounded streaming read){more}</system>")
+
+    @staticmethod
+    def _stream_line_window(full: str, start: int, end: int) -> list[str]:
+        """Lines [start, end] (1-based, inclusive) read with bounded memory — never slurps."""
+        out: list[str] = []
+        if start > end:
+            return out
+        lineno = 0
+        with open(full, "rb") as f:
+            pending = b""
+            for chunk in iter(lambda: f.read(_READ_STREAM_CHUNK), b""):
+                rows = (pending + chunk).split(b"\n")
+                pending = rows.pop()
+                for raw_line in rows:
+                    lineno += 1
+                    if start <= lineno <= end:
+                        out.append(raw_line.decode("utf-8", errors="replace"))
+                    if lineno > end:
+                        return out
+        if pending:
+            lineno += 1
+            if start <= lineno <= end:
+                out.append(pending.decode("utf-8", errors="replace"))
+        return out
+
     @staticmethod
     def _binary_view(path: str, raw: bytes, head_bytes: int = 256) -> str:
         head = raw[:head_bytes]
+        return (f"{path}: binary file, {len(raw)} bytes — text tools can't edit it; inspect/convert "
+                f"it with run_command/execute_code (the right CLI).\n"
+                f"magic: {head[:8].hex()}\n"
+                f"hexdump (first {len(head)} bytes):\n" + "\n".join(LocalToolHost._hexrows(head)))
+
+    @staticmethod
+    def _hexrows(head: bytes) -> list[str]:
         rows = []
         for off in range(0, len(head), 16):
             chunk = head[off:off + 16]
             hexpart = " ".join(f"{b:02x}" for b in chunk)
             asciipart = "".join(chr(b) if 32 <= b < 127 else "." for b in chunk)
             rows.append(f"{off:08x}  {hexpart:<47}  {asciipart}")
-        return (f"{path}: binary file, {len(raw)} bytes — text tools can't edit it; inspect/convert "
-                f"it with run_command/execute_code (the right CLI).\n"
-                f"magic: {head[:8].hex()}\n"
-                f"hexdump (first {len(head)} bytes):\n" + "\n".join(rows))
+        return rows
 
     @staticmethod
     def _detect_crlf(full: str) -> bool:
@@ -1521,7 +1600,13 @@ class LocalToolHost:
             shown = [e + "/" if os.path.isdir(os.path.join(base, e)) else e
                      for e in entries if not _is_ignored(e)]
             hidden = [e for e in entries if _is_ignored(e)]
+            # Same bound as the recursive branch nine lines below (the review's G3: one uncapped
+            # call injected ~27.5k tokens into a turn that reported 1/1 succeeded).
+            capped = len(shown) > _LIST_CAP
+            shown = shown[:_LIST_CAP]
             body = "\n".join(shown) or "(empty)"
+            if capped:
+                body += f"\n(+more — capped at {_LIST_CAP}; pass a subdirectory path to narrow)"
             if hidden:  # name them so the model KNOWS they exist (recoverable), without flooding
                 body += f"\n(+{len(hidden)} ignored: {', '.join(hidden[:6])})"
             return body
