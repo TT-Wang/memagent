@@ -1876,6 +1876,7 @@ class LocalToolHost:
             # repo-configured fsmonitor command: merely observing an untrusted repo must not execute it.
             status = subprocess.run(
                 [*base, "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+                stdin=subprocess.DEVNULL,
                 capture_output=True, text=True, timeout=30,
             )
             ignored = None
@@ -1884,6 +1885,7 @@ class LocalToolHost:
                 # Enumerate recursively only for the expensive uncertainty view; ordinary reviews stay lean.
                 ignored = subprocess.run(
                     [*base, "ls-files", "--others", "--ignored", "--exclude-standard", "-z"],
+                    stdin=subprocess.DEVNULL,
                     capture_output=True, text=True, timeout=30,
                 )
             # --no-ext-diff / --no-textconv: a hostile repo's .gitattributes + .git/config can register a diff
@@ -1891,6 +1893,7 @@ class LocalToolHost:
             # (external review H-06). Disable both so reviewing a repo never runs repo-controlled helpers.
             p = subprocess.run(
                 [*base, "diff", "--no-ext-diff", "--no-textconv", ref, "--"],
+                stdin=subprocess.DEVNULL,
                 capture_output=True, text=True, timeout=30,
             )
         except FileNotFoundError:

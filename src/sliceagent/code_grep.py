@@ -132,6 +132,7 @@ def make_grep_tool(host) -> ToolEntry:
         try:
             proc = subprocess.run(
                 cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",  # H10: UTF-8, not locale
+                stdin=subprocess.DEVNULL,  # K3: a helper child never inherits the TUI's terminal
                 cwd=host.root(), timeout=30
             )
         except (OSError, subprocess.SubprocessError) as e:
@@ -303,7 +304,7 @@ def make_glob_tool(host) -> ToolEntry:
             cmd = [rg] + _RG_BASE + (["--path-separator", "/"] if IS_WINDOWS else []) + ["--files", "--sortr", "modified", "-g", pattern, target]
             try:
                 proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",   # H10: UTF-8, not locale
-                                       errors="replace", cwd=host.root(), timeout=30)
+                                       errors="replace", stdin=subprocess.DEVNULL, cwd=host.root(), timeout=30)
                 if proc.returncode in (0, 1):          # 0 = files, 1 = none (not an error)
                     files = [ln for ln in proc.stdout.splitlines() if ln]
                 elif proc.stdout.strip():              # exit 2 WITH results: partial success —

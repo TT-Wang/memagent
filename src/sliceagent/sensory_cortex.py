@@ -140,6 +140,7 @@ def _git(cwd: Path, *args: str) -> str:
     try:
         out = subprocess.run(
             ["git", "-C", str(cwd), *args],
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             errors="replace",   # a non-UTF-8 commit subject (%s) must not raise UnicodeDecodeError out of "never raises"

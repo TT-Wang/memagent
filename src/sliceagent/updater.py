@@ -290,6 +290,12 @@ def _manual_guidance(origin: InstallOrigin, executable: str, out, os_name: str) 
     return 1
 
 
+def _uv_runner(command, **kwargs):
+    """Default update runner: bounded (600s) and stdin-free — `sliceagent update` must never hang
+    invisibly after one line of output or prompt on a terminal nobody owns (the review's D6)."""
+    return subprocess.run(command, timeout=600, stdin=subprocess.DEVNULL, **kwargs)
+
+
 def run_update(
     *,
     prefix: str | None = None,
@@ -297,7 +303,7 @@ def run_update(
     distribution=None,
     environ: dict | None = None,
     which=shutil.which,
-    runner=subprocess.run,
+    runner=_uv_runner,
     out=print,
     os_name: str | None = None,
     python_version: tuple[int, int] | None = None,

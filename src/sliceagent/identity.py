@@ -81,6 +81,7 @@ def _git_common_dir(root: str) -> str | None:
     try:
         proc = subprocess.run(
             ["git", "-C", root, "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            stdin=subprocess.DEVNULL,
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=3,
         )
     except (OSError, subprocess.SubprocessError):

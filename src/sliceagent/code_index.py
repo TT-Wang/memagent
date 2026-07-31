@@ -368,7 +368,7 @@ class RipgrepCodeIndex:
             cmd += ["-e", t]
         cmd.append(self.root)
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True,
+            proc = subprocess.run(cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL,
                                   encoding="utf-8", errors="replace",   # H10: don't decode ripgrep output with
                                   timeout=self.timeout)                  # the locale codec (ASCII on C/POSIX → corrupt)
         except (OSError, subprocess.SubprocessError):
@@ -399,6 +399,7 @@ class RipgrepCodeIndex:
     def _code_files(self, max_files: int) -> list[str]:
         try:
             proc = subprocess.run([self.rg, "--no-require-git", "--files", self.root],
+                                  stdin=subprocess.DEVNULL,
                                   capture_output=True, text=True, encoding="utf-8",   # H10: UTF-8, not locale
                                   errors="replace", timeout=self.timeout)
         except (OSError, subprocess.SubprocessError):

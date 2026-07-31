@@ -3068,6 +3068,32 @@ def a_running_command_emits_a_byte_evidence_heartbeat():
     assert "done" in str(out2)
 
 
+@check
+def the_update_runner_is_bounded_and_stdin_free():
+    """D6: `sliceagent update` ran uv with no timeout and the real TTY as stdin — it hung
+    indefinitely after one line of output at 0% CPU. The default runner is now bounded and
+    stdin-free."""
+    import sliceagent.updater as updater
+    captured = {}
+    real = updater.subprocess.run
+    updater.subprocess.run = lambda cmd, **kw: captured.update(kw) or type("R", (), {"returncode": 0})()
+    try:
+        updater._uv_runner(["uv", "pip", "install", "x"], check=False)
+    finally:
+        updater.subprocess.run = real
+    assert captured.get("timeout") == 600 and captured.get("stdin") is updater.subprocess.DEVNULL, captured
+
+
+@check
+def the_toolbar_shows_spend_not_only_savings():
+    """L7: the always-visible money readout showed only '$X saved' — measured $0.0003 displayed on a
+    session that cost $0.0064 (21x). The toolbar now shows spend beside savings."""
+    from sliceagent.tui import _savings_label
+    label = _savings_label({"model": "deepseek-v4-flash", "cost": 0.0064,
+                            "saved_cached_tok": 10_000, "saved_dollars": 0.0003})
+    assert "spent" in label and "0.0064" in label, label
+
+
 if __name__ == "__main__":
     main()
 

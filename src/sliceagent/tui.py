@@ -2959,9 +2959,15 @@ def _compact_count(value) -> str:
 
 def _savings_label(stats: dict) -> str:
     saved = _saved_dollars(stats)
+    try:
+        spent = float(stats.get("cost", 0.0) or 0.0)
+    except (TypeError, ValueError, OverflowError):
+        spent = 0.0
+    suffix = f" · ${spent:.4f} spent" if spent > 0 else ""
     if saved is None:
-        return f"{_compact_count(stats.get('saved_cached_tok', 0))} tok saved"
-    return f"${saved:.4f} saved" if saved < 1 else f"${saved:,.2f} saved"
+        return f"{_compact_count(stats.get('saved_cached_tok', 0))} tok saved{suffix}"
+    base = f"${saved:.4f} saved" if saved < 1 else f"${saved:,.2f} saved"
+    return base + suffix
 
 
 def _toolbar(stats: dict, width_fn=None):
