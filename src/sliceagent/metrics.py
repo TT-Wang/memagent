@@ -29,6 +29,8 @@ class CostMetrics:
         self.input_cache_creation = 0
         self.output = 0
         self.per_turn_fresh: list[int] = []   # input_other per TurnEnd — THE moat curve (flat vs climbing)
+        self.peak_call_input = 0      # max SINGLE-CALL input (fresh+cache-read+creation) — the cache-agnostic moat number
+        self.model_calls = 0          # apple-to-apple model-call count
         self.tool_calls = 0
         self.tool_failures = 0
         self.retries = 0
@@ -64,6 +66,11 @@ class CostMetrics:
         fresh = usage.get("input_other", 0) or 0
         self.input_other += fresh
         self._turn_fresh += fresh
+        self.model_calls += 1
+        self.peak_call_input = max(
+            self.peak_call_input,
+            fresh + (usage.get("input_cache_read", 0) or 0) + (usage.get("input_cache_creation", 0) or 0),
+        )
         self.input_cache_read += usage.get("input_cache_read", 0) or 0
         self.input_cache_creation += usage.get("input_cache_creation", 0) or 0
         # output: prefer the typed key, fall back to the legacy one (older usage dicts)
@@ -87,6 +94,8 @@ class CostMetrics:
             "input_cache_creation": self.input_cache_creation,
             "output": self.output,
             "cache_hit_rate": hit,                                   # cache-read / total input
+            "peak_call_input": self.peak_call_input,
+            "model_calls": self.model_calls,
             "per_turn_fresh": list(ptf),                            # the moat curve
             "avg_turn_fresh": round(sum(ptf) / len(ptf), 1) if ptf else 0.0,
             "peak_turn_fresh": max(ptf) if ptf else 0,

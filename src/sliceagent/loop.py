@@ -1508,6 +1508,8 @@ def run_turn(*, build_slice, llm, tools, dispatch: Dispatcher, hooks: Hooks | No
     SteerDelivered; the in-flight model call is never aborted."""
     hooks = hooks or Hooks()
     total = Usage()
+    peak_call_input = 0    # moat counters (owner's h2h fixes): peak single-call window + call count
+    model_calls = 0
     steps = 0
     messages: list = []      # defined BEFORE the seed build so _park's closure is safe even if it throws
     seed_len = 0
@@ -1666,8 +1668,23 @@ def run_turn(*, build_slice, llm, tools, dispatch: Dispatcher, hooks: Hooks | No
         return observe
 
     def _account(usage: dict) -> None:
-        nonlocal total
-        total = total + Usage.from_value(usage)
+        nonlocal total, peak_call_input, model_calls
+        typed = Usage.from_value(usage)
+        total = total + typed
+        # Moat-measuring counters (owner's h2h fixes): the peak SINGLE-CALL context window —
+        # cache-agnostic, the number that stays bounded for a slice and balloons for a transcript —
+        # and the apple-to-apple model-call count. Tracked at this single funnel so steps,
+        # closeouts, retries, and child work all count exactly once per physical call.
+        call_input = typed.input_other + typed.input_cache_read + typed.input_cache_creation
+        peak_call_input = max(peak_call_input, call_input)
+        if usage:
+            model_calls += 1
+
+    def _turn_usage() -> dict:
+        out = total.as_dict()
+        out["peak_call_input"] = peak_call_input
+        out["model_calls"] = model_calls
+        return out
 
     def _park(reason: str, msg: str | None, *, closeout: bool = True,
               error_origin: str = "", error_kind: str = "") -> TurnResult:
@@ -1944,7 +1961,7 @@ def run_turn(*, build_slice, llm, tools, dispatch: Dispatcher, hooks: Hooks | No
                     # #49: sweep BEFORE the clean-exit event so a steer that landed between the final drain
                     # and retirement is never silently stranded — it returns unacked on leftover_steers.
                     leftovers = _sweep_leftovers()
-                    dispatch(TurnEnd(stop, steps, total.as_dict()))   # the ONE clean-exit event
+                    dispatch(TurnEnd(stop, steps, _turn_usage()))   # the ONE clean-exit event
                     return TurnResult(stop, steps, total, leftover_steers=leftovers)
 
                 # tool_use: accumulate the assistant turn (with tool_calls), run, accumulate the tool results
@@ -2027,7 +2044,7 @@ def run_turn(*, build_slice, llm, tools, dispatch: Dispatcher, hooks: Hooks | No
                     # The turn ENDS here, parked on a peer. No closeout: a closeout answer would tell
                     # the user the work finished when it is waiting on a collaborator.
                     dispatch(StepEnd(steps, combined_usage.as_dict(), "waiting_peer"))
-                    dispatch(TurnEnd("waiting_peer", steps, total.as_dict()))
+                    dispatch(TurnEnd("waiting_peer", steps, _turn_usage()))
                     return TurnResult(
                         "waiting_peer", steps, total,
                         leftover_steers=_sweep_leftovers(),

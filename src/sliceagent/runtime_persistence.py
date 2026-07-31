@@ -812,6 +812,14 @@ class LocalTurnStore:
         receipt_usage = {
             "prompt_tokens": meta.get("ptok", 0),
             "completion_tokens": meta.get("ctok", 0),
+            # Moat-measuring fields (owner's h2h fixes): peak single-call window,
+            # apple-to-apple call count, and the cache split the dollar row prices.
+            "peak_call_input": meta.get("peak_call_input", 0),
+            "model_calls": meta.get("model_calls", 0),
+            "input_other": meta.get("input_other", 0),
+            "input_cache_read": meta.get("input_cache_read", 0),
+            "input_cache_creation": meta.get("input_cache_creation", 0),
+            **({"cost_usd": meta["cost_usd"]} if meta.get("cost_usd") is not None else {}),
         }
         safe_record["turn_receipt"] = TurnReceipt.from_events(
             snapshot.events,

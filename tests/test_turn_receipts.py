@@ -108,7 +108,15 @@ def test_receipt_is_sealed_in_existing_artifact_and_separates_turn_disposition()
     assert receipt["operations"][0]["preflight_kind"] == "lifecycle"
     assert receipt["operations"][0]["execution_started"] is False
     assert receipt["operations"][1]["disposition"] == "succeeded"
-    assert receipt["usage"] == {"prompt_tokens": 10, "completion_tokens": 3}
+    assert receipt["usage"] == {
+        "prompt_tokens": 10,
+        "completion_tokens": 3,
+        "peak_call_input": 0,
+        "model_calls": 0,
+        "input_other": 0,
+        "input_cache_read": 0,
+        "input_cache_creation": 0,
+    }
     compact = compact_receipt_projection(receipt)
     assert receipt_completion_label(compact, "end_turn") == "turn saved"
     assert not receipt_has_adverse_lifecycle(compact)

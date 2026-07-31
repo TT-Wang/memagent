@@ -263,6 +263,12 @@ class EpisodeSink:
             meta = {**self._meta, "stop_reason": stop_reason,
                     "ptok": usage.get("prompt_tokens", 0),
                     "ctok": usage.get("completion_tokens", 0),
+                    "peak_call_input": usage.get("peak_call_input", 0),
+                    "model_calls": usage.get("model_calls", 0),
+                    "input_other": usage.get("input_other", 0),
+                    "input_cache_read": usage.get("input_cache_read", 0),
+                    "input_cache_creation": usage.get("input_cache_creation", 0),
+                    "cost_usd": usage.get("cost_usd"),
                     "files": sorted(set(self._meta["files"])),
                     **outcome}
             record = {
