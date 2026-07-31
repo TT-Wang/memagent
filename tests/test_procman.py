@@ -205,6 +205,44 @@ def the_oracle_and_plain_shell_timeouts_keep_the_bounded_reap():
 
 
 @check
+def adoption_is_gated_on_proc_tools_being_registered():
+    """The default build deregisters every proc_* tool (cli.py, unless AGENT_ADVANCED_TOOLS): an
+    adoption message naming proc_tail/proc_wait/proc_kill would hand the model a handle it cannot
+    use, and the detached process would stay alive with nothing able to see or stop it. The hook
+    must not fire, the text must not name unregistered tools, and the process takes the bounded
+    reap instead."""
+    wd, h = _host()
+    open(os.path.join(wd, "s.py"), "w").write("import time\ntime.sleep(30)\n")
+    for name in tuple(h.registry._tools):
+        if name.startswith(("proc_", "terminal_")):
+            h.registry.deregister(name)
+    out = h.run("run_command", {"command": f"{PY} s.py", "timeout": 1})
+    text = str(out)
+    assert "was NOT killed" not in text and "background as p" not in text, text[:200]
+    assert "reaped" in text and "124" in text, text[:200]
+    assert not re.search(r"proc_(start|wait|tail|kill)", text), text[:300]
+    assert getattr(out.status, "value", out.status) == "failed", out.status
+    # and with the family present (a stock host) adoption still fires and names it
+    _, h2 = _host()
+    open(os.path.join(h2.root(), "s.py"), "w").write("import time\ntime.sleep(30)\n")
+    out2 = h2.run("run_command", {"command": f"{PY} s.py", "timeout": 1})
+    assert "was NOT killed" in str(out2)
+    h2.run("proc_kill", {"handle": re.search(r"background as (p\d+)", str(out2)).group(1)})
+
+
+@check
+def timeout_escalation_text_is_composed_from_the_registered_tools():
+    wd, h = _host()
+    assert "proc_start" in h._timeout_escalation(120, False)
+    for name in tuple(h.registry._tools):
+        if name.startswith(("proc_", "terminal_")):
+            h.registry.deregister(name)
+    text = h._timeout_escalation(120, False)
+    assert "proc_start" not in text and "larger timeout" in text
+    assert "proc_start" not in h._timeout_escalation(600, True)
+
+
+@check
 def timeout_result_carries_the_escalation():
     wd, h = _host()
     open(os.path.join(wd, "slow.py"), "w").write("import time\ntime.sleep(30)\n")

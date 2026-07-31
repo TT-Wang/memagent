@@ -1847,33 +1847,58 @@ class LocalToolHost:
             t = float(self.timeout)
         return max(1.0, min(t, 600.0))
 
-    @staticmethod
-    def _timeout_escalation(t: float, ceiling_hit: bool) -> str:
+    def _proc_tools_available(self) -> bool:
+        """True when the proc_* family is actually registered for the model. The default build
+        deregisters all of them (cli.py, unless AGENT_ADVANCED_TOOLS) — remediation text and the
+        adoption path must never name tools the model cannot call."""
+        return self.registry.has("proc_start") and self.registry.has("proc_wait")
+
+    def _timeout_escalation(self, t: float, ceiling_hit: bool) -> str:
         """The remediation the model needs AT the failure. Without it a timeout reads as a dead end and the
-        next step is a blind retry at the same limit — the deadline is a TOOL CHOICE, not a verdict."""
+        next step is a blind retry at the same limit — the deadline is a TOOL CHOICE, not a verdict.
+        Composed from the REGISTERED tool list: naming proc_start in a build that removed it would
+        send the agent to a tool it does not have (Family J — advice to nowhere)."""
+        if self._proc_tools_available():
+            next_step = ("this is the 600s ceiling — re-run it under proc_start, then proc_wait/proc_tail "
+                         "(background processes are not bounded by this deadline)"
+                         if ceiling_hit else
+                         "re-run with a larger timeout (up to 600), or for genuinely long work use "
+                         "proc_start + proc_wait/proc_tail, which this deadline does not bound")
+        else:
+            next_step = ("this is the 600s ceiling — for genuinely long work, split the command or "
+                         "run its stages separately so each fits the ceiling"
+                         if ceiling_hit else
+                         "re-run with a larger timeout (up to 600), or split the command so each "
+                         "stage fits the deadline")
         return ("Exit code 124 — the {t:g}s deadline, not the command's own status. The process group was "
                 "reaped, so whatever it had already written is still on disk.\nNext: {escalate}").format(
-            t=t,
-            escalate=("this is the 600s ceiling — re-run it under proc_start, then proc_wait/proc_tail "
-                      "(background processes are not bounded by this deadline)"
-                      if ceiling_hit else
-                      "re-run with a larger timeout (up to 600), or for genuinely long work use proc_start "
-                      "+ proc_wait/proc_tail, which this deadline does not bound"),
+            t=t, escalate=next_step,
         )
 
     def _adopt_on_timeout(self, command: str, timeout_s: float):
         """The sandbox on_timeout hook: adopt the LIVE process into the background registry instead
         of reaping it (Kimi Code's autoBackgroundOnTimeout — a deadline detaches, it does not kill).
-        Adoption failure returns None, which falls back to the ordinary bounded-failure reap."""
+        Only offered when the proc_* family is registered: an adopted process must be followable and
+        stoppable by the model, or a timed-out command stays alive by design with nothing able to
+        see or stop it. Adoption failure returns None, which falls back to the ordinary
+        bounded-failure reap."""
         def adopt(process, log_path, log_fh):
             try:
                 handle = self.procs.adopt(process, command, self.root(), log_path, log_fh)
             except Exception:  # noqa: BLE001 — never let adoption itself fail the command
                 return None
+            follow = []
+            if self.registry.has("proc_tail"):
+                follow.append(f"follow with proc_tail {handle}")
+            if self.registry.has("proc_wait"):
+                follow.append(f"wait with proc_wait {handle}")
+            if self.registry.has("proc_kill"):
+                follow.append(f"stop with proc_kill {handle}")
+            tail = ("; ".join(follow) if follow else
+                    "it is tracked by the host; ask the user to stop it if needed")
             return (f"Timed out after {timeout_s:g}s — but the command was NOT killed. It now runs "
                     f"in the background as {handle}: its work so far is preserved in its log and "
-                    f"new output keeps landing there. Follow with proc_tail {handle}, wait with "
-                    f"proc_wait {handle}, stop with proc_kill {handle}. Side effects it already "
+                    f"new output keeps landing there; {tail}. Side effects it already "
                     f"produced remain on disk; more may still land while it runs.")
         return adopt
 
@@ -1881,8 +1906,11 @@ class LocalToolHost:
         # Optional per-call timeout (default self.timeout, hard ceiling 600s) so slow builds don't
         # die at the 30s default and come back as exit 124. Long-lived processes use proc_start.
         t = self._call_timeout(args.get("timeout"))
-        code, out = self.sandbox.run(args["command"], cwd=self.root(), timeout=t,
-                                     on_timeout=self._adopt_on_timeout(args["command"], t))
+        code, out = self.sandbox.run(
+            args["command"], cwd=self.root(), timeout=t,
+            on_timeout=(self._adopt_on_timeout(args["command"], t)
+                        if self._proc_tools_available() else None),
+        )
         self._grant_shell_paths(args.get("command", ""))  # I2 reach=action: dirs the shell touched
         out = out.strip()
         if code == SANDBOX_ADOPTED:
