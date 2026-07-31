@@ -496,3 +496,28 @@ if __name__ == "__main__":
             print(f"FAIL {fn.__name__}: {type(e).__name__}: {e}")
     print(f"\n{ok}/{len(CHECKS)} passed")
     sys.exit(0 if ok == len(CHECKS) else 1)
+
+
+@check
+def mid_turn_slash_commands_are_client_actions_never_steer_text():
+    """FIELD (the review's C1): /cost typed during a running turn was queued as a plain user
+    message — cutting the whole delegation wave as a "steer", then reaching the model as the
+    literal word "/cost" (which then denied having cost telemetry the product has). Slash commands
+    are CLIENT actions resolved before the busy branch (Kimi Code pattern): the read-only print
+    palette executes, everything else is visibly rejected — nothing becomes steer text."""
+    from sliceagent.tui import _MID_TURN_SLASH_READONLY, _mid_turn_slash_decision
+    for cmd in ("/cost", "/help", "/threads", "/plugins", "/mcp", "/skills", "/tools", "/agents"):
+        assert _mid_turn_slash_decision(cmd) == "readonly", cmd
+        assert _mid_turn_slash_decision(cmd + " extra args") == "readonly", cmd
+    for cmd in ("/model", "/config", "/undo", "/exit", "/switch", "/resume", "/cwd", "/plan",
+                "/reasoning", "/learn", "/nonexistent"):
+        assert _mid_turn_slash_decision(cmd) == "reject", cmd
+    # drift guard: the allowlist must never absorb an interactive or mutating palette command
+    assert not (_MID_TURN_SLASH_READONLY & {"/model", "/config", "/undo", "/switch", "/resume",
+                                            "/cwd", "/reasoning", "/plan", "/exit", "/learn"})
+    # and every allowlisted command must actually exist in cli's slash palette
+    import inspect
+    import sliceagent.cli as _cli
+    src = inspect.getsource(_cli)
+    for cmd in sorted(_MID_TURN_SLASH_READONLY):
+        assert f'"{cmd}"' in src, f"{cmd} is allowlisted but absent from cli's palette"

@@ -133,6 +133,32 @@ def _shorten(s: str, n: int = 64) -> str:
     return s if len(s) <= n else s[: n - 1] + "…"
 
 
+# Slash commands that are provably read-only PRINT commands in cli's palette — the only ones
+# allowed to execute while a turn is running (on a helper thread, output via patch_stdout).
+# Interactive selectors (/model, /config), mutations (/undo, /cwd, /reasoning with an arg), mode
+# state (/plan), and /exit are rejected mid-turn instead of silently becoming steer text.
+_MID_TURN_SLASH_READONLY = frozenset({
+    "/cost", "/help", "/threads", "/plugins", "/mcp", "/skills", "/tools", "/agents", "/update",
+})
+
+
+def _mid_turn_slash_decision(text: str) -> str:
+    """Classify a slash line typed WHILE a turn runs: "readonly" (execute on a helper thread) or
+    "reject" (visible status-line rejection). The caller only consults this for text starting with
+    "/". Slash commands are client actions; none of them may become a queued user steer."""
+    cmd = text.split()[0].lower()
+    return "readonly" if cmd in _MID_TURN_SLASH_READONLY else "reject"
+
+
+def _run_readonly_slash(handle_slash, text: str) -> None:
+    """Run a print-only slash command on a helper thread: its console output rides patch_stdout
+    above the pinned composer, exactly like the turn worker's output — the Application's own
+    event-loop thread must never print directly (every UI-thread print leaves a mangled frame
+    corpse in scrollback). Module level so the composer's echo-before-worker source shape holds."""
+    threading.Thread(target=lambda: handle_slash(text), daemon=True,
+                     name="sliceagent-mid-turn-slash").start()
+
+
 def _shorten_cells(value: object, width: int) -> str:
     """Normalize and crop prompt-toolkit text by terminal cells, including CJK and combining text."""
     text = " ".join(safe_terminal_text(value, multiline=True).split())
@@ -2130,6 +2156,25 @@ def build_live_app(*, console: Console, stats: dict, root: str | None, run_one_t
         with state_lock:
             running, steer_q = state["running"], state.get("steer_queue")
             owner, signal = state.get("status_owner", 0), state.get("signal")
+            if running and text.startswith("/") and handle_slash is not None:
+                # Slash commands are CLIENT actions, never steer text (Kimi Code resolves them
+                # client-side before the busy branch). A mid-turn /cost used to be queued as a
+                # plain user message — cutting the whole delegation wave and then reaching the
+                # model as the literal word "/cost". Read-only print commands run on a helper
+                # thread (their output rides patch_stdout above the composer, same as the
+                # worker's); everything else is rejected visibly instead of silently becoming
+                # a wave-cut.
+                decision = _mid_turn_slash_decision(text)
+                ta.text = ""
+                if decision == "readonly":
+                    _run_readonly_slash(handle_slash, text)
+                else:
+                    set_running_status(
+                        f"◌ {text.split()[0]} can't run while a turn is running — "
+                        "Ctrl-C to stop the turn first, or wait for it",
+                        owner=owner, signal=signal)
+                    ev.app.invalidate()
+                return
             steered = bool(running and text and steer_q is not None)
             if steered:
                 # Enqueue UNDER the lock (clem's barrier finding): the put must be atomic with the
@@ -2141,8 +2186,24 @@ def build_live_app(*, console: Console, stats: dict, root: str | None, run_one_t
             # boundary (was: silently swallowed). The queue lives exactly one turn; empty input is a no-op.
             if steered:
                 ta.text = ""
-                set_running_status("◌ steer queued · lands after the current step",
-                                   owner=owner, signal=signal)
+                # Tell the truth about the wave: with agents in flight the queued steer CUTS them
+                # (kind "steer" in the scheduler) — the ack must not read as additive-only.
+                agents_active = False
+                try:
+                    snap = state.get("progress")
+                    agents_active = bool(
+                        snap and any(getattr(item, "phase", "") in
+                                     {"queued", "starting", "awaiting_model", "model_active",
+                                      "reasoning", "writing", "running_tool", "retry_wait",
+                                      "settling", "running"}
+                                     for item in (getattr(snap, "subagents", ()) or ())))
+                except Exception:  # noqa: BLE001 — presentation hint only; the ack itself must ship
+                    agents_active = False
+                set_running_status(
+                    "◌ steer queued · will cancel the running agents and land next"
+                    if agents_active else
+                    "◌ steer queued · lands after the current step",
+                    owner=owner, signal=signal)
                 ev.app.invalidate()
             return
         text = ta.text.strip()
