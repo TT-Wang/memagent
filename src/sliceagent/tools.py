@@ -888,6 +888,9 @@ class LocalToolHost:
         # The read-only VIRTUAL `history/` namespace (this session's sealed turns as files). Injected by the
         # CLI (a HistoryFS) once memory+session exist; None on the eval/headless path (no durable archive).
         self._history = None
+        # Whole-file overwrite guard: (mtime_ns, size) per file at read_file time — a write that
+        # finds the file changed underneath is refused (see _stale_write_guard).
+        self._read_marks: dict = {}
         self._artifacts = None  # authoritative local turn/subagent artifacts (always-on in the CLI)
         self._subagents = None   # a SubagentFS (subagents/ virtual namespace) — the parent's view of child seals
         # ask_user (the "come back and ask" capability): a host callback that prompts the real user and
@@ -1443,6 +1446,7 @@ class LocalToolHost:
         full = self.resolve_read(path)   # focus copy if present, else search all roots (paged-out blob recall)
         with open(full, "rb") as f:
             raw = f.read()
+        self._mark_read(full)
         sample = raw[:8192].decode("utf-8", errors="replace")
         if looks_binary(path, sample):
             return self._binary_view(path, raw)
@@ -1546,12 +1550,16 @@ class LocalToolHost:
         if rej is not None:
             return rej
         full = self.resolve_read(args["path"])   # I2: target the SAME file read_file shows (existing match across roots); new files still land at the focus base
+        stale = self._stale_write_guard(args["path"], full)
+        if stale is not None:
+            return stale
         self._mkparent(full)
         content = args["content"]
         if os.path.exists(full):                      # preserve the file's existing line endings (CRLF)
             content = self._preserve_eol(content, self._detect_crlf(full))
         self._journal(args["path"], full)
         self._atomic_write(full, content)
+        self._mark_read(full)
         if content[:2] == "#!":          # a shebang script should be runnable (general, task-agnostic)
             self._make_executable(full)
         msg = f"Wrote {len(content)} bytes to {args['path']}"
@@ -1670,6 +1678,41 @@ class LocalToolHost:
         )
 
     # --- edit journal (powers /undo) -----------------------------------------
+    def _mark_read(self, full: str) -> None:
+        """Record (mtime_ns, size) when a file is read, so a later whole-file write can prove the
+        file is still what the model saw. The generation-time read→write window is where a human
+        save (or a branch switch) gets silently destroyed (the review's Family E — the only
+        data-loss finding). Bounded: the mark map is cleared per-turn by the caller's lifecycle."""
+        try:
+            st = os.stat(full)
+            self._read_marks[full] = (st.st_mtime_ns, st.st_size)
+        except OSError:
+            self._read_marks.pop(full, None)
+
+    def _stale_write_guard(self, rel: str, full: str):
+        """Refuse a whole-file overwrite when the file changed on disk since the last read_file.
+
+        claude-code's refuse model (Hermes' mtime-warning is advisory-only and too weak; a guard in
+        the TOOL, not in model judgement). No mark → nothing proven stale → allowed (a write
+        without a prior read is the caller's risk, matching today). The refusal is a STEERED
+        redirect (↷, never ✗): re-read, then re-issue. /undo restores if a write already landed.
+        """
+        mark = self._read_marks.get(full)
+        if mark is None or not os.path.exists(full):
+            return None
+        try:
+            st = os.stat(full)
+        except OSError:
+            return None
+        if (st.st_mtime_ns, st.st_size) == mark:
+            return None
+        return ToolText(
+            f"refusing to overwrite {rel}: the file changed on disk since the last read_file "
+            f"(was {mark[1]} bytes, now {st.st_size} bytes) — re-read it, then retry the edit "
+            "(/undo restores the previous contents if a write already landed)",
+            status=ToolStatus.STEERED,
+        )
+
     def _journal(self, rel: str, full: str) -> None:
         """Record a file's pre-image (or None if it didn't exist) just before a write, so /undo can revert
         the most recent edit. Bounded ring — recent edits only, never an unbounded history."""

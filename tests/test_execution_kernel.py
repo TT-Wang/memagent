@@ -2905,6 +2905,42 @@ def a_polled_cancel_aborts_a_blocking_shell_wait_and_reaps():
     assert code == 0 and time.monotonic() - start < 5
 
 
+@check
+def a_whole_file_overwrite_is_refused_when_the_file_changed_since_the_read():
+    """FIELD (the review's Family E — the only data-loss finding): read_file → a human save (or a
+    branch switch) in the generation-time window → edit_file overwrote the file with the pre-read
+    body; the agent's own verify passed and the footer read 3/3 succeeded. The guard lives in the
+    TOOL, not in model judgement (claude-code's refuse model; Hermes' mtime-warning is advisory and
+    too weak): a changed file is refused with a STEERED redirect naming the change."""
+    from sliceagent.tools import LocalToolHost
+
+    root = tempfile.mkdtemp(prefix="stale-write-")
+    path = os.path.join(root, "calc.py")
+    with open(path, "w") as f:
+        f.write("def add(a, b):\n    return a + b\n")
+    host = LocalToolHost(root=root)
+    host.run("read_file", {"path": "calc.py"})
+    # the human saves a new function in the read→write window
+    with open(path, "a") as f:
+        f.write("\n\ndef human_save():\n    return 61\n")
+    out = host.run("edit_file", {"path": "calc.py",
+                                 "content": "def add(a, b):\n    return a + b\n\n\ndef sub(a, b):\n    return a - b\n"})
+    assert out.status == ToolStatus.STEERED, out.status
+    assert "changed on disk" in str(out) and "/undo" in str(out)
+    with open(path) as f:
+        assert "human_save" in f.read(), "the human's save must survive the refused write"
+    # the prescribed retry — re-read, then the edit lands
+    host.run("read_file", {"path": "calc.py"})
+    out = host.run("edit_file", {"path": "calc.py", "content": "# merged\n"})
+    assert "Wrote" in str(out), str(out)[:120]
+    # chained edits keep working: the mark updates after each write
+    out = host.run("edit_file", {"path": "calc.py", "content": "# merged v2\n"})
+    assert "Wrote" in str(out), str(out)[:120]
+    # and a write without any prior read stays allowed (today's contract)
+    out = host.run("edit_file", {"path": "fresh.py", "content": "x = 1\n"})
+    assert "Wrote" in str(out)
+
+
 if __name__ == "__main__":
     main()
 
