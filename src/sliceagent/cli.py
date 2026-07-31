@@ -1687,6 +1687,7 @@ def main() -> None:
         _planning["active"] = bool(active)
         _stats["planning"] = bool(active)
 
+    from .plan_mode import plan_objective as _plan_objective
     from .plan_mode import plan_switch as _plan_switch
     try:
         from . import tui as _tuimod
@@ -2657,6 +2658,12 @@ def main() -> None:
             if line == "/learn" or line.startswith("/learn "):  # transcript → reusable skill (runs as a turn)
                 from .neocortex import build_learn_prompt
                 line = build_learn_prompt(line[len("/learn"):].strip())
+            elif line.startswith("/") and _plan_objective(line):
+                # `/plan <objective>` is a planning REQUEST: it runs as a TURN (the transform above
+                # already armed the mode and composed the overlay). The live composer has this same
+                # carve-out; without it the palette below ate the objective as a bare status query —
+                # the mode armed but no planning turn ever ran.
+                pass
             elif line.startswith("/"):                        # navigation palette (no turn) — plain REPL too
                 _handle_slash(line)
                 continue

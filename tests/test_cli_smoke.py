@@ -309,6 +309,38 @@ def durable_debug_log_is_created_and_repaired_private():
         os.umask(old_umask)
 
 
+def slash_plan_objective_runs_a_planning_turn_not_a_palette_query():
+    """`/plan <objective>` must run a planning TURN in the plain REPL, not be eaten as a status
+    query. The live composer has the carve-out (tui.py routes the objective to a turn); the REPL
+    sent every `/plan ...` line to the slash palette — the mode armed, NO turn ran, and the
+    objective was silently dropped behind a '(no open work items' print. A dead model makes the
+    started turn park as an error, which is exactly the observable difference."""
+    import tempfile
+    env = dict(os.environ)
+    home = tempfile.mkdtemp(prefix="smoke-plan-home-")
+    env.update({
+        "PYTHONPATH": os.path.join(_ROOT, "src"),
+        "HOME": home, "USERPROFILE": home,
+        "AGENT_TUI": "off",
+        "LLM_API_KEY": "sk-dummy-smoke", "OPENAI_API_KEY": "sk-dummy-smoke",
+        "AGENT_MODEL": "dummy-model-smoke", "AGENT_PROXY": "off",
+        # Instant connection refusal: the turn that SHOULD start fails fast instead of hanging.
+        "LLM_BASE_URL": "http://127.0.0.1:9",
+    })
+    r = subprocess.run(
+        [sys.executable, "-c", "from sliceagent.cli import main; main()"],
+        cwd=_ROOT, env=env, input="/plan add a multiply function\nexit\n",
+        capture_output=True, text=True, timeout=180,
+    )
+    out = r.stdout + r.stderr
+    assert "(no open work items" not in out, (
+        "the slash palette ate `/plan <objective>` as a status query — no planning turn ran:\n"
+        + out[-1500:])
+    assert "[interrupted: error]" in out or "error state saved" in out, (
+        "no turn evidence after `/plan <objective>` — the objective never became a turn:\n"
+        + out[-1500:])
+
+
 if __name__ == "__main__":
     main_reaches_prompt_without_crashing()
     print("PASS main_reaches_prompt_without_crashing")
@@ -330,3 +362,5 @@ if __name__ == "__main__":
     print("PASS live_failure_restores_inline_bridges_and_streaming_sink")
     durable_debug_log_is_created_and_repaired_private()
     print("PASS durable_debug_log_is_created_and_repaired_private")
+    slash_plan_objective_runs_a_planning_turn_not_a_palette_query()
+    print("PASS slash_plan_objective_runs_a_planning_turn_not_a_palette_query")
