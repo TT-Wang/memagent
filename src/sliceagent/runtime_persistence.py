@@ -809,17 +809,18 @@ class LocalTurnStore:
         if snapshot.order_ns:
             meta["order_ns"] = snapshot.order_ns
         safe_record["meta"] = meta
+        turn_usage = meta.get("usage") if isinstance(meta.get("usage"), Mapping) else {}
         receipt_usage = {
             "prompt_tokens": meta.get("ptok", 0),
             "completion_tokens": meta.get("ctok", 0),
-            # Moat-measuring fields (owner's h2h fixes): peak single-call window,
-            # apple-to-apple call count, and the cache split the dollar row prices.
-            "peak_call_input": meta.get("peak_call_input", 0),
-            "model_calls": meta.get("model_calls", 0),
-            "input_other": meta.get("input_other", 0),
-            "input_cache_read": meta.get("input_cache_read", 0),
-            "input_cache_creation": meta.get("input_cache_creation", 0),
-            **({"cost_usd": meta["cost_usd"]} if meta.get("cost_usd") is not None else {}),
+            # Moat-measuring fields (owner's h2h fixes): they live in the NESTED
+            # meta.usage dict (the Usage object the seal carries), not top-level meta keys.
+            "peak_call_input": turn_usage.get("peak_call_input", 0),
+            "model_calls": turn_usage.get("model_calls", 0),
+            "input_other": turn_usage.get("input_other", 0),
+            "input_cache_read": turn_usage.get("input_cache_read", 0),
+            "input_cache_creation": turn_usage.get("input_cache_creation", 0),
+            **({"cost_usd": turn_usage["cost_usd"]} if turn_usage.get("cost_usd") is not None else {}),
         }
         safe_record["turn_receipt"] = TurnReceipt.from_events(
             snapshot.events,
