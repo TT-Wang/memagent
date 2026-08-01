@@ -2226,21 +2226,37 @@ def build_live_app(*, console: Console, stats: dict, root: str | None, run_one_t
         with state_lock:
             running, followup_q = state["running"], state.get("followup_queue")
             owner, signal = state.get("status_owner", 0), state.get("signal")
-            queued = bool(running and followup_q is not None)
+            slash = bool(running and text.startswith("/") and handle_slash is not None)
+            queued = bool(running and not slash and followup_q is not None)
             if queued:
                 followup_q.put(text)
         if running:
-            if queued:
+            if slash:
+                # Slash commands are CLIENT actions on this gesture too (8da8467's root cause at
+                # the sibling site): a mid-turn /undo carried by the follow-up queue used to reach
+                # the model as prose. Route exactly like Enter: read-only print commands run,
+                # everything else is rejected visibly — nothing becomes model text.
+                ta.text = ""
+                if _mid_turn_slash_decision(text) == "readonly":
+                    _run_readonly_slash(handle_slash, text)
+                else:
+                    set_running_status(
+                        f"◌ {text.split()[0]} can't run while a turn is running — "
+                        "Ctrl-C to stop the turn first, or wait for it",
+                        owner=owner, signal=signal)
+                ev.app.invalidate()
+            elif queued:
                 ta.text = ""
                 set_running_status("◌ follow-up queued · runs when this turn finishes",
                                    owner=owner, signal=signal)
                 ev.app.invalidate()
             return
-        # idle: behave like Enter (same submit path, minus duplicating its guards)
-        ev.app.current_buffer.validate_and_handle()
+        # idle: the SAME submit path as Enter (validate_and_handle drives no accept handler here —
+        # it wiped the composer and started no turn, silently eating the text: the review's P3).
+        _enter_submit(ev)
 
     @kb.add("enter")
-    def _(ev):
+    def _enter_submit(ev):
         pending = state.get("input_request")
         if pending is not None:
             if not pending.get("accepting"):

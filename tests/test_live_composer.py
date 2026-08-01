@@ -1208,6 +1208,67 @@ def live_app_typed_text_escape_clears_the_line_not_undo():
     assert "/undo" not in seen, f"clearing typed text must reset the undo confirmation: {seen}"
 
 
+@check
+def alt_enter_idle_submits_like_enter_and_mid_turn_slash_routes_like_enter():
+    """P3 x2 (the review, live pty): idle Alt+Enter called validate_and_handle — no accept
+    handler here, so the composer wiped and NO turn started (837 bytes of repaint, the text
+    silently eaten). And a mid-turn Alt+Enter /undo went to the model as prose, bypassing the
+    slash guard 8da8467 built for Enter. Idle Alt+Enter now runs the SAME submit path as Enter;
+    a mid-turn slash on this gesture routes exactly like Enter."""
+    import threading
+    import time
+    from prompt_toolkit.input.defaults import create_pipe_input
+    from prompt_toolkit.output import DummyOutput
+    from sliceagent.tui import build_live_app
+
+    console, _buf = _rec_console()
+    turns = []
+    slash_calls = []
+    release = threading.Event()
+
+    def fake_turn(text, sink, _signal):
+        turns.append(text)
+        release.wait(timeout=3)
+
+    def fake_slash(cmd):
+        slash_calls.append(cmd)
+
+    with create_pipe_input() as pinp:
+        app, state = build_live_app(
+            console=console, stats={"model": "test"}, root=None,
+            run_one_turn=fake_turn, handle_slash=fake_slash,
+            pt_input=pinp, pt_output=DummyOutput(),
+        )
+        pinp.send_text("first\r")
+
+        def drive():
+            deadline = time.monotonic() + 2
+            while not state.get("running") and time.monotonic() < deadline:
+                time.sleep(0.01)
+            pinp.send_text("/help\x1b\r")        # mid-turn Alt+Enter slash (readonly) → palette
+            time.sleep(0.3)
+            pinp.send_text("/undo\x1b\r")        # mid-turn Alt+Enter slash (mutating) → rejected
+            time.sleep(0.3)
+            release.set()
+            deadline = time.monotonic() + 2
+            while state.get("running") and time.monotonic() < deadline:
+                time.sleep(0.01)
+            pinp.send_text("second\x1b\r")        # IDLE Alt+Enter → must submit like Enter
+            time.sleep(1.0)
+            pinp.send_text("\x04")
+
+        driver = threading.Thread(target=drive, daemon=True)
+        driver.start()
+        app.run()
+        driver.join(timeout=3)
+    for thread in state.get("threads", []):
+        thread.join(timeout=2)
+
+    assert turns == ["first", "second"], f"idle Alt+Enter must submit a real turn: {turns}"
+    assert slash_calls == ["/help"], f"readonly slash must run the palette: {slash_calls}"
+    assert all(not t.startswith("/") for t in turns), f"a slash command became turn text: {turns}"
+
+
 def main():
     failed = 0
     for fn in CHECKS:
