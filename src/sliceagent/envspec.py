@@ -48,6 +48,10 @@ REGISTRY: list[EnvVar] = [
     EnvVar("AGENT_WEB_DEADLINE", "agent", "Total wall-clock deadline (seconds) for one fetch_url/"
            "web_search call, spanning redirects — a slow-trickle server cannot reset it the way it "
            "resets the per-read timeout.", "60"),
+    EnvVar("AGENT_PROJECT_SKILLS", "agent", "Trust repo-local skills (the workspace's "
+           ".sliceagent/skills) everywhere. Off by default: repo-controlled instructions never load "
+           "by mere presence — a workspace opts in with a .sliceagent/skills-trust marker file "
+           "instead (Pi's project-trust gate).", ""),
     EnvVar("AGENT_TOPIC_TOOLS", "agent", "Expose model-callable topic switching (off by default; host "
            "routing and slash commands remain available).", ""),
     EnvVar("AGENT_ADVANCED_TOOLS", "agent", "Expose persistent process and interactive terminal tools; "

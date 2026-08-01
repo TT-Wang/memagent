@@ -904,7 +904,7 @@ def slash_catalog_help_docs_and_discovery_are_consistent():
     assert documented == set(PUBLIC_SLASH_COMMANDS), (documented, set(PUBLIC_SLASH_COMMANDS))
 
     class Skills:
-        def catalog(self):
+        def catalog(self, model_only: bool = True):
             return [("review", "Inspect code"), ("ship", "Build safely")]
 
     class Entry:

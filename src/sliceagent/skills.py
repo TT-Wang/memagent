@@ -60,6 +60,15 @@ class Skill:
     # Optional declarative terminal output envelope.  This is procedure metadata, not executable policy;
     # a successful skill load emits it as typed evidence for the PFC completion contract.
     completion_contract: str = ""
+    # `disable-model-invocation: true` frontmatter (Pi's skill rules): the skill stays on disk and
+    # user-addressable, but the model never sees it in the tool catalog.
+    model_invocable: bool = True
+
+
+# Pi's skill frontmatter rules (packages/coding-agent/src/core/skills.ts): name <= 64 chars (it's
+# an identity token), description <= 1024 chars (the catalog is progressive disclosure, not a doc).
+SKILL_NAME_MAX = 64
+SKILL_DESCRIPTION_MAX = 1024
 
 
 def parse_frontmatter(text: str) -> tuple[dict, str]:
@@ -91,15 +100,33 @@ def _default_roots() -> list[str]:
 
 
 class SkillManager:
-    def __init__(self, roots: list[str] | None = None):
+    def __init__(self, roots: list[str] | None = None, *, project_root: str = "",
+                 trust_project: bool = True, on_log=None):
         self.roots = roots if roots is not None else _default_roots()
         self._skills: dict[str, Skill] = {}
+        # Pi's project-trust gate (project-trust.ts): skills living INSIDE the repo are repo-
+        # controlled instructions — they load only when the workspace is trusted, never by mere
+        # presence. User/global roots (~/.sliceagent/skills) are trusted by definition.
+        self._project_root = os.path.realpath(project_root) if project_root else ""
+        self._trust_project = bool(trust_project)
+        self._on_log = on_log if callable(on_log) else (lambda _m: None)
         self.discover()
+
+    def _root_trusted(self, root: str) -> bool:
+        if not self._project_root or self._trust_project:
+            return True
+        real = os.path.realpath(root)
+        inside = real == self._project_root or real.startswith(self._project_root + os.sep)
+        if inside:
+            self._on_log(
+                f"project skills skipped (untrusted workspace): {root} — trust it with "
+                ".sliceagent/skills-trust or AGENT_PROJECT_SKILLS=1")
+        return not inside
 
     def discover(self) -> "SkillManager":
         self._skills = {}
         for root in self.roots:
-            if not os.path.isdir(root):
+            if not os.path.isdir(root) or not self._root_trusted(root):
                 continue
             for dp, _dirs, files in os.walk(root):           # followlinks=False → no symlink cycles
                 if dp[len(root):].count(os.sep) > _MAX_SCAN_DEPTH:
@@ -128,9 +155,17 @@ class SkillManager:
         completion_contract = (
             meta.get("completion-contract") or meta.get("completion_contract") or ""
         ).strip()
+        if len(name) > SKILL_NAME_MAX:
+            self._on_log(f"skill skipped (name > {SKILL_NAME_MAX} chars): {path}")
+            return
+        if len(desc) > SKILL_DESCRIPTION_MAX:
+            desc = desc[:SKILL_DESCRIPTION_MAX - 1] + "…"
+        invocable = (meta.get("disable-model-invocation") or "").strip().lower() not in (
+            "1", "true", "yes", "on")
         self._skills.setdefault(name, Skill(name, desc, body.strip(), path, provenance=prov,
                                             root=root, when_to_use=when,
-                                            completion_contract=completion_contract))  # first-wins
+                                            completion_contract=completion_contract,
+                                            model_invocable=invocable))  # first-wins
 
     def add(self, name: str, body: str, description: str = "") -> None:
         """Register an in-memory skill (e.g. contributed by a plugin). First-wins, so a
@@ -142,8 +177,11 @@ class SkillManager:
     def names(self) -> list[str]:
         return sorted(self._skills)
 
-    def catalog(self) -> list[tuple[str, str]]:
-        return [(n, self._skills[n].description) for n in self.names()]
+    def catalog(self, *, model_only: bool = True) -> list[tuple[str, str]]:
+        """The model-facing catalog. ``model_only`` honors `disable-model-invocation` (the skill
+        stays user-addressable via /skills but never reaches the tool description)."""
+        return [(n, self._skills[n].description) for n in self.names()
+                if not model_only or self._skills[n].model_invocable]
 
     def load(self, name: str) -> str | None:
         s = self._skills.get((name or "").lower())
@@ -232,5 +270,7 @@ def make_skill_tool(manager: SkillManager) -> ToolEntry | None:
                      accesses=lambda _a: [], source="skill", effect_factory=effects)
 
 
-def make_skill_manager(roots: list[str] | None = None) -> SkillManager:
-    return SkillManager(roots)
+def make_skill_manager(roots: list[str] | None = None, *, project_root: str = "",
+                       trust_project: bool = True, on_log=None) -> SkillManager:
+    return SkillManager(roots, project_root=project_root, trust_project=trust_project,
+                        on_log=on_log)

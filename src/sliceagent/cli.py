@@ -148,15 +148,23 @@ def _classify_workspace_schedule(
 def _discovery_skill_lines(skills) -> list[str]:
     """Safe, compact projection for ``/skills`` (also a pure test seam)."""
     try:
-        catalog = list(skills.catalog())
+        catalog = list(skills.catalog(model_only=False))
     except Exception:  # noqa: BLE001 — discovery output must not destabilize the session
         catalog = []
     if not catalog:
         return ["  no skills loaded"]
     lines = [f"  available skills ({len(catalog)}):"]
+    get_skill = getattr(skills, "get", None)
     for name, description in catalog:
         desc = " ".join(str(description or "").split())
-        lines.append(f"  {name}" + (f" — {desc}" if desc else ""))
+        invocable = True
+        if callable(get_skill):
+            try:
+                invocable = bool(getattr(get_skill(name), "model_invocable", True))
+            except Exception:  # noqa: BLE001 — a lean catalog double never blocks the listing
+                invocable = True
+        marker = "" if invocable else "  (manual only)"
+        lines.append(f"  {name}" + (f" — {desc}" if desc else "") + marker)
     return lines
 
 
@@ -530,6 +538,15 @@ def _workspace_paths(root: str, configured: list[str] | None, *defaults: str) ->
     return list(dict.fromkeys(resolved))
 
 
+def _project_skills_trusted(root: str) -> bool:
+    """Pi's project-trust gate (project-trust.ts): repo-local skills are repo-controlled
+    instructions, so they load only on explicit trust — a `.sliceagent/skills-trust` marker file
+    in the workspace, or AGENT_PROJECT_SKILLS=1 for operators who want them everywhere."""
+    if os.environ.get("AGENT_PROJECT_SKILLS", "").strip().lower() in ("1", "on", "true", "yes"):
+        return True
+    return os.path.isfile(os.path.join(root, ".sliceagent", "skills-trust"))
+
+
 def _workspace_mcp_config(root: str, servers: dict) -> dict:
     """Give every target MCP process an explicit target cwd without mutating global cwd."""
     rooted = {}
@@ -723,7 +740,9 @@ def _prepare_workspace_resources(
             os.path.join(root, ".sliceagent", "skills"),
             os.path.join(os.path.expanduser("~"), ".sliceagent", "skills"),
         )
-        skills = make_skill_manager(skill_roots)
+        skills = make_skill_manager(
+            skill_roots, project_root=root,
+            trust_project=_project_skills_trusted(root), on_log=on_log)
         plugin_dirs = _workspace_paths(root, cfg.plugin_dirs) if cfg.plugin_dirs else []
         plugin_mcp = load_plugins(
             base_tools.registry, skills, plugin_dirs, root=root, config=cfg, on_log=on_log,

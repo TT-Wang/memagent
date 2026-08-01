@@ -2,7 +2,7 @@
 
 _Auto-generated from `src/sliceagent/envspec.py` — do not edit by hand (`python scripts/gen_config_reference.py`)._
 
-sliceagent reads **62** environment variables across **6** groups; every value is validated at startup (a misspelled enum warns instead of silently defaulting). Run `sliceagent config --list` to see the resolved value of each on your machine. Secrets (🔒) are read from the environment / config and never printed.
+sliceagent reads **63** environment variables across **6** groups; every value is validated at startup (a misspelled enum warns instead of silently defaulting). Run `sliceagent config --list` to see the resolved value of each on your machine. Secrets (🔒) are read from the environment / config and never printed.
 
 ## agent
 
@@ -20,6 +20,7 @@ sliceagent reads **62** environment variables across **6** groups; every value i
 | `AGENT_MINE` | `off` | Opt-in lesson/skill-candidate mining mode for end-of-session consolidation: deterministic, llm, or off. Automatic skill candidates stay inactive. |
 | `AGENT_MODEL` | — | LLM model id to drive the agent. REQUIRED — no default; set it here or pick a provider+model via `sliceagent init`. |
 | `AGENT_MODEL_FALLBACK` | — | Larger-context model to switch to ONCE if the context overflows even after compaction (secondary net; the bounded slice is the primary). |
+| `AGENT_PROJECT_SKILLS` | — | Trust repo-local skills (the workspace's .sliceagent/skills) everywhere. Off by default: repo-controlled instructions never load by mere presence — a workspace opts in with a .sliceagent/skills-trust marker file instead (Pi's project-trust gate). |
 | `AGENT_PROVIDER` | — | Default provider id to use from the config's [providers.<id>] tables (overrides [agent].default_provider). |
 | `AGENT_REASONING` | `full` | Reasoning effort: full=provider default, fast=minimal, high/max=more. _(choices: full, fast, high, max)_ |
 | `AGENT_ROOT` | — | Workspace root override (defaults to the current directory). |
