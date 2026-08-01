@@ -200,7 +200,60 @@ def fetch_url_and_web_search_are_pure_reads_for_deadline_scheduling():
     assert "fetch_url" in _PURE_READ_BUILTINS and "web_search" in _PURE_READ_BUILTINS
 
 
+def a_redirect_chain_cannot_reset_the_total_deadline_per_hop():
+    """FIELD (the review's U6): the total deadline was only checked while READING THE BODY — a
+    redirect hop returns before the read, so each hop could burn a fresh _FETCH_TIMEOUT (measured
+    30.14s against a 2s deadline; ceiling 6 hops x 20s = 2x the declared bound) and then fail
+    with the WRONG cause ('too many redirects'). The deadline is now enforced at every hop and
+    each hop's connect timeout is clamped to the remaining budget."""
+    import os
+    import time
+    import httpx
+    import importlib
+    import sliceagent.web as web
+
+    os.environ["AGENT_WEB_DEADLINE"] = "2.0"
+    hops = []
+
+    class _FakeStream:
+        def __init__(self, *a, **k):
+            self.status_code = 301
+            self.headers = {"location": "http://example.com/next"}
+            self.is_redirect = True
+            self.encoding = "utf-8"
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+
+    real_stream = httpx.stream
+    prior_get = web._http_get         # earlier checks monkeypatch web._http_get without restoring
+    importlib.reload(web)             # restore the REAL _http_get (the deadline logic lives inside it)
+    def slow_connect(*a, **k):
+        hops.append(a[2] if len(a) > 2 else k.get("timeout"))
+        time.sleep(1.0)               # a slow connect — 7 hops would burn 7s without the clamp
+        return _FakeStream()
+    httpx.stream = slow_connect
+    try:
+        start = time.monotonic()
+        try:
+            web._fetch("http://example.com/")
+            raise SystemExit("unreachable: the redirect chain was not bounded")
+        except ValueError as e:
+            assert "total deadline exceeded" in str(e), f"wrong cause: {e}"
+            assert "too many redirects" not in str(e), f"wrong cause: {e}"
+        elapsed = time.monotonic() - start
+        assert elapsed < 5, f"the chain outlived the total deadline ({elapsed:.1f}s)"
+        assert all(t is not None and t <= 2.0 for t in hops), \
+            f"per-hop timeouts were not clamped to the remaining budget: {hops}"
+    finally:
+        httpx.stream = real_stream
+        web._http_get = prior_get
+        os.environ.pop("AGENT_WEB_DEADLINE", None)
+
+
 CHECKS.append(a_slow_trickle_server_hits_the_total_deadline_not_the_per_read_timeout)
+CHECKS.append(a_redirect_chain_cannot_reset_the_total_deadline_per_hop)
 CHECKS.append(fetch_url_and_web_search_are_pure_reads_for_deadline_scheduling)
 
 

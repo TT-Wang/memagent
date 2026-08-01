@@ -217,14 +217,21 @@ def _http_get(url: str, *, timeout: float, deadline: float = 0.0):
 def _fetch(url: str) -> str:
     """Fetch a page body as text, re-validating SSRF on each redirect hop. Raises ValueError on a blocked
     target / too-large body / the shared total deadline; other network errors propagate (the handler
-    catches them). The deadline spans every hop (Hermes' per-URL shape)."""
+    catches them). The deadline spans every hop (Hermes' per-URL shape) — and is ENFORCED at every
+    hop: a redirect returns before the body read, so without the loop-top check and the clamped
+    per-hop connect timeout each hop could burn a fresh _FETCH_TIMEOUT (measured 30s against a 2s
+    deadline; ceiling 6 hops × 20s = 2× the declared bound) and then fail with the WRONG cause
+    ("too many redirects")."""
     cur = url
     deadline = _time.monotonic() + _web_deadline()
     for _ in range(_MAX_REDIRECTS + 1):
+        remaining = deadline - _time.monotonic()
+        if remaining <= 0:
+            raise ValueError(f"total deadline exceeded following redirects from {url}")
         ok, reason = _safe_url(cur)
         if not ok:
             raise ValueError(reason)
-        r = _http_get(ok, timeout=_FETCH_TIMEOUT, deadline=deadline)
+        r = _http_get(ok, timeout=min(_FETCH_TIMEOUT, remaining), deadline=deadline)
         loc = r.headers.get("location") if hasattr(r, "headers") else None
         if getattr(r, "is_redirect", False) and loc:
             # resolve relative redirects against the current URL, then re-check the next hop
