@@ -195,7 +195,11 @@ def _turn_disposition(turn_status: str, operations: tuple[OperationReceipt, ...]
         return "indeterminate"
     if status in {"blocked", "stuck"}:
         return "blocked"
-    if status in {"max_steps", "token_budget", "max_tokens", "overflow"}:
+    if status in {"max_steps", "token_budget", "max_tokens", "overflow", "transport_error"}:
+        # transport_error (U9): the turn was cut by a mid-stream transport break and parked for a
+        # resume. Reading it as "completed" renders a truncated fragment into the NEXT turn's
+        # slice as finished work (context_compiler) and clears turn_level_adverse (discourse) —
+        # the model then never redoes the lost work.
         return "paused"
     if status in {"aborted", "error", "filtered", "failed", "interrupted"}:
         return "interrupted"

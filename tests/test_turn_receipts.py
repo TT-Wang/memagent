@@ -350,6 +350,22 @@ def test_deduplicated_logical_call_is_settled_but_not_physically_started():
     assert [operation["disposition"] for operation in receipt["operations"]] == ["succeeded", "succeeded"]
 
 
+def test_a_transport_error_turn_disposes_paused_never_completed():
+    """CRITICAL 3 (U9 regression): the new transport_error status reached loop.py but not
+    _turn_disposition, so a transport-cut turn sealed disposition='completed'. context_compiler
+    then rendered the truncated fragment into the NEXT turn's slice as finished work and
+    discourse computed no turn-level adversity — the model never redid the lost work."""
+    from sliceagent.receipts import derive_turn_receipt
+
+    receipt = derive_turn_receipt([], turn_id="turn-t", turn_status="transport_error")
+    assert receipt.disposition == "paused", receipt.disposition
+    # The neighbouring dispositions must not drift: ordinary parks stay paused, a clean turn
+    # stays completed, an explicit abort stays interrupted.
+    assert derive_turn_receipt([], turn_status="max_tokens").disposition == "paused"
+    assert derive_turn_receipt([], turn_status="end_turn").disposition == "completed"
+    assert derive_turn_receipt([], turn_status="aborted").disposition == "interrupted"
+
+
 def main():
     checks = [value for name, value in globals().items()
               if name.startswith("test_") and callable(value)]
