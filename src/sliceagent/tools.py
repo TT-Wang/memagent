@@ -1546,9 +1546,17 @@ class LocalToolHost:
                     f"magic: {head[:8].hex()}\nhexdump (first 256 bytes):\n"
                     + "\n".join(self._hexrows(head[:256])))
         total = 0
+        last_byte = b""
         with open(full, "rb") as f:
             for chunk in iter(lambda: f.read(_READ_STREAM_CHUNK), b""):
                 total += chunk.count(b"\n")
+                last_byte = chunk[-1:]
+        # splitlines() semantics (the small-file path's counter): a final line WITHOUT a trailing
+        # newline is still a line — a jq -c dump, a minified bundle, a single-line JSON blob.
+        # Without this the total was one short and _stream_line_window's end was clamped below
+        # the last line, silently dropping it from the view (the review's U5).
+        if last_byte and last_byte != b"\n":
+            total += 1
         windowed = offset is not None or limit is not None
         if not windowed:
             start, end = 1, min(total, _READ_MAX_LINES)
@@ -1713,6 +1721,7 @@ class LocalToolHost:
             content = self._preserve_eol(content, self._detect_crlf(full))
         with open(full, "ab") as f:   # byte-exact (like write_file's "wb") — text mode would translate newlines, corrupting CRLF
             f.write(content.encode("utf-8"))
+        self._mark_read(full)   # the agent's OWN append must not poison the staleness mark
         msg = f"Appended {len(content.encode('utf-8'))} bytes to {args['path']}"
         try:                             # echo the file tail so the model sees the appended content in context
             with open(full, encoding="utf-8", errors="replace") as _f:
@@ -1778,6 +1787,7 @@ class LocalToolHost:
                 updated = self._preserve_eol(cur.replace(cand, new, n if replace_all else 1), crlf)
                 self._journal(args["path"], full)
                 self._atomic_write(full, updated)
+                self._mark_read(full)   # the agent's OWN write must not poison the staleness mark
                 return self._edit_result(args["path"], cur, updated, cur.index(cand), new)
             return ToolText(
                 f"old_string occurs {n} times in {args['path']}; add context to make it unique, "
@@ -1792,6 +1802,7 @@ class LocalToolHost:
                 updated = self._preserve_eol(cur[:span[0]] + new + cur[span[1]:], crlf)
                 self._journal(args["path"], full)
                 self._atomic_write(full, updated)
+                self._mark_read(full)   # the agent's OWN write must not poison the staleness mark
                 return self._edit_result(args["path"], cur, updated, span[0], new, fuzzy=True)
         return ToolText(
             f"old_string not found in {args['path']} — your snippet does not match the file. Copy the EXACT "

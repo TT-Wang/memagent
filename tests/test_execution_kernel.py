@@ -2942,6 +2942,67 @@ def a_whole_file_overwrite_is_refused_when_the_file_changed_since_the_read():
 
 
 @check
+def the_agents_own_str_replace_and_append_do_not_poison_the_staleness_mark():
+    """U3 (confirmed in review, then re-confirmed here): str_replace/append wrote the file but
+    never refreshed the read mark, so the everyday read_file → str_replace → edit_file sequence
+    was REFUSED with 'the file changed on disk since the last read_file' — blaming a disk change
+    that was the agent's own edit. Every write path now re-marks, so the guard trips only on an
+    EXTERNAL change (which must still be refused)."""
+    from sliceagent.tools import LocalToolHost
+
+    root = tempfile.mkdtemp(prefix="self-mark-")
+    path = os.path.join(root, "ops.py")
+    with open(path, "w") as f:
+        f.write("a = 1\nb = 2\n")
+    host = LocalToolHost(root=root)
+    host.run("read_file", {"path": "ops.py"})
+    out = host.run("str_replace", {"path": "ops.py", "old_string": "b = 2", "new_string": "b = 3"})
+    assert "Replaced" in str(out), str(out)[:120]
+    # the follow-up whole-file write must NOT be refused: nothing external changed
+    out = host.run("edit_file", {"path": "ops.py", "content": "a = 1\nb = 3\nc = 4\n"})
+    assert "Wrote" in str(out), f"the agent's own str_replace poisoned the mark: {str(out)[:200]}"
+    # same for append
+    host.run("read_file", {"path": "ops.py"})
+    host.run("append_to_file", {"path": "ops.py", "content": "d = 5\n"})
+    out = host.run("edit_file", {"path": "ops.py", "content": "# rewritten\n"})
+    assert "Wrote" in str(out), f"the agent's own append poisoned the mark: {str(out)[:200]}"
+    # and the guard still catches a REAL external change
+    host.run("read_file", {"path": "ops.py"})
+    with open(path, "a") as f:
+        f.write("e = 6\n")
+    out = host.run("edit_file", {"path": "ops.py", "content": "# clobber\n"})
+    assert out.status == ToolStatus.STEERED, "an external change must still be refused"
+
+
+@check
+def the_streaming_view_counts_a_final_line_without_a_trailing_newline():
+    """U5 (confirmed in review, then re-confirmed here): _huge_file_view counted total as the
+    b\"\\n\" count, so any file above the 8MB slurp cap whose last line lacks a trailing newline
+    (a jq -c dump, a minified bundle, a single-line JSON blob) dropped that line from the view
+    and reported the footer one short. The count now follows splitlines() semantics, matching
+    the small-file path."""
+    from sliceagent.tools import LocalToolHost, _READ_SLURP_CAP
+
+    root = tempfile.mkdtemp(prefix="huge-view-")
+    path = os.path.join(root, "dump.jsonl")
+    n_filler = (_READ_SLURP_CAP + 4096) // 1025 + 1   # each filler line is exactly 1025 bytes
+    with open(path, "w") as f:
+        for _ in range(n_filler):
+            f.write("x" * 1024 + "\n")
+        f.write("LAST-LINE-NO-NEWLINE")               # final line, NO trailing newline
+    total = n_filler + 1
+    host = LocalToolHost(root=root)
+    out = str(host.run("read_file", {"path": "dump.jsonl", "offset": total}))
+    assert "LAST-LINE-NO-NEWLINE" in out, "the final newline-less line was dropped from the view"
+    assert f"of {total} " in out, f"the footer total is one short: {out[-200:]!r}"
+    # the degenerate case: ONE giant line, no newlines at all — the whole file is the last line
+    with open(path, "w") as f:
+        f.write('{"blob": "' + "y" * (_READ_SLURP_CAP + 100) + '"}')
+    out = str(host.run("read_file", {"path": "dump.jsonl", "limit": 1}))
+    assert "of 1 " in out, f"a single-line blob must count as one line: {out[-160:]!r}"
+
+
+@check
 def read_file_refuses_a_fifo_instead_of_wedging_the_turn():
     """FIELD (the review's D1): read_file on a FIFO blocked forever — 1702 samples in __open at 60s,
     the turn frozen at 0.1% CPU, and one of 32 reader slots burned permanently. Regular-file types
