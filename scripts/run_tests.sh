@@ -10,6 +10,10 @@ command -v "$PY" >/dev/null 2>&1 || PY="python3"   # CI installs the package, so
 export PYTHONPATH="src${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONUTF8=1   # Windows console defaults to cp1252; test output contains UTF-8 (no-op on POSIX)
 
+# Registration guard FIRST: a test defined below its file's runner block never executes, so the
+# suite would report green in both directions while covering nothing (the U2a/c dead-check).
+"$PY" scripts/check_test_registration.py || exit 1
+
 pass=0; fail=0; failed=""
 log="$(mktemp)"
 for t in tests/test_*.py; do

@@ -544,17 +544,6 @@ def sync_output_detection_honors_override_and_known_terminals():
         os.environ.update(old)
 
 
-if __name__ == "__main__":
-    ok = 0
-    for fn in CHECKS:
-        try:
-            fn(); ok += 1
-        except Exception as e:  # noqa: BLE001
-            print(f"FAIL {fn.__name__}: {type(e).__name__}: {e}")
-    print(f"\n{ok}/{len(CHECKS)} passed")
-    sys.exit(0 if ok == len(CHECKS) else 1)
-
-
 @check
 def mid_turn_slash_commands_are_client_actions_never_steer_text():
     """FIELD (the review's C1): /cost typed during a running turn was queued as a plain user
@@ -579,4 +568,14 @@ def mid_turn_slash_commands_are_client_actions_never_steer_text():
     for cmd in sorted(_MID_TURN_SLASH_READONLY):
         assert f'"{cmd}"' in src, f"{cmd} is allowlisted but absent from cli's palette"
 
+
+if __name__ == "__main__":
+    ok = 0
+    for fn in CHECKS:
+        try:
+            fn(); ok += 1
+        except Exception as e:  # noqa: BLE001
+            print(f"FAIL {fn.__name__}: {type(e).__name__}: {e}")
+    print(f"\n{ok}/{len(CHECKS)} passed")
+    sys.exit(0 if ok == len(CHECKS) else 1)
 
