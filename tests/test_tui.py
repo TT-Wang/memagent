@@ -491,34 +491,79 @@ def tool_header_picks_primary_arg():
 def sync_output_wraps_every_flush_cycle_in_atomic_frame_markers():
     """P1 (Pi's TuiMainScreen anti-garble): every output flush is bracketed as ONE atomic frame —
     ESC[?2026h … ESC[?2026l — so a composer repaint + erase + print batch applies as a unit instead
-    of byte-by-byte fragments (the interleaved 'Runing slep' repaints in pty captures)."""
+    of byte-by-byte fragments (the interleaved 'Runing slep' repaints in pty captures). The bracket
+    must enclose the FRAME, not an empty region: prompt_toolkit buffers the frame and sends it in
+    flush(), so a marker written through write_raw lands AFTER the buffered bytes (the review's
+    P1). The wire order below is the real contract."""
     from sliceagent.tui import _SYNC_OUT_BEGIN, _SYNC_OUT_END, _SyncOutput
 
-    class _Real:
+    class _Stream:
+        """The output's underlying stdout: records exactly what hits the terminal, in order."""
         def __init__(self):
-            self.events = []
+            self.wire = []
+        def write(self, data):
+            self.wire.append(data)
+        def flush(self):
+            pass
+
+    class _Real:
+        """A prompt_toolkit-shaped output: write/write_raw BUFFER, flush() sends the buffer."""
+        def __init__(self):
+            self.stdout = _Stream()
+            self._buffer = []
         def write(self, data):
             # Vt100_Output.write strips escape codes (ESC -> '?'), so a marker arriving through
-            # this channel is observably mangled — that is exactly what the assertions below catch.
-            self.events.append(("w", data.replace("\x1b", "?")))
+            # this channel is observably mangled — the assertions below catch that too.
+            self._buffer.append(data.replace("\x1b", "?"))
         def write_raw(self, data):
-            self.events.append(("r", data))
+            self._buffer.append(data)
         def flush(self):
-            self.events.append(("f", ""))
+            if self._buffer:
+                self.stdout.write("".join(self._buffer))
+                self._buffer = []
+            self.stdout.flush()
 
     real = _Real()
     out = _SyncOutput(real)
     out.write("frame-bytes")
     out.flush()
-    # order: data, BEGIN(raw), flush, END(raw), flush — one atomic bracket per flush cycle, and
-    # the markers MUST travel the raw channel or the terminal sees '?[?2026h' instead of ESC.
-    assert real.events == [
-        ("w", "frame-bytes"),
-        ("r", _SYNC_OUT_BEGIN),
-        ("f", ""),
-        ("r", _SYNC_OUT_END),
-        ("f", ""),
-    ], real.events
+    # THE contract: BEGIN, frame, END on the wire — the frame INSIDE the bracket.
+    assert real.stdout.wire == [_SYNC_OUT_BEGIN, "frame-bytes", _SYNC_OUT_END], real.stdout.wire
+
+
+@check
+def the_print_router_honors_the_sync_output_detection_and_escape_hatch():
+    """P1: the _LivePrintRouter emitted its bracket UNCONDITIONALLY — terminal detection and
+    SLICEAGENT_SYNC_OUTPUT=off never reached the one path where markers take effect, so the
+    documented escape hatch was useless on a terminal that mishandles DECSET 2026."""
+    import os
+    from sliceagent.tui import _SYNC_OUT_BEGIN, _LivePrintRouter
+
+    class _Stream:
+        def __init__(self):
+            self.wire = []
+        def write(self, data):
+            self.wire.append(data)
+        def flush(self):
+            pass
+
+    old = os.environ.get("SLICEAGENT_SYNC_OUTPUT")
+    try:
+        for forced, expect_markers in (("on", True), ("off", False)):
+            os.environ["SLICEAGENT_SYNC_OUTPUT"] = forced
+            stream = _Stream()
+            router = _LivePrintRouter(stream)
+            router._write_batch("batch-text")
+            assert (_SYNC_OUT_BEGIN in stream.wire) is expect_markers, (forced, stream.wire)
+            assert "batch-text" in stream.wire, stream.wire
+            if expect_markers:
+                assert stream.wire.index(_SYNC_OUT_BEGIN) < stream.wire.index("batch-text"), \
+                    "the bracket must open BEFORE the batch bytes"
+    finally:
+        if old is None:
+            os.environ.pop("SLICEAGENT_SYNC_OUTPUT", None)
+        else:
+            os.environ["SLICEAGENT_SYNC_OUTPUT"] = old
 
 
 @check

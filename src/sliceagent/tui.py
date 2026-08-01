@@ -125,14 +125,31 @@ class _SyncOutput:
         return self._real.write_raw(data)
 
     def flush(self):
-        # write_raw, never write: Vt100_Output.write strips escape codes (ESC -> '?'), which would
-        # mangle the marker itself — observed in pty captures as a literal '?[?2026h'.
-        self._real.write_raw(_SYNC_OUT_BEGIN)
-        try:
-            return self._real.flush()
-        finally:
-            self._real.write_raw(_SYNC_OUT_END)
-            self._real.flush()
+        # BEGIN must precede the frame ON THE WIRE. prompt_toolkit outputs buffer the frame and
+        # send it in flush(); routing the marker through write_raw appends it AFTER the buffered
+        # frame bytes — the pty capture showed ESC[?2026h ESC[?2026l around an EMPTY region with
+        # the frame outside (the review's P1). Write BEGIN straight to the underlying stream,
+        # then let the real flush deliver the frame inside the bracket.
+        real = self._real
+        stream = getattr(real, "stdout", None)
+        if stream is not None:
+            stream.write(_SYNC_OUT_BEGIN)
+            stream.flush()
+            try:
+                return real.flush()
+            finally:
+                stream.write(_SYNC_OUT_END)
+                stream.flush()
+        else:
+            # No direct stream (custom outputs): bracket the flush call itself, best-effort order —
+            # write_raw, never write: Vt100_Output.write strips escape codes (ESC -> '?'), which
+            # would mangle the marker itself — observed in pty captures as a literal '?[?2026h'.
+            real.write_raw(_SYNC_OUT_BEGIN)
+            try:
+                return real.flush()
+            finally:
+                real.write_raw(_SYNC_OUT_END)
+                real.flush()
 
 
 def make_console() -> Console:
@@ -2646,6 +2663,22 @@ class _LivePrintRouter:
             except Exception:  # noqa: BLE001 — losing a late print beats crashing retirement
                 pass
 
+    def _write_batch(self, text: str) -> None:
+        """One erase + print + repaint composite, optionally bracketed as ONE frame (Pi's
+        sync-output) so the terminal applies it atomically. The bracket honors the SAME terminal
+        detection / SLICEAGENT_SYNC_OUTPUT escape hatch as the composer's output wrapper —
+        emitting markers unconditionally made the documented off-switch useless on terminals
+        that mishandle DECSET 2026 (the review's P1). Prefer the raw channel when the stream
+        has one: Vt100_Output.write strips ESC (-> '?')."""
+        bracket = _sync_output_supported()
+        raw_write = getattr(self._real, "write_raw", self._real.write)
+        if bracket:
+            raw_write(_SYNC_OUT_BEGIN)
+        raw_write(text)
+        if bracket:
+            raw_write(_SYNC_OUT_END)
+        self._real.flush()
+
     def _drain_on_app_loop(self) -> None:
         """Runs ON the app's event loop: flush the batch inside run_in_terminal."""
         import asyncio
@@ -2656,14 +2689,7 @@ class _LivePrintRouter:
             with self._lock:
                 chunks, self._pending = self._pending, []
             if chunks:
-                # The erase + print + repaint composite is ONE frame (Pi's sync-output): the
-                # terminal applies it atomically instead of as byte-by-byte fragments. Prefer the
-                # raw channel when the stream has one: Vt100_Output.write strips ESC (-> '?').
-                raw_write = getattr(self._real, "write_raw", self._real.write)
-                raw_write(_SYNC_OUT_BEGIN)
-                raw_write("".join(chunks))
-                raw_write(_SYNC_OUT_END)
-                self._real.flush()
+                self._write_batch("".join(chunks))
 
         def _done(_task):
             with self._lock:
