@@ -35,6 +35,7 @@ from .events import (
     SliceTightened,
     StepBegin,
     StepEnd,
+    FollowUpDelivered,
     SteerDelivered,
     SteerRejected,
     ToolExecutionStarted,
@@ -1513,7 +1514,7 @@ def _classify_steer_item(item):
 def run_turn(*, build_slice, llm, tools, dispatch: Dispatcher, hooks: Hooks | None = None,
              max_steps: int = 120, signal=None, checkpoint=None, consolidate=None,
              turn_id: str = "", call_namespace: str = "", transport_activity=None,
-             allow_park_closeout: bool = True, steer_queue=None) -> TurnResult:
+             allow_park_closeout: bool = True, steer_queue=None, followup_queue=None) -> TurnResult:
     """One per-LOOP working-memory turn. The slice is the SEED, built ONCE; within the while(true) working
     memory ACCUMULATES as native assistant/tool messages — NO per-step rebuild, NO eviction. The LLM ends
     by not calling tools (Markov at the loop boundary; continuous within).
@@ -1591,12 +1592,26 @@ def run_turn(*, build_slice, llm, tools, dispatch: Dispatcher, hooks: Hooks | No
         swept here was never model-visible, gets NO SteerDelivered receipt, and is handed back on
         ``TurnResult.leftover_steers`` for the caller to admit as the next turn's input. A steer
         arriving after even this sweep simply stays in the queue — the caller owns the queue and
-        must inspect it after ``run_turn`` returns.
+        must inspect it after ``run_turn`` returns. The follow-up queue (Pi's second queue) drains
+        the same way: an undelivered follow-up is next-turn input, never lost.
         """
         # Seed with anything a mid-turn drain deferred (malformed items it refused to coerce). They
         # are OLDER than anything still queued, so they lead the returned leftovers in drain order,
         # and they survive even when the queue is absent/broken below.
         swept = list(deferred_leftovers)
+        # The follow-up queue (Pi's second queue) drains FIRST: its items were queued to run AFTER
+        # this turn, so as next-turn input they are the oldest leftovers by construction.
+        if followup_queue is not None and not steer_state["broken"]:
+            while True:
+                try:
+                    item = followup_queue.get_nowait()
+                except _stdqueue.Empty:
+                    break
+                except Exception:  # noqa: BLE001 — same broken-channel posture as the steer queue
+                    break
+                text = str(item).strip()
+                if text:
+                    swept.append(text)
         if steer_queue is None or steer_state["broken"]:
             return tuple(swept)
         while True:
@@ -1705,6 +1720,33 @@ def run_turn(*, build_slice, llm, tools, dispatch: Dispatcher, hooks: Hooks | No
         except Exception:  # noqa: BLE001 — a queue that fails to peek is treated as empty, never fatal
             return False
         return any(_classify_steer_item(item)[0] != "peer" for item in items)
+
+    def _drain_followups() -> int:
+        """Append every queued FOLLOW-UP to the live trajectory; returns how many landed.
+
+        Pi's two-queue model (packages/agent/src/agent.ts): a steer course-corrects NOW (step
+        boundary, can cut a wave); a follow-up (Alt+Enter) is the NEXT task — it lands only here,
+        at the clean-exit edge, so it never cuts a wave and never displaces the answer just
+        composed. Plain user text only; anything else is silently for the next turn via the
+        retirement sweep.
+        """
+        if followup_queue is None:
+            return 0
+        landed = 0
+        while True:
+            try:
+                item = followup_queue.get_nowait()
+            except _stdqueue.Empty:
+                break
+            except Exception:  # noqa: BLE001 — a broken queue is empty for this turn, never fatal
+                break
+            text = str(item).strip()
+            if not text:
+                continue
+            messages.append({"role": "user", "content": text})
+            dispatch(FollowUpDelivered(text))
+            landed += 1
+        return landed
     # Direct child reports are ordinary tool-result messages, but unlike reconstructible reads they are the
     # result of expensive delegated computation. Keep only their small identities here so overflow handling
     # can protect the corresponding message bodies without creating a second report store or fan-in packet.
@@ -2058,6 +2100,13 @@ def run_turn(*, build_slice, llm, tools, dispatch: Dispatcher, hooks: Hooks | No
                             FILTERED_MSG if stop == "filtered" else TRANSPORT_MSG,
                             closeout=False,
                         )
+                    if _drain_followups():
+                        # Pi's two-queue model: a follow-up (Alt+Enter) lands only when the turn
+                        # would STOP — it becomes the next user message and the SAME turn continues
+                        # (it never cuts a wave and never displaces the answer just composed).
+                        if candidate:
+                            dispatch(AssistantText(candidate, final=False))
+                        continue
                     dispatch(AssistantText(
                         candidate or "Done — no summary to add.", final=True,
                         synthetic=not bool(candidate),

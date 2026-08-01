@@ -2131,6 +2131,33 @@ def build_live_app(*, console: Console, stats: dict, root: str | None, run_one_t
     state["request_input"] = request_input
     kb = KeyBindings()
 
+    @kb.add("escape", "enter")
+    def _(ev):
+        """Alt+Enter = FOLLOW-UP (Pi's two-queue model): queue the text to run when the turn would
+        stop — never cuts a wave, never displaces the in-flight answer. Enter stays the steer
+        (course-correct now). Idle Alt+Enter is a normal submit."""
+        pending = state.get("input_request")
+        if pending is not None:
+            return   # an ask_user answer belongs to the pending question, never to either queue
+        text = ta.text.strip()
+        if not text:
+            return
+        with state_lock:
+            running, followup_q = state["running"], state.get("followup_queue")
+            owner, signal = state.get("status_owner", 0), state.get("signal")
+            queued = bool(running and followup_q is not None)
+            if queued:
+                followup_q.put(text)
+        if running:
+            if queued:
+                ta.text = ""
+                set_running_status("◌ follow-up queued · runs when this turn finishes",
+                                   owner=owner, signal=signal)
+                ev.app.invalidate()
+            return
+        # idle: behave like Enter (same submit path, minus duplicating its guards)
+        ev.app.current_buffer.validate_and_handle()
+
     @kb.add("enter")
     def _(ev):
         pending = state.get("input_request")
@@ -2282,7 +2309,9 @@ def build_live_app(*, console: Console, stats: dict, root: str | None, run_one_t
         )
         sig = threading.Event()
         steer_q = queue.Queue()          # mid-turn user input → drained by the loop at step boundaries
+        followup_q = queue.Queue()       # Alt+Enter follow-ups → drained by the loop at the clean-exit edge
         sink.steer_queue = steer_q       # per-turn attribute: _run_one_turn forwards it to run_turn
+        sink.followup_queue = followup_q
         with state_lock:
             carried_typed = tuple(state.pop("pending_typed_steers", None) or ())
         for _typed_item in carried_typed:
@@ -2294,6 +2323,7 @@ def build_live_app(*, console: Console, stats: dict, root: str | None, run_one_t
             state["running"] = True
             state["signal"] = sig
             state["steer_queue"] = steer_q
+            state["followup_queue"] = followup_q
             state["status"] = "◌ Preparing · starting turn"
             state["status_override"] = False
             state["progress"] = None
@@ -2324,10 +2354,17 @@ def build_live_app(*, console: Console, stats: dict, root: str | None, run_one_t
                 with state_lock:
                     if state.get("steer_queue") is steer_q:
                         state["steer_queue"] = None
+                    if state.get("followup_queue") is followup_q:
+                        state["followup_queue"] = None
                     leftover = []
                     while True:
                         try:
                             leftover.append(steer_q.get_nowait())
+                        except queue.Empty:
+                            break
+                    while True:   # undelivered follow-ups ride the same draft/typed rescue
+                        try:
+                            leftover.append(followup_q.get_nowait())
                         except queue.Empty:
                             break
                     draft_lines, typed = _split_steer_handback(leftover)

@@ -100,6 +100,19 @@ class SteerDelivered(Event):
 
     content: str
     admission_id: str = ""
+
+
+@dataclass
+class FollowUpDelivered(Event):
+    """A follow-up (Alt+Enter) injected at the turn's clean-exit edge (Pi's two-queue model:
+    steer = course-correct NOW, follow-up = the NEXT task, run only when the turn would stop).
+
+    Emitted once per drained follow-up as it is appended to the live trajectory — the turn
+    CONTINUES with it as the next user message instead of ending, so the UI moves it from
+    "queued after this turn" to "delivered" inline.
+    """
+
+    content: str
 @dataclass
 class SteerRejected(Event):
     """A steer-queue item that is none of the legal shapes was REJECTED at the queue boundary.

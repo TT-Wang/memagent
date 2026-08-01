@@ -16,7 +16,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from sliceagent.context_overflow import ContextOverflow                # noqa: E402
 from sliceagent.errors import RetryCancelledError                     # noqa: E402
-from sliceagent.events import AssistantText, StepEnd, TurnInterrupted, TurnPhaseChanged  # noqa: E402
+from sliceagent.events import (AssistantText, FollowUpDelivered, StepEnd, TurnInterrupted,
+                               TurnPhaseChanged)  # noqa: E402
 from sliceagent.execution import ToolEffect                           # noqa: E402
 from sliceagent.hooks import BudgetHook, CompositeHooks, Hooks, OracleHook  # noqa: E402
 from sliceagent.interfaces import Snippet                              # noqa: E402
@@ -653,6 +654,48 @@ def a_length_truncated_message_never_executes_its_tool_calls():
     assert result.stop_reason in ("end_turn", "max_tokens", "transport_error"), result.stop_reason
     tool_msgs = [m for call in llm.seen for m in call if m.get("role") == "tool"]
     assert tool_msgs == [], "a tool result entered the trajectory for an unexecuted call"
+
+
+@check
+def a_queued_followup_lands_only_at_the_clean_exit_and_extends_the_turn():
+    """Pi's two-queue model (packages/agent/src/agent.ts): steer course-corrects NOW; a follow-up
+    is the NEXT task — it lands only when the turn would stop, never cutting a wave and never
+    displacing the answer just composed. The turn CONTINUES with it as the next user message."""
+    import queue as _q
+    followups = _q.Queue()
+    followups.put("now also add a clamp function")
+    llm = _ScriptLLM([
+        _Resp(content="first answer", finish_reason="stop"),
+        _Resp(content="clamp added", finish_reason="stop"),
+    ])
+    events = []
+    result = run_turn(build_slice=_build(), llm=llm, tools=_Tools(),
+                      dispatch=events.append, hooks=Hooks(), max_steps=6,
+                      followup_queue=followups)
+    assert result.stop_reason == "end_turn" and len(llm.seen) == 2, (result.stop_reason, len(llm.seen))
+    delivered = [e for e in events if isinstance(e, FollowUpDelivered)]
+    assert len(delivered) == 1 and delivered[0].content == "now also add a clamp function"
+    second_call_users = [m for m in llm.seen[1] if m.get("role") == "user"]
+    assert any("clamp function" in str(m.get("content")) for m in second_call_users), (
+        "the follow-up must become the next user message in the SAME turn")
+    finals = [e for e in events if isinstance(e, AssistantText) and e.final]
+    assert finals[-1].content == "clamp added"
+
+
+@check
+def a_retirement_sweep_returns_undelivered_followups_as_oldest_leftovers():
+    """A follow-up queued during a PARKED turn was never exit-visible: it rides leftover_steers
+    into the next turn's input, ahead of any steer leftovers (it was queued to run after)."""
+    import queue as _q
+    followups = _q.Queue()
+    followups.put("after that, run the tests")
+    llm = _ScriptLLM([_Resp(content="still going …", finish_reason="length")])
+    events = []
+    result = run_turn(build_slice=_build(), llm=llm, tools=_Tools(),
+                      dispatch=events.append, hooks=Hooks(), max_steps=2, followup_queue=followups)
+    assert result.stop_reason == "max_steps", result.stop_reason
+    assert result.leftover_steers and result.leftover_steers[0] == "after that, run the tests", (
+        result.leftover_steers)
 
 
 def main():

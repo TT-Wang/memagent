@@ -2509,6 +2509,7 @@ def main() -> None:
                 build_slice=build, llm=llm, tools=turn_tools, dispatch=live_dispatch,
                 hooks=hooks, signal=signal, max_steps=cfg.max_steps,
                 steer_queue=getattr(sink, "steer_queue", None),   # live composer only; REPL has none
+                followup_queue=getattr(sink, "followup_queue", None),   # Alt+Enter follow-ups, live composer only
                 consolidate=lambda: consolidate_checkpoint(session.active(), compact=False),
                 checkpoint=lambda m, s, _g=text: _rec.record(root, goal=_g, messages=m, step=s),
                 turn_id=local_store.active.artifact_id if local_store.active else "",
