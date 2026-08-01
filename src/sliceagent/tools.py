@@ -840,7 +840,7 @@ def _numbered_window(text: str, start_line: int, end_line: int, *, ctx: int = 4,
         snippet += f"\n  … (+{len(lines) - b} more lines)"
     return snippet
 
-_SIGNAL_CLEANUP = {"fn": None, "installed": False}
+_SIGNAL_CLEANUP = {"fn": None, "installed": False, "sweeping": False}
 
 
 def _install_signal_cleanup(fn) -> None:
@@ -848,12 +848,24 @@ def _install_signal_cleanup(fn) -> None:
     so a plain SIGTERM leaked the whole registry (the review's Family I — and the only escape from
     a wedged turn IS a signal, so this fires on the common path). One process-wide handler running
     the LATEST host's atexit cleanup, then the conventional 128+signum exit — bounded, like Kimi
-    Code's 130/143."""
+    Code's 130/143.
+
+    A SECOND signal mid-sweep means the sender is impatient (a human mashing the terminal, a
+    supervisor about to SIGKILL). Re-entering the cleanup used to hit the _closed guard and
+    os._exit(143) with background groups still alive — a "graceful" code that lied about a skipped
+    sweep. Now a re-entrant signal dies honestly BY the signal (wait status WIFSIGNALED, plainly
+    distinguishable from a completed sweep's exit 143)."""
     _SIGNAL_CLEANUP["fn"] = fn
     if _SIGNAL_CLEANUP["installed"] or os.name == "nt":
         return
 
     def _handler(signum, _frame):
+        if _SIGNAL_CLEANUP.get("sweeping"):
+            import signal as _sig
+            _sig.signal(signum, _sig.SIG_DFL)
+            os.kill(os.getpid(), signum)
+            os._exit(128 + signum)   # unreachable once the default disposition fires; never graceful
+        _SIGNAL_CLEANUP["sweeping"] = True
         try:
             cb = _SIGNAL_CLEANUP.get("fn")
             if cb is not None:
@@ -926,12 +938,22 @@ class LocalToolHost:
         self._closed = False
         self._atexit_cleanup = self.cleanup
         atexit.register(self._atexit_cleanup)  # leaked background procs / PTYs must not survive exit/abort/crash
-        _install_signal_cleanup(self._atexit_cleanup)
+        # The SIGNAL path gets the bounded variant: a supervisor's SIGKILL deadline leaves no room
+        # for the default per-child graces.
+        self._signal_cleanup = lambda: self.cleanup(bounded=True)
+        _install_signal_cleanup(self._signal_cleanup)
 
 
-    def cleanup(self) -> None:
+    def cleanup(self, *, bounded: bool = False) -> None:
         """Tear down background processes + PTY sessions (idempotent; never raises). Wired to atexit AND
-        called by the CLI on exit/abort, so leaked servers/shells/PTYs don't outlive the agent (#5)."""
+        called by the CLI on exit/abort, so leaked servers/shells/PTYs don't outlive the agent (#5).
+
+        ``bounded=True`` (the SIGNAL path): the sweep runs under a supervisor's SIGKILL deadline
+        (docker stop gives ~10s), so per-child graces shrink to 1.0s/0.5s — the default 3s+2s per
+        SIGTERM-ignoring child measured 9.22s for three, which is what provokes the second signal
+        (and a mid-sweep SIGKILL). In-flight FOREGROUND commands are reaped first: their Popen
+        handles live only inside sandbox._exec, so without this reach a SIGTERM during a build
+        orphaned the whole group (the review's U8 foreground finding)."""
         if self._closed:
             return
         self._closed = True
@@ -942,9 +964,19 @@ class LocalToolHost:
             atexit.unregister(self._atexit_cleanup)
         except Exception:
             pass
+        reap = getattr(self.sandbox, "reap_inflight", None)
+        if callable(reap):
+            try:
+                reap()
+            except Exception:  # noqa: BLE001 — the sweep must never delay the exit
+                pass
         for _mgr in (getattr(self, "procs", None), getattr(self, "terminals", None)):
             try:
-                if _mgr is not None:
+                if _mgr is None:
+                    continue
+                if bounded and _mgr is getattr(self, "procs", None):
+                    _mgr.cleanup(term_grace=1.0, kill_grace=0.5)
+                else:
                     _mgr.cleanup()
             except Exception:  # noqa: BLE001
                 pass

@@ -168,13 +168,18 @@ class ProcManager:
             time.sleep(min(0.05, remaining))
         return f"[{handle} {status}]\n{self._read_log(p, 40)}"
 
-    def kill(self, handle: str) -> str:
+    def kill(self, handle: str, *, term_grace=None, kill_grace=None) -> str:
         p = self._get(handle)
         # Termination success is about the whole spawn-captured GROUP, not the shell leader. The shared
         # primitive signals even after the leader exits, waits for group extinction, then escalates. Never
         # report "killed" merely because Popen.wait() reaped the leader while descendants survived.
+        # The grace overrides bound the SIGNAL-path sweep: it runs under a supervisor's SIGKILL
+        # deadline (docker stop gives ~10s), so N SIGTERM-ignoring children at the default 3s+2s
+        # each would be cut mid-sweep (measured 9.22s for three — what provokes the second signal).
         extinct = terminate_process_group(
-            p.pgid, p.popen, term_timeout=self.term_grace, kill_timeout=self.kill_grace,
+            p.pgid, p.popen,
+            term_timeout=self.term_grace if term_grace is None else max(0.0, float(term_grace)),
+            kill_timeout=self.kill_grace if kill_grace is None else max(0.0, float(kill_grace)),
         )
         if not extinct:
             raise ProcessGroupTerminationError(
@@ -200,11 +205,13 @@ class ProcManager:
             return "(no background processes)"
         return "\n".join(f"{h}: {self.poll(h)} — {p.cmd}" for h, p in self._procs.items())
 
-    def cleanup(self) -> None:
-        """Kill every live child and remove its logfile. Call at session end; never raises."""
+    def cleanup(self, *, term_grace=None, kill_grace=None) -> None:
+        """Kill every live child and remove its logfile. Call at session end; never raises.
+        The grace overrides bound the sweep for the signal path (a supervisor's SIGKILL deadline
+        leaves no room for the default 5s per SIGTERM-ignoring child)."""
         for h in list(self._procs):
             try:
-                self.kill(h)
+                self.kill(h, term_grace=term_grace, kill_grace=kill_grace)
             except Exception:  # noqa: BLE001 — best-effort teardown
                 pass
             p = self._procs.pop(h, None)

@@ -21,6 +21,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import uuid
 from typing import Protocol, runtime_checkable
 
@@ -97,6 +98,34 @@ class LocalSandbox(BaseSandbox):
     """Local subprocess backend. cwd-confined, timeout, secret-env scrubbed. Runs the
     current (venv) interpreter for code-as-action so workspace imports resolve."""
     python_cmd = sys.executable
+
+    def __init__(self, *, scrub_secrets: bool = True):
+        super().__init__(scrub_secrets=scrub_secrets)
+        # In-flight foreground commands, registered so the signal/exit sweep can reap them: a
+        # SIGTERM during `npm run dev` used to orphan the whole group — the Popen handle lived
+        # only in a local variable inside _exec, invisible to cleanup (the review's U8
+        # foreground finding). Lock-guarded: turns execute on multiple threads.
+        self._inflight: set = set()
+        self._inflight_lock = threading.Lock()
+
+    def reap_inflight(self) -> None:
+        """Best-effort teardown of every in-flight foreground command (signal/exit sweep)."""
+        with self._inflight_lock:
+            processes = list(self._inflight)
+        for process in processes:
+            try:
+                if process.poll() is None:
+                    self._stop_and_reap(process)
+            except Exception:  # noqa: BLE001 — the sweep must never delay the exit
+                pass
+
+    def _inflight_register(self, process) -> None:
+        with self._inflight_lock:
+            self._inflight.add(process)
+
+    def _inflight_discard(self, process) -> None:
+        with self._inflight_lock:
+            self._inflight.discard(process)
 
     @staticmethod
     def _stop_and_reap(process) -> None:
@@ -183,6 +212,7 @@ class LocalSandbox(BaseSandbox):
                 stdin=subprocess.DEVNULL,
                 stdout=log_fh, stderr=subprocess.STDOUT, text=True,
             )
+            self._inflight_register(process)
             self._wait_or_cancel(process, timeout,
                                  size_probe=lambda: os.path.getsize(log_path))
             return process.returncode, self._read_log_fh(log_fh)
@@ -210,6 +240,8 @@ class LocalSandbox(BaseSandbox):
         except OSError as e:
             return 127, f"Could not run command: {e}"
         finally:
+            if process is not None:
+                self._inflight_discard(process)
             # On adoption the log's ownership moved to the registry; everywhere else it dies here.
             if not adopted_ok:
                 try:
