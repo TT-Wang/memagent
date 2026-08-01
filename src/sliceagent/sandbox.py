@@ -24,6 +24,7 @@ import tempfile
 import uuid
 from typing import Protocol, runtime_checkable
 
+from . import cancel_scope
 from .platform_compat import (IS_WINDOWS, SIG_KILL, kill_tree,
                               popen_group_kwargs, sh as _sh)
 
@@ -73,12 +74,15 @@ class BaseSandbox:
     def __init__(self, *, scrub_secrets: bool = True):
         self.scrub_secrets = scrub_secrets
         # Optional polled cancel (Hermes shape): a callable returning True when the owning turn was
-        # interrupted. run_turn binds the turn's signal event here so a blocking wait can be
-        # aborted from the LIVE UI, where no real SIGINT reaches the turn's worker thread.
+        # interrupted. The AUTHORITATIVE channel is the thread-scoped binding the scheduler wave
+        # installs (cancel_scope) — a shared attribute on this one object let a concurrent turn's
+        # cancel edge reap another turn's in-flight command. This attribute remains only as a
+        # fallback for direct sandbox users outside any scheduler wave.
         self.cancel_poll = None
         # Optional liveness heartbeat: called with the command's current output byte count (~1/s)
         # while the wait runs — the status line then shows EVIDENCE of progress (bytes growing =
-        # alive; frozen = stalled) instead of a bare spinner (the review's Family H).
+        # alive; frozen = stalled) instead of a bare spinner (the review's Family H). Same
+        # ownership rule as cancel_poll: the thread-scoped binding wins; this is the fallback.
         self.activity_cb = None
 
     def run(self, command: str, *, cwd: str, timeout: float, on_timeout=None) -> tuple[int, str]:
@@ -126,13 +130,19 @@ class LocalSandbox(BaseSandbox):
         EVIDENCE, not a spinner.
         """
         import time as _time
+        # Capture the owning turn's token ONCE, at wait start. The thread-scoped binding (set by
+        # the scheduler wave) is the authoritative owner channel; the attribute is a fallback for
+        # direct sandbox users. Re-reading a shared attribute every tick let another turn's
+        # binding (a detached child, a fanned-out sibling) redirect ITS cancel edge into THIS
+        # command — the review's criticals 1&2.
+        poll = cancel_scope.current_cancel() or self.cancel_poll
+        activity = cancel_scope.current_activity() or self.activity_cb
         deadline = _time.monotonic() + max(0.0, timeout)
         next_beat = _time.monotonic() + 1.0
         while True:
             rc = process.poll()
             if rc is not None:
                 return
-            poll = self.cancel_poll
             if poll is not None:
                 try:
                     cancelled = poll()
@@ -140,11 +150,11 @@ class LocalSandbox(BaseSandbox):
                     cancelled = False
                 if cancelled:
                     raise KeyboardInterrupt
-            if size_probe is not None and self.activity_cb is not None \
+            if size_probe is not None and activity is not None \
                     and _time.monotonic() >= next_beat:
                 next_beat = _time.monotonic() + 1.0
                 try:
-                    self.activity_cb(size_probe())
+                    activity(size_probe())
                 except Exception:  # noqa: BLE001 — liveness must never affect the command
                     pass
             remaining = deadline - _time.monotonic()

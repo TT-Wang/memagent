@@ -11,6 +11,7 @@ import threading
 import time
 from typing import Callable
 
+from . import cancel_scope
 from .execution import (ToolEffect, ToolInvocation, ToolOutcome, ToolPurity, ToolStatus)
 
 
@@ -421,10 +422,19 @@ def _run_read_wave(
                         condition.notify_all()
                         return
                     job.entered = True
+            # Bind the OWNING turn's cancel token on this worker thread for the duration of
+            # the handler (cancel_scope): concurrent turns share the one sandbox object, so a
+            # shared attribute let a child's cancel edge reap the parent's in-flight command.
+            # Bind the OWNING turn's cancel token on this worker thread for the duration of
+            # the handler (cancel_scope): concurrent turns share the one sandbox object, so a
+            # shared attribute let a child's cancel edge reap the parent's in-flight command.
+            prev_token = cancel_scope.bind_cancel(should_cancel)
             try:
                 outcome = _execute_announced(job.task)
             except BaseException as caught:  # preserve the old Future.result() propagation contract
                 error = caught
+            finally:
+                cancel_scope.unbind_cancel(prev_token)
             # Capture physical settlement immediately. Recording the timestamp only after acquiring
             # ``condition`` can misclassify an on-time reader as late when the scheduler owns the lock.
             finished_at = time.monotonic()
@@ -953,7 +963,15 @@ def _run_wave(
         )
     if len(tasks) != 1:
         raise RuntimeError("an effectful scheduler wave must contain exactly one barrier")
-    return [_execute(tasks[0])]
+    # Barriers run INLINE on the caller's thread (a Python thread cannot prove cancellation, so
+    # the barrier enforces its own cancellable subprocess/protocol timeout). The owning turn's
+    # cancel token still binds for the handler's duration — nested turns compose: a child's
+    # barrier rebinds the child's token on the same thread and restores the parent's on exit.
+    prev_token = cancel_scope.bind_cancel(should_cancel)
+    try:
+        return [_execute(tasks[0])]
+    finally:
+        cancel_scope.unbind_cancel(prev_token)
 
 
 def run_ordered(

@@ -551,11 +551,13 @@ def max_steps_closeout_forwards_the_same_model_cancellation_and_activity_control
 
 @check
 def run_turn_binds_the_turn_signal_into_the_sandbox_wait():
-    """The live-UI abort chain end to end: run_turn binds the turn's signal Event into the
-    sandbox's polled wait, so a Ctrl-C (which on the TUI worker thread can only ever set that
-    Event) aborts a blocking run_command in ~a second — not after the command's full runtime —
-    and the turn parks INDETERMINATE exactly like the plain path's physical Ctrl-C. The binding
-    is restored after the turn (a stale token must never cancel a later command)."""
+    """The live-UI abort chain end to end: the scheduler wave binds the turn's signal Event on the
+    worker thread executing the tool (cancel_scope), so a Ctrl-C (which on the TUI worker thread
+    can only ever set that Event) aborts a blocking run_command in ~a second — not after the
+    command's full runtime — and the turn parks INDETERMINATE exactly like the plain path's
+    physical Ctrl-C. run_turn must NEVER bind the shared sandbox.cancel_poll attribute: concurrent
+    turns share the one sandbox, and a shared slot let a child's cancel edge reap the parent's
+    command (the review's criticals 1&2)."""
     from sliceagent.tools import LocalToolHost
 
     import tempfile
@@ -572,7 +574,8 @@ def run_turn_binds_the_turn_signal_into_the_sandbox_wait():
     assert result.stop_reason == "indeterminate", result.stop_reason
     assert elapsed < 5, f"Ctrl-C held the turn for {elapsed:.1f}s — the Event still can't reach the wait"
     assert any(isinstance(e, TurnInterrupted) and e.reason == "indeterminate" for e in events)
-    assert getattr(host.sandbox, "cancel_poll", None) is None, "the binding must be restored"
+    assert getattr(host.sandbox, "cancel_poll", None) is None, \
+        "run_turn must never touch the shared attribute — the token rides the wave's worker thread"
 
 
 @check

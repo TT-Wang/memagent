@@ -19,6 +19,7 @@ import stat as _stat
 import tempfile
 from dataclasses import replace
 
+from . import cancel_scope
 from .active_work import (
     ActiveWorkError,
     EvidenceRef as WorkEvidenceRef,
@@ -2054,9 +2055,10 @@ class LocalToolHost:
                     self._verify_notify(f"run · {label} · {kb:.1f} KB output")
                 except Exception:  # noqa: BLE001 — liveness must never affect the command
                     pass
-        prev_cb = getattr(self.sandbox, "activity_cb", None)
-        if activity_cb is not None:
-            self.sandbox.activity_cb = activity_cb
+        # Bind liveness on THIS thread (cancel_scope), not on the shared sandbox attribute: a
+        # concurrent turn's run_command used to overwrite/restore the one slot and steal or leak
+        # the callback — the same shared-slot shape as the cancel token (criticals 1&2).
+        prev_cb = cancel_scope.bind_activity(activity_cb) if activity_cb is not None else None
         try:
             code, out = self.sandbox.run(
                 args["command"], cwd=self.root(), timeout=t,
@@ -2065,7 +2067,7 @@ class LocalToolHost:
             )
         finally:
             if activity_cb is not None:
-                self.sandbox.activity_cb = prev_cb
+                cancel_scope.unbind_activity(prev_cb)
         self._grant_shell_paths(args.get("command", ""))  # I2 reach=action: dirs the shell touched
         out = out.strip()
         if code == SANDBOX_ADOPTED:
