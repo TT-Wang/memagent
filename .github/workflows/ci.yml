@@ -57,6 +57,11 @@ jobs:
       - name: Conformance — collaboration core
         run: python evals/collaboration_core_conformance.py
 
+      # Pi-style supply-chain gate: every DIRECT dependency must be exact-pinned; a version range
+      # in pyproject.toml is a reviewed-code-change violation, not ambient resolution.
+      - name: Supply chain — pinned direct deps
+        run: python scripts/check_pinned_deps.py
+
       # Users install via `uv tool install` (install.sh / install.ps1) — a DIFFERENT code path from
       # the pip install above (uv writes .exe trampoline shims on Windows; antivirus/permission
       # surface). Validate it from the built wheel on the Windows cell.

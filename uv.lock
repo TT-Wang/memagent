@@ -1310,17 +1310,17 @@ tui = [
 
 [package.metadata]
 requires-dist = [
-    { name = "httpx", specifier = ">=0.27" },
-    { name = "mcp", specifier = ">=1.0" },
-    { name = "memem", marker = "extra == 'memory'", specifier = ">=2.9.7" },
+    { name = "httpx", specifier = "==0.28.1" },
+    { name = "mcp", specifier = "==1.28.1" },
+    { name = "memem", marker = "extra == 'memory'", specifier = "==2.9.7" },
     { name = "numpy", marker = "extra == 'memory'", specifier = ">=1.24" },
-    { name = "openai", specifier = ">=1.40" },
-    { name = "prompt-toolkit", marker = "extra == 'tui'", specifier = ">=3.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
-    { name = "rich", marker = "extra == 'tui'", specifier = ">=13" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" },
-    { name = "tree-sitter", marker = "extra == 'treesitter'", specifier = ">=0.21" },
-    { name = "tree-sitter-python", marker = "extra == 'treesitter'", specifier = ">=0.21" },
+    { name = "openai", specifier = "==2.45.0" },
+    { name = "prompt-toolkit", marker = "extra == 'tui'", specifier = "==3.0.52" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = "==9.1.1" },
+    { name = "rich", marker = "extra == 'tui'", specifier = "==15.0.0" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = "==0.15.21" },
+    { name = "tree-sitter", marker = "extra == 'treesitter'", specifier = "==0.26.0" },
+    { name = "tree-sitter-python", marker = "extra == 'treesitter'", specifier = "==0.25.0" },
 ]
 provides-extras = ["dev", "memory", "treesitter", "tui"]
 
