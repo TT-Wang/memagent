@@ -17,32 +17,45 @@ def _build(patterns: tuple[str, ...]) -> re.Pattern:
 
 
 # Subscription/account/quota exhaustion — never transient. (Pi retry.ts:7-24)
+# STRONG markers only: a weak one ("billing", "available balance") matches the GUIDANCE text of a
+# transient free-tier 429 ("check your plan and billing details", a billing URL) and makes a
+# retryable RateLimitError permanent — 1 attempt instead of 3 (the review's P2; a regression the
+# port introduced). "insufficient_quota" is OpenAI's billing code; "insufficient balance" is
+# DeepSeek's 402 — both are dead balances, and retrying a dead balance is how rate-limit storms
+# happen. Guidance about billing is NOT a dead balance.
 NON_RETRYABLE_PROVIDER_ERROR_PATTERN = _build((
     # OpenCode Go/free-tier limits returned as 429 JSON error types by OpenCode's Zen API.
     "GoUsageLimitError",
     "FreeUsageLimitError",
     # OpenCode Go subscription-limit text (rolling/weekly/monthly caps).
     "Monthly usage limit reached",
-    "available balance",
-    # Generic quota/budget/billing exhaustion. `insufficient_quota` is OpenAI's billing code.
+    # Generic quota/budget/billing exhaustion, as CODES or decisive phrases — never the mere
+    # mention of billing.
     "insufficient_quota",
+    "insufficient balance",
     "out of budget",
     "quota exceeded",
-    "billing",
 ))
 
 # Transient provider load, HTTP status, transport failures, premature stream endings,
 # provider-requested retries. (Pi retry.ts:26-89, with per-provider issue references there.)
+# Bare status digits are ANCHORED: "500" must not match the "500" inside a token count like
+# 130500 — an overflow message carrying that count would be re-sent 3x at full size, directly
+# contradicting the rule that overflow tightens the slice, never re-sends (the review's P2).
+def _status(code: int) -> str:
+    return rf"(?<!\d){code}(?!\d)"
+
+
 RETRYABLE_PROVIDER_ERROR_PATTERN = _build((
     "overloaded",
     "rate.?limit",
     "too many requests",
-    "429",
-    "500",
-    "502",
-    "503",
-    "504",
-    "524",
+    _status(429),
+    _status(500),
+    _status(502),
+    _status(503),
+    _status(504),
+    _status(524),
     "service.?unavailable",
     "server.?error",
     "internal.?error",

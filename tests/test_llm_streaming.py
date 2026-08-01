@@ -1551,6 +1551,46 @@ def quota_errors_are_never_retried_but_transients_are():
 
 
 @check
+def a_transient_429_with_billing_guidance_is_not_a_dead_balance():
+    """P2 x2 (the review — regressions the port introduced):
+    1. A real free-tier OpenAI 429 RateLimitError carries 'check your plan and billing details'
+       plus a billing URL — the bare 'billing' marker matched it and quota-first made it
+       PERMANENT (1 attempt vs 3 before the port). Guidance about billing is not a dead balance:
+       only codes/decisive phrases (insufficient_quota, insufficient balance, quota exceeded)
+       are non-retryable.
+    2. Bare status digits were unanchored: a ContextOverflow whose token count contains '500'
+       (e.g. 130500) matched the '500' marker and was re-sent 3x at full size — overflow must
+       tighten the slice, never re-send (llm.py:2195)."""
+    from sliceagent.errorclass import is_non_retryable_message, is_retryable_message
+
+    guidance = ("429 RateLimitError: You exceeded your current quota, please check your plan "
+                "and billing details. For more information: https://platform.example/billing")
+    assert not is_non_retryable_message(guidance), "billing GUIDANCE made a transient 429 permanent"
+    # decisive markers stay permanent — including DeepSeek's 402 text
+    for dead in ("insufficient_quota", "Insufficient Balance", "quota exceeded", "out of budget"):
+        assert is_non_retryable_message(dead), dead
+
+    llm = OpenAILLM.__new__(OpenAILLM)
+    try:
+        from openai import RateLimitError
+        import httpx as _httpx
+        req = _httpx.Request("POST", "https://api.example/v1/chat")
+        resp = _httpx.Response(429, request=req)
+        err = RateLimitError(guidance, response=resp, body=None)
+        assert llm.is_retryable(err) is True, "a 429 RateLimitError must retry 3x, not die on billing text"
+    except ImportError:
+        pass
+
+    # anchored digits: token counts and ids containing a status substring must NOT classify
+    for poison in ("context overflow: 130500 tokens requested", "request id 914290",
+                   "limit 15040 tokens"):
+        assert not is_retryable_message(poison), poison
+    # …while real statuses still classify
+    for real in ("HTTP 429", "500 Internal Server Error", "502 Bad Gateway", "error 503"):
+        assert is_retryable_message(real), real
+
+
+@check
 def bedrock_throttling_is_not_a_context_overflow():
     """Pi's NON_OVERFLOW trap, merged into our existing table: Bedrock's 'ThrottlingException:
     Too many tokens, please wait before trying again' matches 'too many tokens' but is a RATE
