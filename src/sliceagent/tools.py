@@ -2119,7 +2119,24 @@ class LocalToolHost:
         except (TypeError, ValueError):
             t = 30.0
         # proc_wait is a poll-with-timeout — allow sub-second waits (unlike run_command's 1s floor).
-        return self.procs.wait(args["handle"], max(0.05, min(t, 600.0)))
+        # Liveness as EVIDENCE (U7 reaches this sibling too): the status line shows the watched
+        # process's log growing ~1/s, so a frozen counter names a stall instead of looking like
+        # a crash. Same thread-scoped binding as run_command.
+        activity_cb = None
+        if callable(self._verify_notify):
+            handle_label = str(args.get("handle") or "?")
+            def activity_cb(nbytes):
+                try:
+                    kb = nbytes / 1024
+                    self._verify_notify(f"proc_wait · {handle_label} · {kb:.1f} KB output")
+                except Exception:  # noqa: BLE001 — liveness must never affect the wait
+                    pass
+        prev_cb = cancel_scope.bind_activity(activity_cb) if activity_cb is not None else None
+        try:
+            return self.procs.wait(args["handle"], max(0.05, min(t, 600.0)))
+        finally:
+            if activity_cb is not None:
+                cancel_scope.unbind_activity(prev_cb)
 
     def _t_proc_kill(self, args: dict) -> str:
         try:

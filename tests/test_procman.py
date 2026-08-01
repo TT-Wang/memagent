@@ -279,6 +279,56 @@ def execute_code_honours_a_raised_deadline():
     assert h._call_timeout(10**9) == 600.0 and h._call_timeout("nonsense") == float(h.timeout)
 
 
+@check
+def proc_wait_converts_the_turns_cancel_token_and_spares_the_watched_process():
+    """HIGH 5 (the unconverted sibling): Ctrl-C during proc_wait in the live UI froze on
+    'Interrupt requested' for the full wait (measured >75s, ceiling 600s) — the exact pre-U2b
+    defect at this site. The owning turn's token (cancel_scope, bound by the scheduler wave) now
+    converts to the same KeyboardInterrupt the plain path's physical Ctrl-C raises — and the
+    WATCH is interrupted, never the watched: a deliberately-backgrounded process survives an
+    interrupted wait (proc_kill owns killing), matching the plain path exactly."""
+    import threading
+    from sliceagent import cancel_scope
+    wd, h = _host()
+    h.run("proc_start", {"command": "sleep 60"})
+    fired = threading.Event()
+    threading.Timer(0.3, fired.set).start()
+    prev = cancel_scope.bind_cancel(fired.is_set)
+    start = time.monotonic()
+    try:
+        h.run("proc_wait", {"handle": "p1", "timeout": 60})
+        raise AssertionError("proc_wait did not convert the cancel token")
+    except KeyboardInterrupt:
+        pass
+    finally:
+        cancel_scope.unbind_cancel(prev)
+    elapsed = time.monotonic() - start
+    assert elapsed < 5, f"Ctrl-C held proc_wait for {elapsed:.1f}s — the wait still can't see the token"
+    try:
+        assert "running" in h.run("proc_poll", {"handle": "p1"}), \
+            "interrupting the WATCH must not kill the watched process"
+    finally:
+        h.run("proc_kill", {"handle": "p1"})
+
+
+@check
+def proc_wait_reports_byte_evidence_liveness():
+    """U7 reaches this sibling too: while proc_wait blocks, the status line shows the watched
+    process's log growing (~1/s beats) — a frozen counter names a stall instead of looking like
+    a crash (the review's Family H at the proc_wait site)."""
+    wd, h = _host()
+    open(os.path.join(wd, "chatter.py"), "w").write(
+        "import time\nprint('x' * 2000, flush=True)\ntime.sleep(2)\n")
+    h.run("proc_start", {"command": f"{PY} chatter.py"})
+    beats = []
+    h._verify_notify = beats.append
+    try:
+        h.run("proc_wait", {"handle": "p1", "timeout": 5})
+    finally:
+        h._verify_notify = None
+    assert any("proc_wait" in str(beat) and "KB output" in str(beat) for beat in beats), beats
+
+
 def main():
     failed = 0
     for fn in CHECKS:

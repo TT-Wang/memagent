@@ -18,11 +18,13 @@ from __future__ import annotations
 
 import os
 import subprocess
+import tempfile
+import time
 
+from . import cancel_scope
 from .platform_compat import (ProcessGroupTerminationError, capture_pgid,
                               popen_group_kwargs, process_group_alive, sh as _sh,
                               terminate_process_group)
-import tempfile
 
 from .sandbox import _scrub_env
 
@@ -130,11 +132,40 @@ class ProcManager:
 
     def wait(self, handle: str, timeout: float) -> str:
         p = self._get(handle)
-        try:
-            p.popen.wait(timeout=timeout)
-            status = self.poll(handle)  # includes whole-group state, not merely the leader's return code
-        except subprocess.TimeoutExpired:
-            status = f"running (still alive after {timeout:g}s)"
+        # The same conversion the sandbox wait has (U2b): popen.wait(timeout=…) is a single
+        # uninterruptible syscall — in the live UI a Ctrl-C only sets a cooperative Event that
+        # nothing inside the wait could see, holding the user for the full timeout (measured
+        # >75s against a 600s ceiling — the exact pre-fix defect at this sibling site). Poll the
+        # owning turn's token every 50ms and convert to the same KeyboardInterrupt the plain
+        # path's physical Ctrl-C raises. The process is NOT reaped: proc_wait watches a
+        # deliberately-backgrounded child, so interrupting the WATCH must not kill the watched
+        # (proc_kill owns that) — matching the plain path exactly.
+        poll = cancel_scope.current_cancel()
+        activity = cancel_scope.current_activity()
+        deadline = time.monotonic() + max(0.0, timeout)
+        next_beat = time.monotonic() + 1.0
+        while True:
+            if p.popen.poll() is not None:
+                status = self.poll(handle)  # includes whole-group state, not merely the leader's rc
+                break
+            if poll is not None:
+                try:
+                    cancelled = poll()
+                except Exception:  # noqa: BLE001 — a broken token is not a reason to abandon the watch
+                    cancelled = False
+                if cancelled:
+                    raise KeyboardInterrupt
+            if activity is not None and time.monotonic() >= next_beat:
+                next_beat = time.monotonic() + 1.0
+                try:
+                    activity(os.path.getsize(p.log_path))
+                except Exception:  # noqa: BLE001 — liveness must never affect the wait
+                    pass
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                status = f"running (still alive after {timeout:g}s)"
+                break
+            time.sleep(min(0.05, remaining))
         return f"[{handle} {status}]\n{self._read_log(p, 40)}"
 
     def kill(self, handle: str) -> str:
