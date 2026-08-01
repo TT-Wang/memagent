@@ -627,6 +627,34 @@ def a_model_call_park_names_the_endpoint():
     assert "api.deepseek.com" in str(getattr(result, "message", "") or ""), result.message
 
 
+@check
+def a_length_truncated_message_never_executes_its_tool_calls():
+    """Pi's agent-loop guard (agent-loop.ts:381-406), and ours by construction: stopReason=length
+    means JSON-salvaged tool arguments are untrusted half-data — EVERY tool call in the message is
+    failed without execution. _normalize_stop maps length → max_tokens before tool_use ever sees
+    the calls, so the calls never reach run_tool_batch. Pin it: a truncated tool-bearing message
+    runs ZERO tools."""
+    ran = []
+
+    class _RunLogTools(_Tools):
+        def run(self, name, args):
+            ran.append(name)
+            return "ok"
+
+    llm = _ScriptLLM([
+        _Resp(content="", tool_calls=[_TC("read_file", {"path": "a.py"}, "c1")],
+              finish_reason="length"),
+        _Resp(content="done", finish_reason="stop"),
+    ])
+    events = []
+    result = run_turn(build_slice=_build(), llm=llm, tools=_RunLogTools(),
+                      dispatch=events.append, hooks=Hooks(), max_steps=6)
+    assert ran == [], f"a truncated message executed tools: {ran}"
+    assert result.stop_reason in ("end_turn", "max_tokens", "transport_error"), result.stop_reason
+    tool_msgs = [m for call in llm.seen for m in call if m.get("role") == "tool"]
+    assert tool_msgs == [], "a tool result entered the trajectory for an unexecuted call"
+
+
 def main():
     failed = 0
     for fn in CHECKS:
