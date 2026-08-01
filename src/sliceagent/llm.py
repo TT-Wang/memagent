@@ -1379,7 +1379,13 @@ class OpenAILLM:
                 pass
 
     def is_retryable(self, error: Exception) -> bool:
+        from .errorclass import is_non_retryable_message, is_retryable_message
         from .errors import EmptyResponseError
+        # THE ORDER IS THE CONTRACT (Pi retry.ts): quota/billing exhaustion is checked FIRST —
+        # a 429 that says "insufficient_quota" is a dead balance, and retrying it is how
+        # rate-limit storms happen.
+        if is_non_retryable_message(f"{type(error).__name__} {error}"):
+            return False
         try:
             from openai import APIConnectionError, APITimeoutError, InternalServerError, RateLimitError
             openai_errors = (RateLimitError, APITimeoutError, APIConnectionError, InternalServerError)
@@ -1390,9 +1396,14 @@ class OpenAILLM:
             transport = (httpx.TransportError,)   # a raw mid-STREAM drop (SDK doesn't wrap stream-iter errors) must retry like the blocking path
         except ImportError:
             transport = ()
-        return isinstance(error, openai_errors + transport + (
+        if isinstance(error, openai_errors + transport + (
             EmptyResponseError, ImmediateRetryError, PreFirstByteTimeoutError,
-        ))
+        )):
+            return True
+        # Pi's curated message table: transient failures whose TYPE doesn't say it (generic
+        # APIError with "overloaded", socket hang ups, premature stream endings, gRPC
+        # ResourceExhausted, provider-requested retries).
+        return is_retryable_message(f"{type(error).__name__} {error}")
 
     def _on_alarm(self, signum, frame):
         """SIGALRM handler: a request blew the HARD wall-clock deadline → raise a retryable timeout."""

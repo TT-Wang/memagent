@@ -53,6 +53,17 @@ _CONTEXT_OVERFLOW_PATTERNS = (
     "input is too long",
     "max input token",
     "exceeds the maximum number of input tokens",
+    # Ported from Pi's overflow.ts: provider-specific overflow wordings worth matching exactly
+    "request_too_large",                  # Anthropic HTTP 413 byte-size overflow
+    "input token count",                  # Google Gemini ("input token count exceeds the maximum")
+    "maximum prompt length is",           # xAI Grok
+    "maximum allowed input length",       # OpenRouter/Poolside
+    "exceeds the available context size", # llama.cpp server
+    "context window exceeds limit",       # MiniMax
+    "exceeded model token limit",         # Kimi For Coding
+    "too large for model with",           # Mistral ("too large for model with N maximum context length")
+    "model_context_window_exceeded",      # z.ai non-standard finish_reason surfaced as error text
+    "range of input length should be",    # DashScope / Qwen Token Plan
     # NOTE: bare "input token" was removed — it matched OpenAI's TPM rate-limit text
     # ("Limit: 30000 input tokens per minute"), misclassifying a 429 as a hard overflow.
 )
@@ -86,6 +97,13 @@ _NOT_OVERFLOW_MARKERS = (
     "parameter is invalid",   # "the prompt length parameter is invalid" — a validation error, NOT overflow
     "invalid value",
     "invalid input token",    # "invalid input token format" — not a context-size overflow
+    # Ported from Pi's NON_OVERFLOW_PATTERNS: throttling wordings that COLLIDE with overflow
+    # patterns — AWS Bedrock's "ThrottlingException: Too many tokens, please wait before trying
+    # again" matches "too many tokens" but is a rate limit, never a context overflow.
+    "throttlingexception",
+    "throttling error",
+    "rate limit",
+    "too many requests",
 )
 
 

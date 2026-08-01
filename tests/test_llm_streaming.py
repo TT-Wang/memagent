@@ -1520,5 +1520,54 @@ def a_mid_stream_transport_break_is_marked_transport_error_not_length():
     assert msg.content == "partial answer", repr(msg.content)
 
 
+@check
+def quota_errors_are_never_retried_but_transients_are():
+    """Pi's retry.ts contract, ported: NON_RETRYABLE is checked FIRST — a 429 that says
+    'insufficient_quota' is a dead balance, and retrying it is how rate-limit storms happen.
+    Transient load/transport text retries even when the exception TYPE says nothing."""
+    from sliceagent.errorclass import is_non_retryable_message, is_retryable_message
+
+    for quota in ("429 insufficient_quota", "GoUsageLimitError", "Monthly usage limit reached",
+                  "out of budget", "quota exceeded"):
+        assert is_non_retryable_message(quota), quota
+    for transient in ("overloaded", "rate_limit exceeded", "502 Bad Gateway", "socket hang up",
+                      "stream ended before message_stop", "connection refused",
+                      "you can retry your request", "ResourceExhausted"):
+        assert is_retryable_message(transient), transient
+        assert not is_non_retryable_message(transient), transient
+    # order: quota wording wins over transient-looking status
+    assert is_non_retryable_message("429 insufficient_quota")
+    # non-matches stay unclassified
+    assert not is_retryable_message("the model refused the prompt")
+
+    llm = OpenAILLM.__new__(OpenAILLM)
+    assert llm.is_retryable(Exception("429 insufficient_quota")) is False
+    assert llm.is_retryable(Exception("overloaded")) is True
+    try:
+        import httpx
+        assert llm.is_retryable(httpx.TransportError("socket hang up")) is True
+    except ImportError:
+        pass
+
+
+@check
+def bedrock_throttling_is_not_a_context_overflow():
+    """Pi's NON_OVERFLOW trap, merged into our existing table: Bedrock's 'ThrottlingException:
+    Too many tokens, please wait before trying again' matches 'too many tokens' but is a RATE
+    LIMIT, never a context overflow. Provider-specific overflow wordings DO classify."""
+    from sliceagent.context_overflow import is_context_overflow
+
+    assert not is_context_overflow(Exception("Too many requests, slow down"))
+    assert not is_context_overflow(Exception("rate limit exceeded"))
+    assert not is_context_overflow(
+        Exception("ThrottlingException: Too many tokens, please wait before trying again"))
+    # the new provider patterns classify correctly
+    assert is_context_overflow(Exception("prompt is too long: 90000 tokens > 80000 maximum"))
+    assert is_context_overflow(Exception("input token count exceeds the maximum allowed"))
+    assert is_context_overflow(Exception("maximum prompt length is 128000"))
+    assert is_context_overflow(Exception("model_context_window_exceeded"))
+    assert is_context_overflow(Exception("Input (90000 tokens) is longer than the model's context length (80000 tokens)"))
+
+
 if __name__ == "__main__":
     main()
