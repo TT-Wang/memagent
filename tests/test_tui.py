@@ -487,6 +487,63 @@ def tool_header_picks_primary_arg():
     assert "TODO" in tui._tool_header("grep", {"pattern": "TODO"})
 
 
+@check
+def sync_output_wraps_every_flush_cycle_in_atomic_frame_markers():
+    """P1 (Pi's TuiMainScreen anti-garble): every output flush is bracketed as ONE atomic frame —
+    ESC[?2026h … ESC[?2026l — so a composer repaint + erase + print batch applies as a unit instead
+    of byte-by-byte fragments (the interleaved 'Runing slep' repaints in pty captures)."""
+    from sliceagent.tui import _SYNC_OUT_BEGIN, _SYNC_OUT_END, _SyncOutput
+
+    class _Real:
+        def __init__(self):
+            self.events = []
+        def write(self, data):
+            # Vt100_Output.write strips escape codes (ESC -> '?'), so a marker arriving through
+            # this channel is observably mangled — that is exactly what the assertions below catch.
+            self.events.append(("w", data.replace("\x1b", "?")))
+        def write_raw(self, data):
+            self.events.append(("r", data))
+        def flush(self):
+            self.events.append(("f", ""))
+
+    real = _Real()
+    out = _SyncOutput(real)
+    out.write("frame-bytes")
+    out.flush()
+    # order: data, BEGIN(raw), flush, END(raw), flush — one atomic bracket per flush cycle, and
+    # the markers MUST travel the raw channel or the terminal sees '?[?2026h' instead of ESC.
+    assert real.events == [
+        ("w", "frame-bytes"),
+        ("r", _SYNC_OUT_BEGIN),
+        ("f", ""),
+        ("r", _SYNC_OUT_END),
+        ("f", ""),
+    ], real.events
+
+
+@check
+def sync_output_detection_honors_override_and_known_terminals():
+    import os
+    from sliceagent.tui import _sync_output_supported
+    old = dict(os.environ)
+    try:
+        for var in ("SLICEAGENT_SYNC_OUTPUT", "TERM_PROGRAM", "TERM", "WT_SESSION"):
+            os.environ.pop(var, None)
+        os.environ["TERM_PROGRAM"] = "iTerm.app"
+        assert _sync_output_supported() is True
+        os.environ["SLICEAGENT_SYNC_OUTPUT"] = "off"
+        assert _sync_output_supported() is False
+        os.environ["SLICEAGENT_SYNC_OUTPUT"] = "on"
+        assert _sync_output_supported() is True
+        os.environ.pop("SLICEAGENT_SYNC_OUTPUT")
+        os.environ.pop("TERM_PROGRAM")
+        os.environ["WT_SESSION"] = "1"
+        assert _sync_output_supported() is True
+    finally:
+        os.environ.clear()
+        os.environ.update(old)
+
+
 if __name__ == "__main__":
     ok = 0
     for fn in CHECKS:
@@ -521,3 +578,5 @@ def mid_turn_slash_commands_are_client_actions_never_steer_text():
     src = inspect.getsource(_cli)
     for cmd in sorted(_MID_TURN_SLASH_READONLY):
         assert f'"{cmd}"' in src, f"{cmd} is allowlisted but absent from cli's palette"
+
+

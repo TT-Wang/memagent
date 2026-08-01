@@ -52,6 +52,8 @@ REGISTRY: list[EnvVar] = [
            ".sliceagent/skills) everywhere. Off by default: repo-controlled instructions never load "
            "by mere presence — a workspace opts in with a .sliceagent/skills-trust marker file "
            "instead (Pi's project-trust gate).", ""),
+    EnvVar("SLICEAGENT_SYNC_OUTPUT", "ui", "Force synchronized-output frames (ESC[?2026) on|off; "
+           "auto-detects iTerm2/kitty/WezTerm/foot/vscode/Windows Terminal otherwise.", ""),
     EnvVar("AGENT_TOPIC_TOOLS", "agent", "Expose model-callable topic switching (off by default; host "
            "routing and slash commands remain available).", ""),
     EnvVar("AGENT_ADVANCED_TOOLS", "agent", "Expose persistent process and interactive terminal tools; "

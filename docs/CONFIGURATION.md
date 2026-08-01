@@ -2,7 +2,7 @@
 
 _Auto-generated from `src/sliceagent/envspec.py` — do not edit by hand (`python scripts/gen_config_reference.py`)._
 
-sliceagent reads **63** environment variables across **6** groups; every value is validated at startup (a misspelled enum warns instead of silently defaulting). Run `sliceagent config --list` to see the resolved value of each on your machine. Secrets (🔒) are read from the environment / config and never printed.
+sliceagent reads **64** environment variables across **6** groups; every value is validated at startup (a misspelled enum warns instead of silently defaulting). Run `sliceagent config --list` to see the resolved value of each on your machine. Secrets (🔒) are read from the environment / config and never printed.
 
 ## agent
 
@@ -96,3 +96,4 @@ sliceagent reads **63** environment variables across **6** groups; every value i
 | `AGENT_SPINNER` | `on` | Animated in-place status spinner during a turn (a Rich live region). Set off to drop just the spinner; all other Rich formatting stays. _(choices: on, off)_ _(aliases: 1, true, yes, 0, false, no)_ |
 | `AGENT_TUI` | `live` | UI mode: live (default — the pinned rich TUI) or off (plain stdout; pipes/CI). The inline REPL tier is retired; legacy values rich/inline/repl mean live. _(choices: live, off)_ _(aliases: rich, inline, repl, 1, on, true, yes, 0, false, no)_ |
 | `SHOW_SLICE` | — | Set truthy to print the rebuilt slice each turn (debug view). |
+| `SLICEAGENT_SYNC_OUTPUT` | — | Force synchronized-output frames (ESC[?2026) on\|off; auto-detects iTerm2/kitty/WezTerm/foot/vscode/Windows Terminal otherwise. |

@@ -71,6 +71,70 @@ TH = {
 MD_THEME = Theme({"markdown.code": "cyan", "markdown.code_block": "cyan"}, inherit=True)
 
 
+_SYNC_OUT_BEGIN = "\x1b[?2026h"
+_SYNC_OUT_END = "\x1b[?2026l"
+
+
+def _sync_output_supported() -> bool:
+    """Auto-detect terminals that apply a frame atomically (Pi's TuiMainScreen gating): the
+    synchronized-output escape is honored by iTerm2/kitty/WezTerm/foot/vscode/Windows Terminal.
+    SLICEAGENT_SYNC_OUTPUT=on|off forces the decision."""
+    forced = os.environ.get("SLICEAGENT_SYNC_OUTPUT", "").strip().lower()
+    if forced in ("1", "on", "true", "yes"):
+        return True
+    if forced in ("0", "off", "no", "false"):
+        return False
+    if os.environ.get("WT_SESSION"):
+        return True
+    term_program = os.environ.get("TERM_PROGRAM", "")
+    term = os.environ.get("TERM", "").lower()
+    return (term_program in ("iTerm.app", "WezTerm", "kitty", "foot", "vscode")
+            or any(marker in term for marker in ("kitty", "wezterm", "foot")))
+
+
+def _sync_wrapped_output(pt_output):
+    """Build (when absent) and optionally sync-wrap the composer's output. run_live passes no
+    output, so prompt_toolkit would create its own default internally — create it here instead so
+    the 2026 bracket can wrap it when the terminal supports it."""
+    if pt_output is None:
+        from prompt_toolkit.output import create_output
+        pt_output = create_output()
+    return _SyncOutput(pt_output) if _sync_output_supported() else pt_output
+
+
+class _SyncOutput:
+    """Wrap the Application's Output so every flush cycle is ONE atomic frame (Pi's anti-garble
+    mechanism, TuiMainScreen.ts:356): `ESC[?2026h` … `ESC[?2026l` around the frame, so the
+    terminal applies a composer repaint, an erase, and a print batch as a single unit instead of
+    byte-by-byte fragments (the interleaved 'Runing slep' repaints in pty captures).
+
+    Pure passthrough otherwise: prompt_toolkit keeps its own incremental diffing; this only
+    brackets its flush boundaries. Enabled only when _sync_output_supported() is true.
+    """
+
+    def __init__(self, real):
+        self._real = real
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+    def write(self, data):
+        return self._real.write(data)
+
+    def write_raw(self, data):
+        return self._real.write_raw(data)
+
+    def flush(self):
+        # write_raw, never write: Vt100_Output.write strips escape codes (ESC -> '?'), which would
+        # mangle the marker itself — observed in pty captures as a literal '?[?2026h'.
+        self._real.write_raw(_SYNC_OUT_BEGIN)
+        try:
+            return self._real.flush()
+        finally:
+            self._real.write_raw(_SYNC_OUT_END)
+            self._real.flush()
+
+
 def make_console() -> Console:
     """A Rich Console themed so inline `code` / file paths aren't highlighted on a black background."""
     return Console(theme=MD_THEME)
@@ -2494,7 +2558,8 @@ def build_live_app(*, console: Console, stats: dict, root: str | None, run_one_t
             floats=[Float(xcursor=True, ycursor=True,
                           content=MultiColumnCompletionsMenu(min_rows=3, show_meta=True))],
         ), focused_element=ta),
-        key_bindings=kb, full_screen=False, mouse_support=False, input=pt_input, output=pt_output,
+        key_bindings=kb, full_screen=False, mouse_support=False, input=pt_input,
+        output=_sync_wrapped_output(pt_output),
         min_redraw_interval=0.05, refresh_interval=0.5)
     app_ref["value"] = app
     return app, state
@@ -2591,7 +2656,13 @@ class _LivePrintRouter:
             with self._lock:
                 chunks, self._pending = self._pending, []
             if chunks:
-                self._real.write("".join(chunks))
+                # The erase + print + repaint composite is ONE frame (Pi's sync-output): the
+                # terminal applies it atomically instead of as byte-by-byte fragments. Prefer the
+                # raw channel when the stream has one: Vt100_Output.write strips ESC (-> '?').
+                raw_write = getattr(self._real, "write_raw", self._real.write)
+                raw_write(_SYNC_OUT_BEGIN)
+                raw_write("".join(chunks))
+                raw_write(_SYNC_OUT_END)
                 self._real.flush()
 
         def _done(_task):
