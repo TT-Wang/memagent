@@ -660,6 +660,49 @@ def a_length_truncated_message_never_executes_its_tool_calls():
 
 
 @check
+def the_responses_path_marks_truncation_so_the_same_guard_fires():
+    """P4's sibling site (the review's medium): the loop-level pin guards a CHAT-shaped truncated
+    message; the /v1/responses PARSER is the sibling that must EMIT the same shape — status
+    'incomplete' with reason 'max_output_tokens' maps to finish_reason='length' even when the
+    truncated payload carries function_call items, and the loop then blocks their execution
+    exactly like the chat path."""
+    from sliceagent.llm import OpenAILLM
+
+    class _Item:
+        type = "function_call"
+        name = "read_file"
+        arguments = '{"path": "a.py"}'
+        call_id = "c1"
+        id = "i1"
+
+    class _FakeResponse:
+        output_text = ""
+        output = [_Item()]
+        status = "incomplete"
+        incomplete_details = type("D", (), {"reason": "max_output_tokens"})()
+        usage = None
+
+    parser = OpenAILLM.__new__(OpenAILLM)
+    msg = parser._parse_responses(_FakeResponse())
+    assert msg.finish_reason == "length", \
+        f"responses truncation must map to 'length' so the loop guard fires: {msg.finish_reason}"
+    assert msg.tool_calls and msg.tool_calls[0].name == "read_file"
+
+    ran = []
+
+    class _RunLogTools(_Tools):
+        def run(self, name, args):
+            ran.append(name)
+            return "ok"
+
+    llm = _ScriptLLM([msg, _Resp(content="done", finish_reason="stop")])
+    result = run_turn(build_slice=_build(), llm=llm, tools=_RunLogTools(),
+                      dispatch=lambda e: None, hooks=Hooks(), max_steps=4)
+    assert ran == [], f"a responses-path truncated message executed tools: {ran}"
+    assert result.stop_reason in ("end_turn", "max_tokens", "transport_error"), result.stop_reason
+
+
+@check
 def a_queued_followup_lands_only_at_the_clean_exit_and_extends_the_turn():
     """Pi's two-queue model (packages/agent/src/agent.ts): steer course-corrects NOW; a follow-up
     is the NEXT task — it lands only when the turn would stop, never cutting a wave and never

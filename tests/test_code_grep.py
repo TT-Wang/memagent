@@ -269,5 +269,30 @@ def rg_exit2_with_results_is_partial_success_not_failure():
 CHECKS.append(rg_exit2_with_results_is_partial_success_not_failure)
 
 
+def a_signal_killed_rg_is_a_named_failure_never_a_fake_partial():
+    """U4 (the review's medium): rg dying by a SIGNAL (Python's -signum rc) used to fall into the
+    exit-2 partial-success branch with the hardcoded cause 'hit errors on some paths' — a story
+    that didn't happen, typed SUCCESS over a truncated remnant. A negative rc is now a loud
+    failure naming the signal."""
+    class _Proc:
+        returncode = -15
+        stdout = "calc.py:1:def add(a, b):"
+        stderr = ""
+
+    real_run = code_grep.subprocess.run
+    code_grep.subprocess.run = lambda *a, **k: _Proc()
+    try:
+        host = _Host(tempfile.mkdtemp(prefix="rg-sig-"))
+        out = make_grep_tool(host).handler({"pattern": "def "})
+        assert getattr(out, "status", None) is ToolStatus.FAILED, str(out)[:200]
+        assert "SIGTERM" in str(out), str(out)[:200]
+        assert "partial results" not in str(out), str(out)[:200]
+    finally:
+        code_grep.subprocess.run = real_run
+
+
+CHECKS.append(a_signal_killed_rg_is_a_named_failure_never_a_fake_partial)
+
+
 if __name__ == "__main__":
     main()

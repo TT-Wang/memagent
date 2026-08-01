@@ -147,6 +147,19 @@ def make_grep_tool(host) -> ToolEntry:
         lines = [ln for ln in proc.stdout.splitlines() if ln]
         if proc.returncode == 1:
             return "grep: no matches found."
+        if proc.returncode < 0:
+            # Signal death (Python's -signum convention) is NOT a partial success: any stdout is
+            # a truncated remnant, and the hardcoded "hit errors on some paths" cause would be a
+            # story that didn't happen (the review's U4 medium). Name the signal; fail loud.
+            import signal as _signal
+            try:
+                signame = _signal.Signals(-proc.returncode).name
+            except ValueError:
+                signame = f"signal {-proc.returncode}"
+            return ToolText(
+                f"grep: ripgrep was killed by {signame}; any partial output was discarded",
+                status=ToolStatus.FAILED,
+            )
         if proc.returncode not in (0, 1) and not lines:
             err = (proc.stderr or "").strip()
             detail = f" ({err})" if err else ""
