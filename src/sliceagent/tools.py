@@ -34,7 +34,7 @@ from .access import AllAccess, FileAccess
 from .binsniff import looks_binary
 from .context import ResourceKind, ResourceRef, reserved_resource_ref
 from .contextfs import ContextFS, is_context_path
-from .execution import ToolEffect, ToolStatus
+from .execution import NO_ADOPT_ON_TIMEOUT_ARG, ToolEffect, ToolStatus
 from .fuzzy import fuzzy_find_unique
 from .platform_compat import (IS_WINDOWS, ProcessGroupTerminationError, is_win_abs,
                               msys_to_win, norm_rel, win_path_candidates)
@@ -2033,12 +2033,15 @@ class LocalToolHost:
         adoption path must never name tools the model cannot call."""
         return self.registry.has("proc_start") and self.registry.has("proc_wait")
 
-    def _timeout_escalation(self, t: float, ceiling_hit: bool) -> str:
+    def _timeout_escalation(self, t: float, ceiling_hit: bool, *, proc_tools: bool | None = None) -> str:
         """The remediation the model needs AT the failure. Without it a timeout reads as a dead end and the
         next step is a blind retry at the same limit — the deadline is a TOOL CHOICE, not a verdict.
-        Composed from the REGISTERED tool list: naming proc_start in a build that removed it would
-        send the agent to a tool it does not have (Family J — advice to nowhere)."""
-        if self._proc_tools_available():
+        Composed from the tools the CALLER can actually use: naming proc_start to a build — or a
+        scoped child — that cannot call it would send the agent to a tool it does not have
+        (Family J — advice to nowhere; the review's U1 at the message level)."""
+        if proc_tools is None:
+            proc_tools = self._proc_tools_available()
+        if proc_tools:
             next_step = ("this is the 600s ceiling — re-run it under proc_start, then proc_wait/proc_tail "
                          "(background processes are not bounded by this deadline)"
                          if ceiling_hit else
@@ -2086,6 +2089,11 @@ class LocalToolHost:
         # Optional per-call timeout (default self.timeout, hard ceiling 600s) so slow builds don't
         # die at the 30s default and come back as exit 124. Long-lived processes use proc_start.
         t = self._call_timeout(args.get("timeout"))
+        # A scoped caller denied the proc_* family marks its call NO_ADOPT (ScopedSurface): the
+        # adoption gate must reflect the surface the CALLER can use, not the host registry — an
+        # adopted process whose follow tools the caller cannot call stays alive, followable by
+        # no one, while the outcome types SUCCEEDED (the review's U1).
+        no_adopt = bool(args.pop(NO_ADOPT_ON_TIMEOUT_ARG, False))
         activity_cb = None
         if callable(self._verify_notify):
             # Liveness as EVIDENCE (the review's Family H): the status line shows the output byte
@@ -2106,7 +2114,7 @@ class LocalToolHost:
             code, out = self.sandbox.run(
                 args["command"], cwd=self.root(), timeout=t,
                 on_timeout=(self._adopt_on_timeout(args["command"], t)
-                            if self._proc_tools_available() else None),
+                            if self._proc_tools_available() and not no_adopt else None),
             )
         finally:
             if activity_cb is not None:
@@ -2124,7 +2132,7 @@ class LocalToolHost:
             # unreachable; FAILED lets the model re-run with a larger timeout or proc_start, exactly
             # as the message says. The partial-write warning stays because it is true.
             return ToolText(
-                f"{self._timeout_escalation(t, t >= 600.0)}\n"
+                f"{self._timeout_escalation(t, t >= 600.0, proc_tools=(self._proc_tools_available() and not no_adopt))}\n"
                 f"{self._page_out(out, label='command output') or '(no output)'}",
                 ok=False,
             )

@@ -26,7 +26,7 @@ import posixpath
 from .agents import READ_ONLY_TOOLS, SUBAGENT_EXCLUDED_TOOLS
 from .context import ResourceKind, ResourceRef, reserved_resource_ref
 from .events import AssistantText, StepEnd, ToolResult
-from .execution import ToolStatus
+from .execution import NO_ADOPT_ON_TIMEOUT_ARG, ToolStatus
 from .hooks import Hooks
 from .loop import run_turn
 from .pfc import Slice, record_user
@@ -192,12 +192,26 @@ class ScopedSurface:
                 "in your summary.", status=ToolStatus.CANCELLED)
         return None
 
+    def _caller_args(self, name, args):
+        """Args as the CALLER's surface constrains them. A child denied the proc_* family must not
+        have its timed-out command ADOPTED into the background registry: the follow message would
+        name three tools the child cannot call, the process would stay alive followable by no one,
+        and the outcome would still type SUCCEEDED (the review's U1 — Family J at a new site: the
+        adoption gate read the host registry, not the surface the caller can use)."""
+        if (name == "run_command" and isinstance(args, dict)
+                and not any(t in self._allowed
+                            for t in ("proc_start", "proc_wait", "proc_tail", "proc_kill"))):
+            marked = dict(args)
+            marked[NO_ADOPT_ON_TIMEOUT_ARG] = True
+            return marked
+        return args
+
     def schemas(self):
         return [s for s in self._inner.schemas()
                 if s.get("function", {}).get("name") in self._allowed]
 
     def run(self, name, args):
-        return self._gate(name, args) or self._inner.run(name, args)
+        return self._gate(name, args) or self._inner.run(name, self._caller_args(name, args))
 
     def preflight_run(self, name, args):
         steer = self._gate(name, args)
@@ -210,13 +224,14 @@ class ScopedSurface:
             return None, ToolText(
                 "Error: wrapped tool host exposes an incomplete one-shot preflight protocol",
                 status=ToolStatus.FAILED)
-        return preflight(name, args) if callable(preflight) else (None, None)
+        return preflight(name, self._caller_args(name, args)) if callable(preflight) else (None, None)
 
     def run_preflighted(self, name, args, admission):
         steer = self._gate(name, args)
         if steer is not None:
             return steer
         inner = getattr(self._inner, "run_preflighted", None)
+        args = self._caller_args(name, args)
         return inner(name, args, admission) if callable(inner) else self._inner.run(name, args)
 
 

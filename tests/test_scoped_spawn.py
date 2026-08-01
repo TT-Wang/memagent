@@ -852,6 +852,49 @@ def unknown_kind_and_empty_task_are_quiet_steers():
     assert empty.status == ToolStatus.STEERED and "non-empty 'task'" in str(empty)
 
 
+@check
+def a_child_denied_proc_tools_gets_a_reap_on_timeout_never_an_adoption():
+    """U1 (the review, reproduced on a built-in kind): the adoption gate read the HOST registry,
+    not the surface the caller can use — a child whose surface denies proc_* had its timed-out
+    command DETACHED instead of reaped, the process stayed alive, the child was handed a message
+    naming three tools it's denied, and the outcome typed SUCCEEDED. The gate now travels with
+    the call (NO_ADOPT_ON_TIMEOUT_ARG): a denied caller gets the ordinary bounded-failure reap;
+    the parent (proc_* registered) still adopts."""
+    from sliceagent.execution import NO_ADOPT_ON_TIMEOUT_ARG
+
+    root = _workspace()
+    host = LocalToolHost(root=root)
+    assert host._proc_tools_available(), "the test host must register the proc_* family"
+    surface = ScopedSurface(host, {"read_file", "run_command"})
+
+    # the marker rides the call into the handler
+    captured = {}
+
+    class _Spy:
+        def run(self, name, args):
+            captured.update(args)
+            return "ok"
+
+    spy_surface = ScopedSurface(_Spy(), {"read_file", "run_command"})
+    spy_surface.run("run_command", {"command": "true"})
+    assert captured.get(NO_ADOPT_ON_TIMEOUT_ARG) is True, captured
+
+    # end to end: the child's timed-out command is REAPED (named cause, no follow tools named,
+    # nothing left alive in the registry)…
+    child_out = str(surface.run("run_command", {"command": "sleep 10", "timeout": 1}))
+    assert "reaped" in child_out, child_out[:200]
+    assert "proc_tail" not in child_out and "proc_wait" not in child_out, child_out[:200]
+    assert not host.procs._procs, \
+        f"an adoption happened for a denied caller: {list(host.procs._procs)}"
+
+    # …while the parent's identical call still adopts (the gate is the CALLER's surface, not a
+    # global off-switch).
+    parent_out = str(host.run("run_command", {"command": "sleep 10", "timeout": 1}))
+    assert "proc_tail" in parent_out, f"the parent must still adopt: {parent_out[:200]}"
+    for handle in list(host.procs._procs):
+        host.run("proc_kill", {"handle": handle})
+
+
 if __name__ == "__main__":
     ok = 0
     for fn in CHECKS:

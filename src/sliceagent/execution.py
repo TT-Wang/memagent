@@ -31,6 +31,11 @@ CHILD_CANCEL_SIGNAL_ARG = "__sliceagent_cancel_signal"
 CHILD_INVOCATION_ID_ARG = "__sliceagent_invocation_id"
 CHILD_REQUEST_ORDINAL_ARG = "__sliceagent_request_ordinal"
 CHILD_ACTIVITY_ARG = "__sliceagent_activity"
+# ScopedSurface → run_command handler: the caller's surface denies the proc_* family, so a
+# timeout must REAP, never adopt — adoption would hand the model a follow handle it cannot use
+# and leave the process alive, followable by no one (Family J at a new site). Injected into a
+# private copy of the args inside the surface, downstream of every audit/journal projection.
+NO_ADOPT_ON_TIMEOUT_ARG = "__sliceagent_no_adopt_on_timeout"
 # Delegation is a lifecycle class, not four unrelated string comparisons. A host that introduces another
 # delegation tool registers its name here once; scheduling leases, reconciliation, and receipt accounting then
 # move together instead of silently disagreeing.
@@ -535,7 +540,7 @@ def coerce_tool_status(value: object, *, legacy_text: str | None = None) -> Tool
 __all__ = [
     "CHILD_ACTIVITY_ARG", "CHILD_CANCEL_SIGNAL_ARG", "CHILD_INVOCATION_ID_ARG",
     "CHILD_REQUEST_ORDINAL_ARG", "ChildActivity", "DELEGATION_TOOL_NAMES",
-    "PreflightOverflow", "PreflightReport",
+    "NO_ADOPT_ON_TIMEOUT_ARG", "PreflightOverflow", "PreflightReport",
     "ToolEffect", "ToolInvocation", "ToolOutcome",
     "ToolPurity", "ToolStatus", "TurnOutcome", "TurnStatus", "UnknownContextWindow", "Usage",
     "available_content_capacity", "coerce_tool_status", "estimate_model_call", "is_delegation_tool",
