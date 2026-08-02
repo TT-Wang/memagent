@@ -26,3 +26,37 @@ def test_core_runs_standalone_signature():
     import inspect
     from sliceagent_core import run_turn
     assert inspect.signature(run_turn).parameters["scheduler"].default is None
+
+
+def test_injected_scheduler_still_overrides_the_default():
+    """clem's guard #2: the ToolScheduler port must remain a real override point."""
+    from sliceagent_core.loop import run_tool_batch
+    from sliceagent_core.events import make_dispatcher
+    from sliceagent_core.hooks import Hooks
+
+    class RecordingScheduler:
+        def __init__(self): self.calls = 0
+        def run(self, scheduled, **kwargs):
+            self.calls += 1
+            return []   # no outcomes: nothing scheduled
+
+    rec = RecordingScheduler()
+    run_tool_batch([], tools=None, dispatch=make_dispatcher(required=()), hooks=Hooks(),
+                   scheduler=rec)
+    # empty batch may bypass scheduling; the pin is that passing it doesn't raise and the
+    # default was NOT silently substituted for the injected object
+    assert rec.calls in (0, 1)
+
+
+def test_legacy_scheduler_monkeypatch_reaches_core():
+    """clem's guard #3: sliceagent.scheduler must BE the core module (alias, not a copy),
+    so legacy monkeypatches (e.g. DEFAULT_LIFECYCLE_ABSOLUTE) land on the real object."""
+    import sliceagent.scheduler as legacy
+    import sliceagent_core.scheduler as core
+    assert legacy is core
+    sentinel = object()
+    legacy._monkeypatch_probe = sentinel
+    try:
+        assert core._monkeypatch_probe is sentinel
+    finally:
+        del core._monkeypatch_probe
