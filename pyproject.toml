@@ -103,7 +103,7 @@ ignore = ["E402", "E701", "E702", "E731"]
 [tool.pytest.ini_options]
 # Local eval caches contain copied third-party task suites. Product pytest collection is intentionally scoped
 # to SliceAgent's own tests; benchmark runners execute their fixture tests inside isolated task environments.
-testpaths = ["tests"]
+testpaths = ["tests", "packages/sliceagent-core/tests", "packages/sliceagent-cli/tests"]
 
 [tool.uv.workspace]
 members = ["packages/*"]

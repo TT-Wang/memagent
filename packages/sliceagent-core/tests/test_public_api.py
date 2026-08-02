@@ -15,8 +15,10 @@ def test_docstring_names_are_real():
     doc = core.__doc__ or ""
     # every `from sliceagent_core import X[, Y...]` line in the docstring must hold
     advertised = set()
-    for m in re.finditer(r"from sliceagent_core import \(?([\w,\s]+)\)?", doc):
+    for m in re.finditer(r"from sliceagent_core import \(([^)]*)\)", doc):      # parenthesized
         advertised.update(n.strip() for n in m.group(1).replace("\n", ",").split(",") if n.strip())
+    for m in re.finditer(r"from sliceagent_core import ([^(\n][^\n]*)", doc):    # single-line
+        advertised.update(n.strip() for n in m.group(1).split(",") if n.strip())
     missing = [n for n in sorted(advertised) if not hasattr(core, n)]
     assert not missing, f"docstring advertises names that don't exist: {missing}"
 
