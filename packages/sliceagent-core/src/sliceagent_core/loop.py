@@ -65,6 +65,7 @@ from .registry_types import (
     tool_result_text,
 )
 from .scheduler_types import DEFAULT_LIFECYCLE_ABSOLUTE, ScheduledTool
+from .scheduler import ORDERED_TOOL_SCHEDULER
 
 
 def _as_text(out):
@@ -887,7 +888,7 @@ def _audit_outcome(out, body_free_ids):
 
 
 def run_tool_batch(tool_calls, tools, dispatch: Dispatcher, hooks: Hooks, *,
-                   scheduler: ToolScheduler, step: int = 0, turn_id: str = "", signal=None,
+                   scheduler: ToolScheduler | None = None, step: int = 0, turn_id: str = "", signal=None,
                    call_namespace: str = "", steer_probe=None):
     """Preflight and execute one provider batch through canonical typed outcomes.
 
@@ -904,6 +905,9 @@ def run_tool_batch(tool_calls, tools, dispatch: Dispatcher, hooks: Hooks, *,
     # Freeze dynamic workspace/session routers for this physical batch. A daemon read whose start journal
     # crosses a deadline may finish its callback after the caller has sealed or switched workspace; bound
     # sinks either keep that edge on the original active epoch or ignore it once that epoch is no longer live.
+    # Core is runnable standalone: the ordered scheduler is the default turn semantics;
+    # the ToolScheduler port stays overridable for tests and exotic hosts.
+    scheduler = scheduler if scheduler is not None else ORDERED_TOOL_SCHEDULER
     bind_dispatch = getattr(dispatch, "bind_dispatch", None)
     if callable(bind_dispatch):
         dispatch = bind_dispatch()
@@ -1530,7 +1534,7 @@ def _classify_steer_item(item):
     return ("malformed", shape)
 
 
-def run_turn(*, build_slice, llm, tools, scheduler: ToolScheduler, dispatch: Dispatcher,
+def run_turn(*, build_slice, llm, tools, scheduler: ToolScheduler | None = None, dispatch: Dispatcher,
              hooks: Hooks | None = None, max_steps: int = 120, signal=None, checkpoint=None, consolidate=None,
              turn_id: str = "", call_namespace: str = "", transport_activity=None,
              allow_park_closeout: bool = True, steer_queue=None, followup_queue=None) -> TurnResult:
@@ -1557,6 +1561,7 @@ def run_turn(*, build_slice, llm, tools, scheduler: ToolScheduler, dispatch: Dis
     batch with no drain point inside it, so a queued steer ALSO reaches the scheduler through
     ``_steer_pending``: the wave takes its ordinary cancellation cutoff (kind "steer", full seal grace,
     completed reports kept) and the steer lands at the upcoming boundary in seconds, not after the wave."""
+    scheduler = scheduler if scheduler is not None else ORDERED_TOOL_SCHEDULER
     hooks = hooks or Hooks()
     total = Usage()
     steps = 0

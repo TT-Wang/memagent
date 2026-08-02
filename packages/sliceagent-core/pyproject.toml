@@ -7,14 +7,12 @@ requires-python = ">=3.11"
 license = "MIT"
 authors = [{ name = "TT-Wang" }]
 keywords = ["agent-runtime", "llm", "context-engineering", "bounded-slice", "long-horizon"]
-# Deps are provisional for the P1 scaffold — confirmed as modules move in P1/P3.
-# Core carries only the model-runner client; everything domain-specific is injected via a contract.
-dependencies = [
-    "openai==2.45.0",
-    "httpx==0.28.1",
-]
+# The runtime is LLM-agnostic: a bare install drags in NOTHING. The built-in OpenAI-backed
+# LLMClient (llm.py) imports its SDK lazily — install the extra only if you use it.
+dependencies = []
 
 [project.optional-dependencies]
+openai = ["openai==2.45.0", "httpx==0.28.1"]
 dev = ["pytest==9.1.1", "ruff==0.15.21"]
 
 [build-system]

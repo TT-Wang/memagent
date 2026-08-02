@@ -1378,25 +1378,25 @@ provides-extras = ["dev", "memory", "treesitter", "tui"]
 [[package]]
 name = "sliceagent-core"
 source = { editable = "packages/sliceagent-core" }
-dependencies = [
-    { name = "httpx" },
-    { name = "openai" },
-]
 
 [package.optional-dependencies]
 dev = [
     { name = "pytest" },
     { name = "ruff" },
 ]
+openai = [
+    { name = "httpx" },
+    { name = "openai" },
+]
 
 [package.metadata]
 requires-dist = [
-    { name = "httpx", specifier = "==0.28.1" },
-    { name = "openai", specifier = "==2.45.0" },
+    { name = "httpx", marker = "extra == 'openai'", specifier = "==0.28.1" },
+    { name = "openai", marker = "extra == 'openai'", specifier = "==2.45.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = "==9.1.1" },
     { name = "ruff", marker = "extra == 'dev'", specifier = "==0.15.21" },
 ]
-provides-extras = ["dev"]
+provides-extras = ["dev", "openai"]
 
 [[package]]
 name = "sniffio"
