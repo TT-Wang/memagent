@@ -47,8 +47,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev,tui]"
 
-      - name: Smoke — the installed console script runs
-        run: sliceagent version
+      - name: Smoke — the installed console script runs AND reports the product version
+        run: |
+          OUT=$(sliceagent version)
+          echo "$OUT"
+          echo "$OUT" | grep -qE "0\.[0-9]+\.[0-9]+" || { echo "smoke: no version in output"; exit 1; }
+          echo "$OUT" | grep -q "0.1.0" && { echo "smoke: reports member version, not the product"; exit 1; } || true
 
       - name: Lint (ruff)
         run: ruff check src/sliceagent tests

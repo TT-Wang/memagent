@@ -89,8 +89,8 @@ def _pick(options: list, default: int = 0):
 
 def _version() -> str:
     try:
-        from . import __version__
-        return __version__
+        from . import app_version as _app_version
+        return _app_version()
     except Exception:  # noqa: BLE001
         return "0.0.0"
 

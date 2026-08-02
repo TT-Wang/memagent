@@ -22,8 +22,8 @@ treesitter = ["tree-sitter==0.26.0", "tree-sitter-python==0.25.0"]
 tui = ["rich==15.0.0", "prompt_toolkit==3.0.52"]
 dev = ["pytest==9.1.1", "ruff==0.15.21"]
 
-[project.scripts]
-sliceagent = "sliceagent_cli.cli:main"
+# [project.scripts] parked while this package is unpublished — the root product owns
+# the `sliceagent` console script (dedup: two distributions must not claim one name).
 
 [build-system]
 requires = ["hatchling"]

@@ -318,8 +318,8 @@ def run_update(
     executable = executable or sys.executable
     platform_name = os_name or os.name
     try:
-        from . import __version__
-        out(f"  SliceAgent {__version__}")
+        from . import app_version as _app_version
+        out(f"  SliceAgent {_app_version()}")
     except Exception:  # noqa: BLE001 — version display cannot block maintenance guidance
         pass
     origin = detect_installation(prefix=prefix, distribution=distribution)

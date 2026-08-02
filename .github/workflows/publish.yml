@@ -48,6 +48,16 @@ jobs:
           python -m pip install build twine
           python -m build
           python -m twine check dist/*
+      - name: Wheel vendors the member packages (Model A invariant)
+        run: |
+          python - <<'PYCHK'
+          import zipfile, glob, sys
+          w = glob.glob('dist/sliceagent-*.whl')[0]
+          names = zipfile.ZipFile(w).namelist()
+          need = ['sliceagent/__init__.py', 'sliceagent_core/loop.py', 'sliceagent_cli/cli.py']
+          missing = [n for n in need if n not in names]
+          sys.exit(f'wheel missing vendored members: {missing}' if missing else 0)
+          PYCHK
       - uses: actions/upload-artifact@v7
         with:
           name: dist

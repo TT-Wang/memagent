@@ -20,8 +20,6 @@ classifiers = [
 # Pi-style supply-chain policy: every DIRECT dependency is EXACT-pinned to the uv.lock tree
 # (dependency changes are reviewed code changes, not ambient resolution). Guard: scripts/check_pinned_deps.py.
 dependencies = [
-    "sliceagent-core",
-    "sliceagent-cli",
     "openai==2.45.0",
     "httpx==0.28.1",
     "mcp==1.28.1",   # official MCP SDK — connect external MCP servers as tools (Step 3.3)
@@ -54,7 +52,13 @@ build-backend = "hatchling.build"
 path = "src/sliceagent/__init__.py"   # the single version source (__version__)
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/sliceagent"]
+packages = [
+    "src/sliceagent",
+    "packages/sliceagent-core/src/sliceagent_core",
+    "packages/sliceagent-cli/src/sliceagent_cli",
+]   # Model A: ONE published product; the wheel vendors both member packages.
+    # pip never resolves the members (uv workspace is dev-only); publishing core
+    # standalone is a future deliberate release, not blocked by this.
 
 [tool.hatch.build.targets.sdist]
 # sdist = source distribution; PyPI serves it to builders. Keep it lean: the wheel carries the

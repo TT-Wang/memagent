@@ -5,4 +5,15 @@ into the core via the Memory contract). Depends on sliceagent-core; the reverse 
 """
 
 __version__ = "0.1.0"
-__all__ = ["__version__"]
+def app_version() -> str:
+    """The installed PRODUCT version (the `sliceagent` distribution, single-sourced from
+    src/sliceagent/__init__.py) with a standalone fallback to this package's own version.
+    Metadata-based on purpose: no import coupling to the umbrella package."""
+    from importlib.metadata import PackageNotFoundError, version
+    try:
+        return version("sliceagent")
+    except PackageNotFoundError:
+        return __version__
+
+
+__all__ = ["__version__", "app_version"]
