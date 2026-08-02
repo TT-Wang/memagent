@@ -29,7 +29,7 @@ from sliceagent_core.interfaces import Snippet
 from sliceagent_core.safety import redact_text, scan_for_threats   # F1: scan recorded material BEFORE the LLM call + the return
 from sliceagent.skill_provenance import AUTO, frontmatter_line
 from sliceagent_core.text_utils import one_line
-from sliceagent.tools import HOST_ERROR_SENTINELS
+from .tools import HOST_ERROR_SENTINELS
 
 _log = logging.getLogger("sliceagent.consolidate")
 
