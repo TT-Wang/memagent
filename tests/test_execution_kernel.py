@@ -49,6 +49,20 @@ def T(seconds: float) -> float:
     return seconds * _TIME_SCALE
 
 
+# Scaling the test's own numbers is NOT enough: the scheduler holds its own fixed durations, and a
+# pin races those too. Stretch only the test side and you get the partial-scaling failure again one
+# level down — a read gives up after the fixed 0.10s slot wait despite its scaled deadline, and a
+# queued child is admitted on the fixed 0.20s stagger while its predecessor is still running, which
+# is the very ordering the pin exists to observe. So the clock stretches for the whole system under
+# test, not just the caller. Each tests/test_*.py runs in its own process, so this cannot leak.
+if _TIME_SCALE != 1.0:
+    import sliceagent.scheduler as _scheduler_clock  # noqa: E402
+
+    for _const in ("_LIFECYCLE_LAUNCH_STAGGER_SECONDS", "_TIMEOUT_POLL_SECONDS",
+                   "_TIMEOUT_GRACE_SECONDS", "_READER_SLOT_WAIT_SECONDS"):
+        setattr(_scheduler_clock, _const, getattr(_scheduler_clock, _const) * _TIME_SCALE)
+
+
 def check(fn):
     CHECKS.append(fn)
     return fn
@@ -1484,7 +1498,7 @@ def consecutive_pure_reads_overlap():
 @check
 def unkillable_effectful_timeout_waits_before_later_barrier():
     prior = os.environ.get("AGENT_TOOL_TIMEOUT")
-    os.environ["AGENT_TOOL_TIMEOUT"] = "0.03"
+    os.environ["AGENT_TOOL_TIMEOUT"] = str(T(0.03))
     ran = []
 
     class Host:
@@ -1553,7 +1567,7 @@ def read_only_child_is_parallelizable_but_not_abandoned_by_generic_timeout():
     from sliceagent.access import ReadAllAccess
 
     prior = os.environ.get("AGENT_TOOL_TIMEOUT")
-    os.environ["AGENT_TOOL_TIMEOUT"] = "0.03"
+    os.environ["AGENT_TOOL_TIMEOUT"] = str(T(0.03))
 
     class Host:
         def accesses(self, _name, _args):
@@ -1581,7 +1595,7 @@ def read_only_child_is_parallelizable_but_not_abandoned_by_generic_timeout():
 @check
 def pure_read_timeout_returns_failure_feedback_without_reconciliation():
     prior = os.environ.get("AGENT_TOOL_TIMEOUT")
-    os.environ["AGENT_TOOL_TIMEOUT"] = "0.03"
+    os.environ["AGENT_TOOL_TIMEOUT"] = str(T(0.03))
 
     class LLM:
         def __init__(self):
@@ -1602,10 +1616,7 @@ def pure_read_timeout_returns_failure_feedback_without_reconciliation():
             return []
 
         def run(self, _name, _args):
-            # NOT T(): this races the scheduler's fixed _TIMEOUT_GRACE_SECONDS (0.10). The read must
-            # settle INSIDE grace, which holds only while (duration - deadline) < 0.10 — scaling
-            # both ends pushes it out and breaks the invariant instead of the clock.
-            time.sleep(0.06)
+            time.sleep(T(0.06))
             return "late"
 
     llm, events = LLM(), []
@@ -1755,7 +1766,7 @@ def missing_user_answer_is_a_typed_cancellation():
 @check
 def read_settling_during_grace_preserves_later_barrier():
     prior = os.environ.get("AGENT_TOOL_TIMEOUT")
-    os.environ["AGENT_TOOL_TIMEOUT"] = "0.03"
+    os.environ["AGENT_TOOL_TIMEOUT"] = str(T(0.03))
     ran, events = [], []
 
     class Host:
@@ -1765,8 +1776,7 @@ def read_settling_during_grace_preserves_later_barrier():
         def run(self, name, _args):
             ran.append(f"{name}:start")
             if name == "read_file":
-                # NOT T(): must settle inside the fixed _TIMEOUT_GRACE_SECONDS (0.10) window.
-                time.sleep(0.06)
+                time.sleep(T(0.06))
                 ran.append("read_file:end")
             return "ok"
 
@@ -2156,6 +2166,8 @@ def timed_read_waits_for_a_concurrent_slot_until_its_own_deadline():
     occupied = threading.BoundedSemaphore(1)
     assert occupied.acquire(blocking=False)
     scheduler._TIMEOUT_READER_SLOTS = occupied
+    # deliberately NOT T(): the slot-wait window it races scales, so a fixed early
+    # release widens the margin rather than preserving the flaky 3.3x ratio.
     release_slot = threading.Timer(0.03, occupied.release)
     invocation = ToolInvocation("wait-slot", "read_file", {"path": "x"}, 0)
     release_slot.start()
@@ -2343,7 +2355,7 @@ def blocking_start_publication_times_out_without_entering_handler_or_late_tool_s
         ], Host(), dispatch, Hooks())[1])
 
     prior = os.environ.get("AGENT_TOOL_TIMEOUT")
-    os.environ["AGENT_TOOL_TIMEOUT"] = "0.02"
+    os.environ["AGENT_TOOL_TIMEOUT"] = str(T(0.02))
     thread = threading.Thread(target=invoke, daemon=True)
     try:
         thread.start()
@@ -2404,7 +2416,7 @@ def in_flight_tool_started_is_pinned_to_original_dispatch_epoch():
             return "unexpected"
 
     prior = os.environ.get("AGENT_TOOL_TIMEOUT")
-    os.environ["AGENT_TOOL_TIMEOUT"] = "0.02"
+    os.environ["AGENT_TOOL_TIMEOUT"] = str(T(0.02))
     result = []
     thread = threading.Thread(
         target=lambda: result.extend(run_tool_batch([
