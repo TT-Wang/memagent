@@ -51,6 +51,12 @@ def dependency_resource_paths(graph: WorkGraph, *, workspace_epoch: int | None =
     return tuple(dict.fromkeys(paths))
 
 
+# Rendered when a work item's exact user source cannot be recovered (SourceMismatch / missing event).
+# Named so observers (records.AdmissionMetrics) can count missing-source renders without prose guessing —
+# this exact machine-generated literal is the ONLY sound string to match on.
+SOURCE_UNAVAILABLE_MARKER = "exact source: UNAVAILABLE"
+
+
 def _extract_source(item: WorkItem, sources: Mapping[str, str]) -> tuple[str, ...]:
     out = []
     for ref in item.source_refs:
@@ -78,7 +84,7 @@ def _render_item(
             try:
                 exact = _extract_source(item, sources)
             except SourceMismatchError:
-                lines.append("  exact source: UNAVAILABLE — use the immutable event locator below; do not guess")
+                lines.append(f"  {SOURCE_UNAVAILABLE_MARKER} — use the immutable event locator below; do not guess")
             else:
                 for text in exact:
                     lines.extend(("  user source (verbatim): |", *(f"    {line}" for line in text.splitlines())))

@@ -1883,6 +1883,29 @@ def main() -> None:
     if os.environ.get("AGENT_METRICS"):
         from sliceagent_core.metrics import make_metrics_sink
         metrics = make_metrics_sink()
+    # Durable records journal (records.py) — default-ON pure observers, distinct from the env-gated
+    # in-memory CostMetrics above: UsageRecorder journals the cost axis, AdmissionMetrics journals the
+    # admission-precision axis (per-region admitted/degraded/referenced + missed-need deltas). The
+    # seed-plan box is filled by _capture_seed_plan wrapping each turn's build_slice; session.active()
+    # is the live Slice. Best-effort: a journal failure never blocks startup or a turn.
+    _seed_plan_box: dict = {"plan": None}
+
+    def _capture_seed_plan(inner):
+        def _build():
+            plan = inner()
+            _seed_plan_box["plan"] = plan
+            return plan
+        return _build
+
+    try:
+        from sliceagent_core.records import AdmissionMetrics, Journal, UsageRecorder
+        _records_journal = Journal(session.session_id)
+        _admission_metrics = AdmissionMetrics(
+            _records_journal, lambda: _seed_plan_box["plan"], lambda: session.active())
+        _usage_recorder = UsageRecorder(_records_journal, model=str(getattr(llm, "model", "") or ""))
+    except Exception:  # noqa: BLE001 — observers must never block startup
+        _admission_metrics = None
+        _usage_recorder = None
     # EXACTLY ONE renderer is wired: the rich+prompt_toolkit sink (TUI), OR the plain stdout sink
     # (headless/eval). Never two.
     if _tui:
@@ -1911,6 +1934,10 @@ def main() -> None:
         sinks.append(log_sink(dispatch_root))
         if metrics is not None:
             sinks.append(metrics)
+        if _admission_metrics is not None:
+            sinks.append(_admission_metrics)
+        if _usage_recorder is not None:
+            sinks.append(_usage_recorder)
         sinks.append(_workspace_presentation_sink(_workspace_handoff, _presentation_sink))
         if dispatch_monitor is not None:
             sinks.append(dispatch_monitor)
@@ -2497,11 +2524,11 @@ def main() -> None:
                 # new one. The seed is built from the SAME object run_turn executes with, so a
                 # planning turn can never advertise a tool its surface will steer.
                 turn_tools = _turn_tools()
-                build = make_build_slice(
+                build = _capture_seed_plan(make_build_slice(
                     session, turn_tools, retriever, memory, text, session.session_id,
                     model_id=llm.model, event_ledger=_event_ledger,
                     system_extra=_planning.pop("overlay", "") or "",
-                )
+                ))
             except KeyboardInterrupt:
                 live_dispatch(TurnInterrupted("aborted", "cancelled during context preparation"))
                 if _seal_local_turn("aborted", live_dispatch):
@@ -2738,11 +2765,11 @@ def main() -> None:
                     # neither echoed nor admitted again after a switch.
                     _expand_mentions(line)
                     turn_tools = _turn_tools()   # per SEGMENT — see the live path's note
-                    build = make_build_slice(
+                    build = _capture_seed_plan(make_build_slice(
                         session, turn_tools, retriever, memory, line, session.session_id,
                         model_id=llm.model, event_ledger=_event_ledger,
                         system_extra=_planning.pop("overlay", "") or "",
-                    )
+                    ))
                 except KeyboardInterrupt:
                     dispatch(TurnInterrupted("aborted", "cancelled during context preparation"))
                     if _seal_local_turn("aborted", dispatch):
