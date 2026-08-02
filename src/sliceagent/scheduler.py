@@ -340,10 +340,19 @@ def _run_read_wave(
         None if per_job_liveness or timeout is None
         else wave_started + max(0.0, timeout)
     )
+    # The absolute LEAK GUARD must not depend on a per-job inactivity window. It was gated on
+    # `per_job_liveness`, which requires `timeout is not None` — and `lifecycle_timeout` defaults to
+    # None in this function's own signature. So a caller using the documented default got NEITHER a
+    # per-job deadline NOR the leak guard, and one non-terminating lifecycle child blocked the parent
+    # forever. Production happens to pass 900s, so the hole is invisible there; the contract is still
+    # wrong, and the guard exists precisely for the case where nothing else bounds the child.
     absolute_deadline = (
         wave_started + max(0.0, absolute_timeout)
-        if per_job_liveness and absolute_timeout is not None else None
+        if lifecycle_wave and absolute_timeout is not None else None
     )
+    # Per-job cutoffs run when EITHER bound is armed. Keeping this one predicate is what stops the
+    # two from drifting apart again: the guard is armed but nothing checks it, or nothing exits.
+    per_job_cutoffs = per_job_liveness or absolute_deadline is not None
     cutoff_kind = "deadline"
     late: set[int] = set()
     unstarted: set[int] = set()
@@ -592,7 +601,10 @@ def _run_read_wave(
         condition.notify_all()
 
     def process_job_timeouts(now: float) -> None:
-        if not per_job_liveness:
+        # Runs for a per-job-liveness wave OR whenever an absolute leak guard is armed: the guard is
+        # the last line against a child that never terminates, so it cannot be conditional on the
+        # inactivity window being configured.
+        if not per_job_cutoffs:
             return
         for index, job in enumerate(jobs):
             if index in job_timeout_kind:
@@ -603,9 +615,17 @@ def _run_read_wave(
                 if absolute_deadline is not None and now >= absolute_deadline:
                     establish_job_timeout(index, "absolute", absolute_deadline, now)
                 continue
-            activity_last = float(getattr(job.task.activity, "last", wave_started))
-            inactivity_deadline = activity_last + max(0.0, float(timeout or 0.0))
-            if absolute_deadline is not None and absolute_deadline <= inactivity_deadline:
+            if per_job_liveness:
+                activity_last = float(getattr(job.task.activity, "last", wave_started))
+                inactivity_deadline = activity_last + max(0.0, float(timeout or 0.0))
+            else:
+                # No inactivity window configured. `timeout or 0.0` would make the deadline a PAST
+                # instant and cut every child off immediately — the absolute guard is the only bound.
+                inactivity_deadline = None
+            if inactivity_deadline is None or (
+                    absolute_deadline is not None and absolute_deadline <= inactivity_deadline):
+                if absolute_deadline is None:
+                    continue
                 kind, cutoff_at = "absolute", absolute_deadline
             else:
                 kind, cutoff_at = "inactivity", inactivity_deadline
@@ -711,7 +731,11 @@ def _run_read_wave(
                     break
                 if next_index == len(jobs) and all(
                         job.done and (not job.launched or job.slot_released) for job in jobs):
-                    if per_job_liveness and job_timeout_kind:
+                    # per_job_cutoffs, not per_job_liveness: on the lifecycle_timeout=None path this
+                    # change introduced, an absolute-guard reap whose child settles inside grace took
+                    # the `return` below and handed back the child's RAW SUCCEEDED text with zero
+                    # typed effects — a reaped child reported as a clean success.
+                    if per_job_cutoffs and job_timeout_kind:
                         break
                     return [_job_result(job) for job in jobs]
                 # SETTLEMENT, not the launch pointer, ends a per-job-liveness wave. `next_index` only
@@ -724,7 +748,7 @@ def _run_read_wave(
                 # freeze the parent turn. `job_logically_settled` already accounts for the queued tail: a
                 # pending queued job is neither `unstarted` nor `late` and is not done, so it returns
                 # False and the wave still waits for genuinely outstanding work.
-                if per_job_liveness and all(
+                if per_job_cutoffs and all(
                         job_logically_settled(index, now) for index in range(len(jobs))):
                     break
 
@@ -739,6 +763,14 @@ def _run_read_wave(
                     wait_for = min(wait_for, max(0.0, next_lifecycle_launch_at - now))
                 if deadline is not None:
                     wait_for = min(wait_for, max(0.0, deadline - now))
+                # Only clamp toward a deadline still in the FUTURE. Without the guard,
+                # `max(0.0, absolute_deadline - now)` pins wait_for to 0.0 from the instant the guard
+                # elapses until the wave breaks, so `condition.wait(0.0)` spins on the scheduler lock
+                # — measured 1.835s CPU over 2.3s wall against 0.043s before — and that spin starves
+                # the worker trying to TAKE the lock to publish its settlement, flipping children that
+                # did fold cancellation into a typed close from FAILED to INDETERMINATE.
+                if absolute_deadline is not None and absolute_deadline > now:
+                    wait_for = min(wait_for, absolute_deadline - now)
                 if per_job_liveness:
                     pending_deadlines = []
                     for index, job in enumerate(jobs):

@@ -2,7 +2,7 @@
 
 _Auto-generated from `src/sliceagent/envspec.py` — do not edit by hand (`python scripts/gen_config_reference.py`)._
 
-sliceagent reads **64** environment variables across **6** groups; every value is validated at startup (a misspelled enum warns instead of silently defaulting). Run `sliceagent config --list` to see the resolved value of each on your machine. Secrets (🔒) are read from the environment / config and never printed.
+sliceagent reads **67** environment variables across **6** groups; every value is validated at startup (a misspelled enum warns instead of silently defaulting). Run `sliceagent config --list` to see the resolved value of each on your machine. Secrets (🔒) are read from the environment / config and never printed.
 
 ## agent
 
@@ -76,6 +76,8 @@ sliceagent reads **64** environment variables across **6** groups; every value i
 | variable | default | description |
 |---|---|---|
 | `AGENT_PROXY` | — | HTTP proxy URL for LLM calls; 'none'/'off' forces direct. Unset = direct (no proxy). |
+| `ANTHROPIC_API_KEY` 🔒 | — | Provider key picked up for an Anthropic base_url. |
+| `DEEPSEEK_API_KEY` 🔒 | — | Provider key picked up for a DeepSeek base_url. |
 | `LLM_API_KEY` 🔒 | — | API key for the LLM provider (REQUIRED). |
 | `LLM_BASE_URL` | — | OpenAI-compatible endpoint (e.g. https://api.moonshot.cn/v1). |
 | `LLM_GATE_LEASE_MARGIN_SEC` | `60` | Teardown margin added to the provider call hard timeout to bound a physical gate lease's lifetime; leases older than that horizon are reclaimed at admission (self-heals unconfirmed-close capacity bricks). |
@@ -88,6 +90,7 @@ sliceagent reads **64** environment variables across **6** groups; every value i
 | `MOONSHOT_API_KEY` 🔒 | — | Legacy alias for LLM_API_KEY (Moonshot). |
 | `OPENAI_API_KEY` 🔒 | — | Legacy alias for LLM_API_KEY. |
 | `OPENAI_BASE_URL` | — | Legacy alias for LLM_BASE_URL. |
+| `OPENROUTER_API_KEY` 🔒 | — | Provider key picked up for an OpenRouter base_url. |
 
 ## ui
 

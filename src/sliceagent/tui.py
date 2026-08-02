@@ -355,7 +355,8 @@ def _render_assistant_update(content: str, width: int = 100) -> Group:
         Text("│ ", style=TH["gutter"]), Text("assistant update", style=TH["dim"]),
     ), width)]
     for index, line in enumerate(preview.lines):
-        if preview.hidden_lines and preview.tail_retained and index == len(preview.lines) - 1:
+        if (preview.hidden_lines and preview.tail_retained
+                    and index == len(preview.lines) - max(1, preview.tail_lines)):
             rows.append(_fit_line(Text.assemble(
                 Text("│   ", style=TH["gutter"]),
                 Text(_omitted_lines(preview.hidden_lines), style=TH["dim"]),
@@ -667,12 +668,22 @@ def _render_tool_result(e, width: int = 100, *, duration_s: float | None = None)
         body.append(Padding(d, (0, 0, 0, 2)))      # indent the diff under the gutter
     show_output = status != "succeeded" or e.name not in QUIET_OUTPUT_TOOLS
     if show_output:
-        preview = output_preview(e.output, max_rows=5 if status != "succeeded" else 3)
+        # A failure's CAUSE is routinely several lines below its first line, and the head/tail shape
+        # keeps only the LAST line — which for a crash is a footer, not the reason. A node uncaught
+        # exception spends the whole 5-row budget before the message: "Exit code N" (1) + the
+        # run_main/throw/caret preamble (3) + the trailing "Node.js vX" tail (1), so the actual
+        # `Error: …` fell in the omitted middle and the user was shown only boilerplate. The budget
+        # has to clear a failure's preamble, not merely exceed the success budget by two. Kept
+        # task-agnostic on purpose: no runtime sniffing, no error-string matching — just more room
+        # when something went wrong, which is when rows are worth spending.
+        preview = (output_preview(e.output, max_rows=8, tail_rows=3)
+                   if status != "succeeded" else output_preview(e.output, max_rows=3))
         out_style = (TH["warn"] if safety_stop or indeterminate
                      else TH["dim"] if steered or cancelled
                      else TH["fail"] if display_failure else TH["dim"])
         for index, line in enumerate(preview.lines):
-            if preview.hidden_lines and preview.tail_retained and index == len(preview.lines) - 1:
+            if (preview.hidden_lines and preview.tail_retained
+                    and index == len(preview.lines) - max(1, preview.tail_lines)):
                 body.append(_fit_line(Text.assemble(
                     Text("│   ", style=TH["gutter"]),
                     Text(_omitted_lines(preview.hidden_lines), style=TH["dim"]),

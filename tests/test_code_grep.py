@@ -225,6 +225,23 @@ def ignore_rules_apply_outside_a_git_repository():
     assert "src/app.js" in files and "node_modules" not in files, files
 
 
+@check
+def multiline_search_is_reachable_and_rg_advice_is_actionable():
+    """FIELD: `grep '\\n'` failed with rg exit 2 — "Consider enabling multiline mode with the
+    --multiline flag" — advice pointing at a flag this tool did not expose, so the search was an
+    unrecoverable ✗. The remedy the error names must be reachable through the schema."""
+    if not _HAS_RG:
+        return
+    entry = make_grep_tool(_Host(_workspace({"a.py": "alpha\nbeta\n"})))
+    props = entry.schema["function"]["parameters"]["properties"]
+    assert "multiline" in props, "rg's own remedy is not reachable through the tool"
+    handler = entry.handler
+    plain = str(handler({"pattern": r"alpha\nbeta"}))
+    assert "exit code 2" in plain or "multiline" in plain, plain
+    spanning = str(handler({"pattern": r"alpha\nbeta", "multiline": True}))
+    assert "a.py" in spanning and "exit code 2" not in spanning, spanning
+
+
 def main():
     failed = 0
     for fn in CHECKS:

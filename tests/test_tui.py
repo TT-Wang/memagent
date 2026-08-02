@@ -168,9 +168,15 @@ def typed_evidence_quality_is_visible_without_becoming_execution_failure():
 
 @check
 def multiline_tool_output_is_bounded_without_flattening_the_cause():
-    output = "headline\nframe one\nframe two\nframe three\nframe four\nroot cause"
+    # Sized WELL over any plausible row budget and asserted on the PROPERTIES (bounded · cause kept ·
+    # omission disclosed) rather than an exact hidden-line count, so tuning the budget cannot silently
+    # retire this pin — the previous fixture was 6 lines and broke the moment the failure budget grew.
+    output = "\n".join(["headline", *(f"frame {i}" for i in range(1, 25)), "root cause"])
     out, _ = _render([ToolResult("run_command", {"command": "pytest"}, output, True)])
-    assert "headline" in out and "root cause" in out and "… 1 line omitted" in out, out
+    assert "headline" in out, out                       # the head survives
+    assert "root cause" in out, out                     # the CAUSE is never flattened away
+    assert "omitted" in out, out                        # elision is stated, never silent
+    assert "frame 20" not in out, out                   # …and it really is bounded
 
 
 @check
@@ -612,6 +618,50 @@ def mid_turn_slash_commands_are_client_actions_never_steer_text():
     src = inspect.getsource(_cli)
     for cmd in sorted(_MID_TURN_SLASH_READONLY):
         assert f'"{cmd}"' in src, f"{cmd} is allowlisted but absent from cli's palette"
+
+
+@check
+def a_failure_preview_clears_the_preamble_and_shows_the_CAUSE():
+    """FIELD: a real `tsx` crash rendered as `Exit code 1` + node's run_main/throw/caret preamble +
+    `Node.js v22.22.3`, with `… 40 lines omitted` where the reason should be. output_preview keeps
+    head + the LAST non-empty line, and for a crash the last line is a footer, not the cause — so at
+    a 5-row budget the whole allowance is spent before the message: exit-code line (1) + preamble (3)
+    + version tail (1). The budget must clear a failure's preamble, and this pins the ROW COUNT by
+    the property that matters (the cause is visible), not by the number itself."""
+    from sliceagent.tui_projection import output_preview
+    crash = ("Exit code 1\n"
+             "node:internal/modules/run_main:123\n"
+             "    triggerUncaughtException(\n"
+             "    ^\n"
+             "\n"
+             "Error: Cannot find module 'better-sqlite3'\n"
+             "    at Module._resolveFilename (node:internal/modules/cjs/loader:1234:15)\n"
+             + "    at frame\n" * 38
+             + "\nNode.js v22.22.3\n")
+
+    def cause_visible(rows: int) -> bool:
+        return any("Cannot find module" in line
+                   for line in output_preview(crash, max_rows=rows).lines)
+
+    assert not cause_visible(5), (
+        "fixture drift: at the OLD 5-row budget the cause must still be hidden, or this pin proves "
+        "nothing about the change"
+    )
+    failure_rows = 8   # must match tui._render_tool_row's failure budget
+    assert cause_visible(failure_rows), (
+        f"the failure budget ({failure_rows} rows) does not clear a crash preamble — the user sees "
+        "boilerplate and an omission marker where the reason should be"
+    )
+    # Pin the RENDERER's real behaviour, not the source spelling — the first version of this check
+    # matched an exact literal and broke the moment the call site was reformatted, which is the same
+    # brittleness that makes a pin worthless.
+    from sliceagent.events import ToolResult
+    rendered, _ = _render([ToolResult("run_command", {"command": "npx tsx x.ts"}, crash, True)])
+    assert "Cannot find module" in rendered, (
+        "the live failure row still hides the cause:\n" + rendered
+    )
+    # a SUCCEEDED row stays terse — this must not become "always print more"
+    assert not cause_visible(3), "the success budget must stay tight"
 
 
 if __name__ == "__main__":

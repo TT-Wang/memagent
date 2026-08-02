@@ -136,6 +136,31 @@ def update_work_intake_accepts_and_bounds_the_contract():
 # ── P2: host-run item verification (Applied ≠ Verified) ────────────────────────────────────────
 
 @check
+def a_rejected_verify_contract_names_the_BREACH_not_just_the_rule():
+    """FIELD: a model got `work_item.verify must be up to 8 non-empty commands (<=500 chars each)`
+    — one sentence covering four distinct breaches (wrong type, too many, blank, too long), so it
+    could not tell which of its commands was at fault and retried blind."""
+    from sliceagent.active_work import GraphValidationError, WorkItem
+
+    def breach(verify):
+        try:
+            WorkItem(id="i", root_id="r", source_refs=(), description="d",
+                     status="open", verify=verify)
+        except GraphValidationError as exc:
+            return str(exc)
+        raise AssertionError(f"expected a rejection for {verify!r}")
+
+    assert "list of shell commands" in breach(["a"])              # not a tuple
+    many = breach(tuple(f"cmd{i}" for i in range(9)))
+    assert "9 commands" in many and "limit is 8" in many, many    # names the actual count
+    blank = breach(("pytest -q", "   "))
+    assert "verify[1]" in blank and "empty" in blank, blank       # names WHICH entry
+    long = breach(("pytest -q", "x" * 501))
+    assert "verify[1]" in long and "501 chars" in long, long      # names the entry and its size
+    assert repr("x" * 80) in long, "the over-long command is not quoted back"
+
+
+@check
 def verification_green_promotes_ready_to_verified_and_model_still_cannot_forge_it():
     from sliceagent.active_work import WorkGraph
     from sliceagent.tools import build_work_delta, run_item_verification

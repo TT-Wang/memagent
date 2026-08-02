@@ -237,6 +237,45 @@ def test_retiring_older_request_atomically_cancels_its_unresolved_children():
     assert state.active_work.get(older.id).superseded_by == current.id
 
 
+def test_cross_root_update_names_a_legal_forward_move_that_actually_works():
+    """A plan made in one turn is under an older root by the next one, because every user message
+    mints a fresh logical id and therefore a fresh request root (cli._mint_logical_turn_id). Owning
+    items per-request is deliberate, but the bare rule left the model with no legal next move, so a
+    routine multi-turn checklist died on a ✗ it could not act on. The rejection must name the moves
+    that ARE legal — and this pins that the named move genuinely succeeds, not merely that the advice
+    is printed."""
+    from sliceagent.active_work import WorkGraph
+    from sliceagent.tools import build_work_delta
+
+    graph = WorkGraph().open_request("event-1", "review the auth module", logical_id="log-1")
+    graph = graph.apply_delta(build_work_delta(graph, {
+        "expected_revision": graph.revision,
+        "changes": [{"id": "f1", "description": "audit token refresh", "status": "in_progress"}],
+    }, logical_id="log-1", workspace_epoch=0))
+    assert graph.get("f1").status == "in_progress"
+
+    graph = graph.open_request("event-2", "also check the session store", logical_id="log-2")
+    try:
+        build_work_delta(graph, {"expected_revision": graph.revision,
+                                 "changes": [{"id": "f1", "status": "ready"}]},
+                         logical_id="log-2", workspace_epoch=0)
+        raise AssertionError("a cross-root update must still be refused")
+    except ValueError as exc:
+        message = str(exc)
+    # the rule alone is a dead end; the message must carry the escape
+    assert "EARLIER request" in message, message
+    assert "create a fresh item" in message and "supersede" in message, message
+    assert "Do not retry" in message, message
+
+    # …and the move it names must actually work under the current root.
+    carried = graph.apply_delta(build_work_delta(graph, {
+        "expected_revision": graph.revision,
+        "changes": [{"id": "f1-cont", "description": "audit token refresh", "status": "in_progress"}],
+    }, logical_id="log-2", workspace_epoch=0))
+    assert carried.get("f1-cont").status == "in_progress"
+    assert carried.get("f1").status == "in_progress", "the earlier item stays on record, untouched"
+
+
 def test_update_work_rejects_multiline_model_metadata():
     state, host = prepared()
     for index, change in enumerate((

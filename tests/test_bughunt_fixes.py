@@ -829,7 +829,11 @@ def negative_completion_cap_falls_back_to_model_aware_default():
     prior = os.environ.get("AGENT_COMPLETION_TOKENS")
     try:
         os.environ["AGENT_COMPLETION_TOKENS"] = "-5"
-        llm = OpenAILLM(model="claude-sonnet-5", api_key="test-key")
+        llm = OpenAILLM(model="claude-sonnet-5", api_key="test-key",
+                    # PIN the endpoint: capability() resolves the cap family from base_url, so an
+                    # ambient LLM_BASE_URL in the shell silently retargeted this to DeepSeek (8192)
+                    # and produced a false red that cost a real review cycle to diagnose.
+                    base_url="https://api.anthropic.com/v1")
         assert llm.max_tokens == 32768, \
             "a negative cap must not reach the provider; model-aware default applies (#33)"
         os.environ["AGENT_COMPLETION_TOKENS"] = "0"

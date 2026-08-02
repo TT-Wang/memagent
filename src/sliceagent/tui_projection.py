@@ -111,6 +111,11 @@ class OutputPreview:
     lines: tuple[str, ...] = ()
     hidden_lines: int = 0
     tail_retained: bool = False
+    # How many of `lines` came from the END of the output. The gap sits immediately BEFORE the
+    # first of them; with a one-line tail that was the last row, which is why the renderer used
+    # to hardcode it. Once the tail grew to 3 the marker landed two rows late, silently asserting
+    # a gap that was not there and hiding the one that was.
+    tail_lines: int = 0
 
 
 @dataclass(frozen=True)
@@ -166,7 +171,26 @@ def _preview_line(value: str, max_chars: int) -> str:
     return line if len(line) <= max_chars else line[: max_chars - 1] + "…"
 
 
-def output_preview(value: object, *, max_rows: int = 3, max_chars: int = 320) -> OutputPreview:
+def _last_nonempty_lines(raw: str, max_chars: int, count: int) -> tuple[str, ...]:
+    """The last `count` non-empty lines, in order. One trailing line suffices only when the cause is
+    on it; a banner-headed tool puts the cause a few lines above the final tally."""
+    out: list[str] = []
+    end = len(raw)
+    while end and len(out) < max(1, count):
+        while end and raw[end - 1] in "\r\n":
+            end -= 1
+        if not end:
+            break
+        newline = raw.rfind("\n", 0, end)
+        line = _preview_line(raw[newline + 1:end], max_chars)
+        if line:
+            out.append(line)
+        end = newline + 1 if newline >= 0 else 0
+    return tuple(reversed(out))
+
+
+def output_preview(value: object, *, max_rows: int = 3, max_chars: int = 320,
+                   tail_rows: int = 1) -> OutputPreview:
     """Keep useful line shape while bounding terminal noise.
 
     When output is longer than the row budget, retain the final non-empty line as well
@@ -191,12 +215,21 @@ def output_preview(value: object, *, max_rows: int = 3, max_chars: int = 320) ->
     if max_rows == 1:
         shown = clipped[:1]
         tail_retained = False
+        tail = ()
     else:
-        tail = _last_nonempty_line(raw, max_chars)
-        shown = (*clipped[: max_rows - 1], tail)
+        # Keeping exactly ONE trailing line assumes the cause is either near the top or on the last
+        # line. Both happen — a node crash puts `Error: …` about five lines down, a python traceback
+        # puts it last — but a BANNER-HEADED tool puts it in neither: pytest's visible content became
+        # the platform/rootdir/plugins banner plus the final tally, while `FAILED test_x::test_c -
+        # assert 1 == 2` sat second-from-last, inside the elision. Splitting the budget (deep head +
+        # a few trailing lines) covers all three shapes without sniffing the runtime.
+        keep = max(1, min(int(tail_rows), max_rows - 1))
+        tail = _last_nonempty_lines(raw, max_chars, keep)
+        shown = (*clipped[: max_rows - len(tail)], *tail)
         tail_retained = True
     shown = tuple(line for line in shown if line)
-    return OutputPreview(shown, max(0, physical_lines - len(shown)), tail_retained)
+    return OutputPreview(shown, max(0, physical_lines - len(shown)), tail_retained,
+                         tail_lines=len(tail))
 
 
 def _child_payload(event: object) -> Mapping[str, object]:

@@ -53,6 +53,10 @@ _GREP_SCHEMA = {
                 "output_mode": {"type": "string", "enum": ["content", "files_with_matches", "count"],
                                 "description": "content (default) | files_with_matches | count."},
                 "context": {"type": "integer", "description": "Lines of context around each match (content mode; like rg -C)."},
+                "multiline": {"type": "boolean", "description": (
+                    "Let the pattern match ACROSS lines (rg -U). Required for '\\n' or any pattern "
+                    "spanning a line break — without it ripgrep refuses the search outright."
+                )},
                 "offset": {"type": "integer", "description": "Number of leading result lines to skip (default 0)."},
                 "limit": {"type": "integer", "description": "Max result lines to return (default 50)."},
             },
@@ -60,6 +64,31 @@ _GREP_SCHEMA = {
         },
     },
 }
+
+
+_RG_MAX_FILESIZE_BYTES = 300 * 1024
+
+
+def _oversized_files(target: str, limit: int) -> int:
+    """How many files under `target` ripgrep skipped for size. Bounded walk: this runs only on the
+    no-match path, and a wrong count is worse than none, so a walk error yields 0 (say nothing)."""
+    import os
+    count = 0
+    try:
+        if os.path.isfile(target):
+            return 1 if os.path.getsize(target) > limit else 0
+        for root, _dirs, names in os.walk(target):
+            for name in names:
+                try:
+                    if os.path.getsize(os.path.join(root, name)) > limit:
+                        count += 1
+                        if count >= 100:      # enough to make the point; never an unbounded walk
+                            return count
+                except OSError:
+                    continue
+    except OSError:
+        return 0
+    return count
 
 
 def _norm_int(value, default: int) -> int:
@@ -122,6 +151,12 @@ def make_grep_tool(host) -> ToolEntry:
             cmd += ["-n"]
             if context > 0:
                 cmd += ["-C", str(context)]
+        # ripgrep REFUSES a pattern containing a literal newline unless -U is on, and its own error
+        # tells the caller to "enable multiline mode" — advice that pointed at a flag this tool did
+        # not expose, so a `\n` search was an unrecoverable ✗. Close the capability the message names
+        # rather than rewriting the message.
+        if args.get("multiline"):
+            cmd += ["-U"]
         cmd += ["--max-filesize", _RG_MAX_FILESIZE, "--max-columns", _RG_MAX_COLUMNS]
         if glob:
             cmd += ["--glob", glob]
@@ -146,6 +181,21 @@ def make_grep_tool(host) -> ToolEntry:
         # an error only when NO payload remains; otherwise return the matches and name the cause.
         lines = [ln for ln in proc.stdout.splitlines() if ln]
         if proc.returncode == 1:
+            # "No matches" is a positive claim of ABSENCE and the model acts on it — concludes the
+            # symbol does not exist, writes a duplicate, tells the human the codebase has no such
+            # reference. But this search silently skipped every file over --max-filesize, so a match
+            # inside a large file reads as proof it is not there. State the caps that shaped the
+            # answer; the model can then widen with run_command's own rg if it needs to.
+            # Disclose the ONE cap that can actually turn a real match into "no matches": a file the
+            # search never opened. --max-columns only truncates a matching line's DISPLAY, so it can
+            # never suppress a hit — naming it here attached a fabricated cause to every true absence.
+            # And say it only when such a file was really present, so an honest "not found" over a
+            # small tree stays honest instead of shipping a caveat about files that do not exist.
+            skipped = _oversized_files(target, _RG_MAX_FILESIZE_BYTES)
+            if skipped:
+                return (f"grep: no matches found — but {skipped} file(s) over {_RG_MAX_FILESIZE} were "
+                        "SKIPPED and not searched; if the target may live in one, search it directly "
+                        "with run_command.")
             return "grep: no matches found."
         if proc.returncode < 0:
             # Signal death (Python's -signum convention) is NOT a partial success: any stdout is

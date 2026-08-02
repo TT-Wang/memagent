@@ -90,6 +90,13 @@ def _classified_read_target(args, resource_ref=None, *, canonicalize=None):
     canonical = _norm_vpath(canonical_source)
     # `.sliceagent/` is a physical host-private store, not a virtual archive kind. Keep the existing
     # default-deny for both its relative spelling and the absolute spelling canonicalized by the host.
+    # KNOWN GAP (not fixable here): `_page_out` elides a long tool result and hands the caller
+    # `read_file('.sliceagent/blobs/…')` to recover the middle, but for a CHILD that ref lands in this
+    # deny — a child cannot read output it just produced. Exempting `blobs/` wholesale is NOT the fix:
+    # parent and child blobs share one directory, so it leaks the parent's paged output to every child
+    # (test_projection_truth's canonical-routing check catches exactly that). The real fix needs a
+    # child-scoped blob namespace so ownership is decidable from the path. Until then the deny stands
+    # and the child's recovery route is run_command.
     private = canonical == ".sliceagent" or canonical.startswith(".sliceagent/")
     return ref, canonical, private
 

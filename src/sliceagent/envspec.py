@@ -102,6 +102,12 @@ REGISTRY: list[EnvVar] = [
            "account. Timed-out calls retain a slot until their transport actually closes; invalid or "
            "non-positive values use the default.", "4"),
     EnvVar("AGENT_PROXY", "provider", "HTTP proxy URL for LLM calls; 'none'/'off' forces direct. Unset = direct (no proxy).", ""),
+    EnvVar("ANTHROPIC_API_KEY", "provider", "Provider key picked up for an Anthropic base_url.",
+           "", secret=True),
+    EnvVar("DEEPSEEK_API_KEY", "provider", "Provider key picked up for a DeepSeek base_url.",
+           "", secret=True),
+    EnvVar("OPENROUTER_API_KEY", "provider", "Provider key picked up for an OpenRouter base_url.",
+           "", secret=True),
     EnvVar("OPENAI_API_KEY", "provider", "Legacy alias for LLM_API_KEY.", "", secret=True),
     EnvVar("MOONSHOT_API_KEY", "provider", "Legacy alias for LLM_API_KEY (Moonshot).", "", secret=True),
     EnvVar("OPENAI_BASE_URL", "provider", "Legacy alias for LLM_BASE_URL.", ""),

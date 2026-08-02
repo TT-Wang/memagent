@@ -87,6 +87,21 @@ def _spawn_scope_max_tokens() -> int:
         return 40000
 
 
+def _scope_entry_weights(root: str, entries) -> list[tuple[str, int]]:
+    """Per-entry measured size, largest first — the data a caller needs to re-partition.
+
+    The host already computes the total to make the reject/allow decision; withholding the breakdown
+    forced the model to re-derive it with its own shell calls (measured: six `wc -c` loops, run twice
+    across two turns because the first turn's discovery died with it). A rejection that states a
+    ceiling without the weights is a rule without the facts to satisfy it.
+    """
+    weights = []
+    for entry in entries:
+        size, _files = _scope_source_bytes(root, [entry])
+        weights.append((str(entry), size // _SOURCE_BYTES_PER_TOKEN))
+    return sorted(weights, key=lambda row: -row[1])
+
+
 def _scope_source_bytes(root: str, entries) -> tuple[int, int]:
     """Measured source size of the named scope paths: (bytes, file_count). Unresolvable entries
     count as zero — scope stays prose for them; only measurable paths gate.
@@ -423,12 +438,17 @@ class ScopedSpawnHost:
             src_bytes, src_files = _scope_source_bytes(root, scope_entries)
             measured = src_bytes // _SOURCE_BYTES_PER_TOKEN
             if src_bytes and measured > ceiling:
+                weights = _scope_entry_weights(root, scope_entries)
+                shown = weights[:20]
+                breakdown = "; ".join(f"{name} ~{size:,}" for name, size in shown if size)
+                more = "" if len(weights) <= len(shown) else f" (+{len(weights) - len(shown)} smaller)"
                 return _steered(
                     f"scope too large to finish: ~{measured:,} source tokens measured "
                     f"({src_bytes:,} bytes across {src_files} files), ceiling {ceiling:,} "
                     "(AGENT_SPAWN_SCOPE_MAX_TOKENS). A child that size cannot settle inside the "
                     "delegation window — SPLIT this scope into smaller partitions and spawn one "
-                    "child per partition (guidance: 20–30k source tokens each).")
+                    "child per partition (guidance: 20–30k source tokens each). Measured per entry, "
+                    f"largest first — partition from THESE numbers, do not re-measure: {breakdown}{more}")
         cancel = args.get(CHILD_CANCEL_SIGNAL_ARG)          # loop-injected; Event-like, parent-composed
         activity = args.get(CHILD_ACTIVITY_ARG)             # loop-injected; shared monotonic liveness cell
         invocation_id = str(args.get(CHILD_INVOCATION_ID_ARG) or "")

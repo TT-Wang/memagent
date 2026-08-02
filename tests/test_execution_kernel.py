@@ -680,6 +680,75 @@ def a_prompting_command_fails_fast_instead_of_hanging_to_the_deadline():
 
 
 @check
+def the_leak_guard_wait_does_not_busy_spin_once_it_elapses():
+    """REGRESSION: clamping the poll to a deadline already in the PAST pins wait_for to 0.0, so
+    condition.wait(0.0) spins on the scheduler lock until the wave breaks — and that spin starves the
+    worker trying to TAKE the lock to publish its settlement, flipping typed closes to INDETERMINATE.
+    Measured 0.104s CPU vs 0.005s for the same 0.9s of wall. Assert the RATIO, not a wall-clock."""
+    wedge = threading.Event()
+
+    def task(i):
+        inv = ToolInvocation(f"spin-{i}", "spawn_agent", {}, i)
+        return ScheduledTool(inv, ToolPurity.PURE_READ, lambda: (wedge.wait(20), "x")[1],
+                             timeout_safe=False, request_cancel=lambda _k: None,
+                             cancel_grace=0.05, activity=ChildActivity())
+
+    box: dict = {}
+    # process_time() is user+system CPU for the whole process — the same quantity as
+    # ru_utime + ru_stime, minus the POSIX-only `resource` import that broke the Windows job.
+    before = time.process_time()
+    started = time.monotonic()
+    runner = threading.Thread(target=lambda: box.setdefault(
+        "o", run_ordered([task(i) for i in range(4)],
+                         lifecycle_timeout=None, lifecycle_absolute=0.5)), daemon=True)
+    runner.start()
+    runner.join(12.0)
+    alive = runner.is_alive()
+    wedge.set()
+    wall = time.monotonic() - started
+    cpu = time.process_time() - before
+    assert not alive, "the leak guard never released the wave"
+    # A polling wait costs almost nothing; a spin costs a large fraction of the wall clock.
+    # Measured on this path: waiting ~0.5% of wall, spinning ~11%. 4% sits an order of magnitude
+    # above the wait and well under the spin. (My first threshold was 25% and the pin passed with the
+    # fix reverted — a bound loose enough to admit the bug is not a pin.)
+    assert cpu < wall * 0.04, (
+        f"the wave burned {cpu:.3f}s CPU over {wall:.2f}s wall ({cpu / wall:.1%}) — the poll is "
+        "spinning on the scheduler lock, not waiting on it"
+    )
+
+
+@check
+def the_absolute_leak_guard_holds_without_an_inactivity_window():
+    """M-s1: `lifecycle_timeout` defaults to None in run_ordered's own signature, and the absolute
+    leak guard was gated on `per_job_liveness`, which REQUIRES a non-None timeout. So a caller using
+    the documented default got neither bound and one non-terminating child blocked the parent
+    forever. The guard exists for exactly the case where nothing else bounds the child."""
+    wedge = threading.Event()
+    invocation = ToolInvocation("no-window", "spawn_agent", {}, 0)
+    task = ScheduledTool(
+        invocation, ToolPurity.PURE_READ, lambda: (wedge.wait(30), "never")[1],
+        timeout_safe=False, request_cancel=lambda _k: None, cancel_grace=0.05,
+        activity=ChildActivity(),
+    )
+    box: dict = {}
+    runner = threading.Thread(
+        target=lambda: box.setdefault(
+            "outcomes", run_ordered([task], lifecycle_timeout=None, lifecycle_absolute=0.5)),
+        daemon=True)
+    runner.start()
+    runner.join(12.0)
+    frozen = runner.is_alive()
+    wedge.set()
+    assert not frozen, (
+        "with lifecycle_timeout=None (the API DEFAULT) the absolute leak guard never fired — a "
+        "non-terminating child holds the parent turn open indefinitely"
+    )
+    assert box["outcomes"][0].status in (
+        ToolStatus.INDETERMINATE, ToolStatus.FAILED, ToolStatus.CANCELLED), box["outcomes"][0].status
+
+
+@check
 def queued_child_inactivity_starts_at_physical_admission():
     first_activity = ChildActivity()
     second_activity = ChildActivity()
@@ -3037,17 +3106,26 @@ def a_huge_file_is_viewed_with_bounded_memory_and_the_same_contract():
         for i in range(1, n_lines + 1):
             f.write(f"line-{i:08d}\n")
     host = LocalToolHost(root=root)
-    import resource
-    unit = 1 if sys.platform == "darwin" else 1024   # ru_maxrss: bytes on macOS, kilobytes on Linux
-    rss_before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * unit
+    # tracemalloc, not resource.getrusage: `resource` is POSIX-only and broke the Windows job. The
+    # peak Python allocation is also the TIGHTER measure here — slurping the file materializes it on
+    # the Python heap, which is exactly what tracemalloc counts, while ru_maxrss is a whole-process
+    # high-water mark carrying allocator noise from every earlier test in the file.
+    import tracemalloc
+    was_tracing = tracemalloc.is_tracing()
+    if not was_tracing:
+        tracemalloc.start()
+    tracemalloc.reset_peak()
     out = host.run("read_file", {"path": "big.log"})
+    _current, peak = tracemalloc.get_traced_memory()
+    if not was_tracing:
+        tracemalloc.stop()
     text = str(out)
     assert "line-00000001" in text, text[:200]
     assert f"of {n_lines}" in text, text[-300:]
     assert "memory-bounded streaming read" in text
-    rss_after = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * unit
-    assert (rss_after - rss_before) < _READ_SLURP_CAP * 2, (
-        f"the view materialized ~{(rss_after - rss_before) / 1e6:.0f}MB for a capped view")
+    assert peak < _READ_SLURP_CAP * 2, (
+        f"the view materialized ~{peak / 1e6:.0f}MB for a capped view "
+        f"(file is ~{n_lines * 14 / 1e6:.0f}MB, cap is {_READ_SLURP_CAP / 1e6:.0f}MB)")
     # the paging contract holds: a mid-file window lands exactly
     out = host.run("read_file", {"path": "big.log", "offset": n_lines - 10, "limit": 11})
     assert f"line-{n_lines:08d}" in str(out), str(out)[-200:]

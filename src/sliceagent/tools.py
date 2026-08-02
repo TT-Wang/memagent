@@ -133,8 +133,13 @@ def str_replace(path, old, new):
     path = _confine(path)
     with open(path, encoding="utf-8", newline="") as _f: _cur = _f.read()
     _n = _cur.count(old)
-    if _n != 1: return (f"error: old_string occurs {_n}x in {path} (need exactly 1) — "
-                        f"add surrounding lines to make it unique, or write_file the whole file")
+    # RAISE, never return. A returned rejection reaches nobody unless the script happens to print it,
+    # so a batch whose edit silently missed came back ok=True/SUCCEEDED — the model marked the item
+    # ready and got a red verify on code it never changed. Raising aborts the script at the failed
+    # edit and surfaces the reason as a real failure, which is what every other helper here does.
+    if _n != 1: raise ValueError(
+        f"str_replace: old_string occurs {_n}x in {path} (need exactly 1) — "
+        f"add surrounding lines to make it unique, or write_file the whole file")
     with open(path, "w", encoding="utf-8", newline="") as _f: _f.write(_cur.replace(old, new, 1))
     return f"replaced 1 occurrence in {path}"
 
@@ -584,10 +589,11 @@ def run_item_verification(candidates, runner, attempts: dict) -> tuple[frozenset
                 return frozenset(), (
                     f"verify for {item_id!r} produced NO VERDICT: `{command}` -> "
                     f"{tail or '(no output)'}. Nothing was checked, so this says nothing about the work "
-                    "— do NOT re-edit on the strength of it. Fix the CHECK: raise AGENT_VERIFY_TIMEOUT "
-                    "(600s by default, raisable to 3600s) if it needs longer, install what it needs, or "
-                    "give the item a check that completes here. You can also run it under proc_start "
-                    "and report what you see."
+                    "— do NOT re-edit on the strength of it. Fix the CHECK itself: install what it "
+                    "needs, or give the item a check that completes inside the deadline (split it, or "
+                    "point it at a smaller target). If only the operator can change the budget, say so "
+                    "and stop — AGENT_VERIFY_TIMEOUT is read by the host process, so exporting it from "
+                    "a tool does nothing."
                 )
             history = attempts.setdefault(item_id, [])
             signature = _verify_failure_signature(command, output)
@@ -649,7 +655,21 @@ def build_work_delta(
         # in_progress/waiting_user/ready -> open transition.
         status = str(raw.get("status") or (previous.status if previous is not None else "open"))
         if status not in _MODEL_WORK_STATUSES:
-            raise ValueError("the model cannot set delivered/verified or an unknown work status")
+            # One predicate covered four breaches (host-only delivered / verified / waiting_peer, and a
+            # plain typo) and echoed neither the item, the value, nor the legal set — the shape of the
+            # verify-contract bug. Separate the host-owned statuses from an unknown one: they need
+            # different responses.
+            host_owned = {"delivered": "the host sets it when the turn delivers a response",
+                          "verified": "the host sets it when your verify commands run green",
+                          "waiting_peer": "the host sets it when a turn parks on a peer"}
+            if status in host_owned:
+                raise ValueError(
+                    f"work item {item_id!r}: the model cannot set delivered/verified/waiting_peer — "
+                    f"{status!r} is HOST-OWNED, {host_owned[status]}. "
+                    f"Set 'ready' instead and let the host promote it")
+            raise ValueError(
+                f"work item {item_id!r}: unknown work status {status!r}; you may set "
+                f"{', '.join(sorted(_MODEL_WORK_STATUSES))}")
         add_dependencies = raw.get("add_dependencies") or []
         if not isinstance(add_dependencies, list) or any(
                 not isinstance(value, str) or not value.strip() for value in add_dependencies):
@@ -732,7 +752,22 @@ def build_work_delta(
             )
             continue
         if previous.root_id != root.id:
-            raise ValueError("update_work may update only child items of the current request")
+            # EVERY user message mints a fresh logical id (cli._mint_logical_turn_id) and therefore a
+            # fresh request root, so a plan made in one turn is under an older root by the next one.
+            # Ownership stays per-request on purpose — an item's source_refs and host-verify context
+            # belong to the request that authorized it — but the bare rule left the model with no legal
+            # forward move, so a routine multi-turn checklist died on a ✗ it could not act on. Name the
+            # two moves that ARE legal; the item itself is untouched and still visible.
+            raise ValueError(
+                f"work item {item_id!r} belongs to an EARLIER request, and items are owned by the "
+                "request that created them. Nothing is lost — the item is still on record. Two legal "
+                "moves, and the SECOND is usually right: (1) create a fresh item under the current "
+                "request with the same description and re-state its verify/dependencies — a new item "
+                "starts unverified, so evidence already earned does not carry; or (2) in the SAME "
+                "batch, supersede the earlier ROOT (superseded_by = the current root) and re-create "
+                "what still matters — that retires the old request instead of leaving it unfinished "
+                "forever. Do not retry this update — it cannot succeed."
+            )
         extra_evidence = ()
         extra_outputs = ()
         if status == "ready" and item_id in verified_ok:

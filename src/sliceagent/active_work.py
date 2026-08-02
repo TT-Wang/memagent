@@ -355,9 +355,28 @@ class WorkItem:
             raise GraphValidationError(f"unsupported work status: {self.status!r}")
         if self.kind not in WORK_KINDS:
             raise GraphValidationError(f"unsupported work kind: {self.kind!r}")
-        if not isinstance(self.verify, tuple) or len(self.verify) > 8 or any(
-                not isinstance(cmd, str) or not cmd.strip() or len(cmd) > 500 for cmd in self.verify):
-            raise GraphValidationError("work_item.verify must be up to 8 non-empty commands (<=500 chars each)")
+        # One predicate used to cover four distinct breaches and reported only the RULE, so a model
+        # that sent nine commands, a blank one, or an over-long one got the same sentence and had to
+        # guess which. Name the breach and the offending entry — a rejection the caller cannot act on
+        # is a dead end, and it retries blind.
+        if not isinstance(self.verify, tuple):
+            raise GraphValidationError(
+                f"work_item.verify must be a list of shell commands, got {type(self.verify).__name__}")
+        if len(self.verify) > 8:
+            raise GraphValidationError(
+                f"work_item.verify has {len(self.verify)} commands; the limit is 8 — keep the checks "
+                "that actually gate this item, or split it into separate items")
+        for index, cmd in enumerate(self.verify):
+            if not isinstance(cmd, str):
+                raise GraphValidationError(
+                    f"work_item.verify[{index}] must be a string, got {type(cmd).__name__}")
+            if not cmd.strip():
+                raise GraphValidationError(
+                    f"work_item.verify[{index}] is empty — drop the entry rather than sending a blank")
+            if len(cmd) > 500:
+                raise GraphValidationError(
+                    f"work_item.verify[{index}] is {len(cmd)} chars; the limit is 500 — put a long "
+                    f"check in a script and verify that instead. It began: {cmd[:80]!r}")
         if not isinstance(self.done_when, str) or len(self.done_when) > 500:
             raise GraphValidationError("work_item.done_when must be a string of at most 500 chars")
         if self.peer_wait is not None and not isinstance(self.peer_wait, PeerWait):
@@ -647,8 +666,13 @@ class WorkGraph:
                 if dependency == item.id:
                     raise GraphValidationError(f"work item {item.id!r} depends on itself")
                 if by_id[dependency].root_id != item.root_id:
+                    # Unfixed sibling of the per-turn root-minting dead end: every user message mints
+                    # a new root, so depending on last turn's item is a natural move that fails. Name
+                    # WHICH dependency (add_dependencies is a list) and the legal way forward.
                     raise GraphValidationError(
-                        f"work item {item.id!r} cannot depend across request roots",
+                        f"work item {item.id!r} cannot depend across request roots: {dependency!r} belongs "
+                        "to an earlier request. Re-create the prerequisite under the current request "
+                        "and depend on that, or drop the dependency. Retrying this edge cannot succeed",
                     )
             if item.status == "superseded" and item.superseded_by not in by_id:
                 raise GraphValidationError(
@@ -791,8 +815,24 @@ class WorkGraph:
         if current.workspace_epoch != previous.workspace_epoch:
             raise GraphValidationError(f"work item {current.id!r} cannot change its admission workspace epoch")
         if current.status not in _ALLOWED_TRANSITIONS[previous.status]:
+            # The legal set is one lookup away and was withheld, so the caller guessed and burned a
+            # call per guess. From a terminal state NOTHING is legal — say that outright instead of
+            # offering a set the caller will read as a menu.
+            # Derive from BOTH gates. _ALLOWED_TRANSITIONS is the GRAPH's table; the model is
+            # additionally barred from the host-owned statuses, so advertising the graph set alone
+            # offered delivered/verified/waiting_peer — 4 of 7 suggested moves refused on the very
+            # next call. Advertising a move that is then refused is worse than naming none: it is the
+            # advice-to-nowhere and retry-bait this message exists to prevent.
+            from .tools import _MODEL_WORK_STATUSES as _settable
+            legal = tuple(s for s in sorted(_ALLOWED_TRANSITIONS[previous.status])
+                          if s != previous.status and s in _settable)
+            hint = (f"; from {previous.status!r} the legal next statuses are: {', '.join(legal)}"
+                    if legal else
+                    f"; {previous.status!r} is TERMINAL — no status change is possible, "
+                    "create a new item instead")
             raise GraphValidationError(
-                f"invalid work status transition for {current.id!r}: {previous.status} -> {current.status}",
+                f"invalid work status transition for {current.id!r}: "
+                f"{previous.status} -> {current.status}{hint}",
             )
         if not set(previous.source_refs).issubset(current.source_refs):
             raise GraphValidationError(f"work item {current.id!r} cannot erase source provenance")
