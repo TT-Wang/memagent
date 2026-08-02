@@ -314,7 +314,7 @@ class SliceReducer:
     def _capture_child_artifact(
         call: dict[str, Any], name: str, effects: tuple[Any, ...],
     ) -> None:
-        from sliceagent.fan_in import (
+        from .fan_in import (
             normalize_evidence_account,
             normalize_evidence_status,
         )

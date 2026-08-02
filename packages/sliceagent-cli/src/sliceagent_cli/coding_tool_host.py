@@ -439,7 +439,7 @@ class CodingToolHost:
         if status is not ToolStatus.SUCCEEDED:
             return ()
         import hashlib
-        from sliceagent.fan_in import artifact_read_coverage, artifact_view_kind, canonical_artifact_id
+        from sliceagent_core.fan_in import artifact_read_coverage, artifact_view_kind, canonical_artifact_id
 
         ref = self.resource_ref(str(invocation.args.get("path") or ""))
         payload = {"resource_kind": ref.kind.value, "handle": ref.handle}
