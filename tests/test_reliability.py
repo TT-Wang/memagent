@@ -39,6 +39,7 @@ def preflight_hook_failure_degrades_to_proceed():
 @check
 def composite_preflight_failure_does_not_skip_later_catastrophic_floor():
     from sliceagent.hooks import CatastrophicSafeguardHook, CompositeHooks, Hooks
+    from sliceagent.safeguards import CatastrophicSafeguard
 
     class _None(Hooks):
         def preflight_tool(self, _name, _args):
@@ -50,7 +51,7 @@ def composite_preflight_failure_does_not_skip_later_catastrophic_floor():
 
     for first in (_None(), _Boom()):
         result = _safe_preflight(
-            CompositeHooks(first, CatastrophicSafeguardHook()),
+            CompositeHooks(first, CatastrophicSafeguardHook(CatastrophicSafeguard())),
             "run_command", {"command": "rm -rf /"},
         )
         assert result.stop and result.kind == "catastrophic"

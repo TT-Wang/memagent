@@ -122,6 +122,12 @@ class ToolHost(Protocol):
 
 
 @runtime_checkable
+class Safeguard(Protocol):
+    """Host-supplied narrow preflight check for catastrophic tool invocations."""
+    def reason(self, name: str, args: dict | None) -> str | None: ...
+
+
+@runtime_checkable
 class Retriever(Protocol):
     """Code discovery for the RELATED CODE tier (repo search). (build: ripgrep + tree-sitter)"""
     def retrieve(self, query: str, k: int = 6) -> list[Snippet]: ...

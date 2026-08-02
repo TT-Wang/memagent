@@ -36,6 +36,7 @@ from sliceagent.hooks import CatastrophicSafeguardHook      # noqa: E402
 from sliceagent.llm import OpenAILLM                         # noqa: E402
 from sliceagent.loop import run_turn                         # noqa: E402
 from sliceagent.memory import NullMemory                     # noqa: E402
+from sliceagent.safeguards import CatastrophicSafeguard      # noqa: E402
 from sliceagent.session import Session, route               # noqa: E402
 from sliceagent.pfc import record_user, slice_sink  # noqa: E402
 from sliceagent.seed import make_build_slice  # noqa: E402
@@ -200,7 +201,7 @@ def run_conversation(persona, root, max_turns=MAX_TURNS):
     session = Session(NullMemory())
     tools = LocalToolHost(root=root)
     retriever = make_code_index(root)
-    hooks = CatastrophicSafeguardHook()
+    hooks = CatastrophicSafeguardHook(CatastrophicSafeguard())
 
     truth = _ground_truth(root)
     transcript, findings = [], []

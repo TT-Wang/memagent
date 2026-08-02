@@ -38,6 +38,7 @@ from .execution import ToolStatus
 from .mentions import workspace_mentions
 from .receipts import (compact_receipt_projection, receipt_completion_label,
                        receipt_summary_parts)
+from .safeguards import CatastrophicSafeguard
 from .slash import SUPPORTED_SLASH_COMMANDS, slash_help_line
 from .tui_projection import normalized_tool_status, safe_terminal_text
 from .workspace_handoff import WorkspaceScheduleDecision
@@ -2165,7 +2166,7 @@ def main() -> None:
                 hook_session.active().task.deliverable_requirement,
                 str(getattr(hook_session.logical_turn, "id", "") or ""),
             )),
-            CatastrophicSafeguardHook(),
+            CatastrophicSafeguardHook(CatastrophicSafeguard()),
         ]
         if hook_cfg.verify_cmd:
             oracle = CommandOracle(hook_cfg.verify_cmd, root=hook_root)

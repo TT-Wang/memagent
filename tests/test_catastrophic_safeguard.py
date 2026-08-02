@@ -10,7 +10,8 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from sliceagent.hooks import CatastrophicSafeguardHook  # noqa: E402
-from sliceagent.safeguards import catastrophic_reason  # noqa: E402
+from sliceagent.safeguards import CatastrophicSafeguard, catastrophic_reason  # noqa: E402
+from sliceagent_core.interfaces import Safeguard  # noqa: E402
 
 
 CHECKS = []
@@ -262,7 +263,9 @@ def straight_line_execute_code_shell_calls_share_the_floor():
 
 @check
 def hook_uses_an_explicit_catastrophic_kind_and_plain_safety_message():
-    hook = CatastrophicSafeguardHook()
+    safeguard = CatastrophicSafeguard()
+    assert isinstance(safeguard, Safeguard)
+    hook = CatastrophicSafeguardHook(safeguard)
     allowed = hook.preflight_tool("run_command", {"command": "find . -type f"})
     stopped = hook.preflight_tool("run_command", {"command": "sudo shutdown now"})
     assert not allowed.stop

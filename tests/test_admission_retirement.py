@@ -15,6 +15,7 @@ from sliceagent.hooks import CatastrophicSafeguardHook, Hooks, ToolPreflight  # 
 from sliceagent.loop import run_tool_batch, run_turn  # noqa: E402
 from sliceagent.pfc import Slice, slice_sink  # noqa: E402
 from sliceagent.registry import ToolEntry, ToolRegistry  # noqa: E402
+from sliceagent.safeguards import CatastrophicSafeguard  # noqa: E402
 
 
 CHECKS = []
@@ -82,7 +83,7 @@ def normal_shell_work_runs_without_a_permission_or_reconciliation_gate():
         [_call("run_command", command="find . -type f")],
         host,
         lambda _event: None,
-        CatastrophicSafeguardHook(),
+        CatastrophicSafeguardHook(CatastrophicSafeguard()),
     )
     assert host.ran == ["run_command"]
     assert rows[0]["status"] == ToolStatus.SUCCEEDED.value

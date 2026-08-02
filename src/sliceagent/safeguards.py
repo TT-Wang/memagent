@@ -868,4 +868,11 @@ def catastrophic_reason(name: str, args: dict | None) -> str | None:
     return _body_reason(body)
 
 
-__all__ = ["SHELL_TOOLS", "catastrophic_reason"]
+class CatastrophicSafeguard:
+    """CLI implementation of the core safeguard contract."""
+
+    def reason(self, name: str, args: dict | None) -> str | None:
+        return catastrophic_reason(name, args)
+
+
+__all__ = ["SHELL_TOOLS", "CatastrophicSafeguard", "catastrophic_reason"]

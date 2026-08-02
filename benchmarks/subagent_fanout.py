@@ -441,6 +441,7 @@ def run_sliceagent(repo: str) -> list[dict]:
     from sliceagent.code_index import make_code_index
     from sliceagent.events import ToolResult, make_dispatcher
     from sliceagent.hooks import BudgetHook, CatastrophicSafeguardHook, CompositeHooks
+    from sliceagent.safeguards import CatastrophicSafeguard
     from sliceagent.llm import OpenAILLM
     from sliceagent.session import Session, make_topic_tools
     from sliceagent.memory import make_memory
@@ -478,7 +479,10 @@ def run_sliceagent(repo: str) -> list[dict]:
         if isinstance(e, ToolResult) and getattr(e, "name", "") in ("spawn_agent", "spawn_explore", "spawn_subagent"):
             spawn_ctr["n"] += 1
     dispatch = make_dispatcher(slice_sink(session), episodic, cap, spawn_count)
-    hooks = CompositeHooks(CatastrophicSafeguardHook(), BudgetHook(4_000_000))
+    hooks = CompositeHooks(
+        CatastrophicSafeguardHook(CatastrophicSafeguard()),
+        BudgetHook(4_000_000),
+    )
 
     sim = OpenAILLM(model=MODEL, timeout=90.0) if ARCH_MODE == "humansim" else None   # the human simulator (uncounted)
     if sim is not None:

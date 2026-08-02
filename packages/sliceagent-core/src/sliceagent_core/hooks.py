@@ -16,7 +16,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from sliceagent.safeguards import catastrophic_reason
+from .interfaces import Safeguard
 
 
 @dataclass(frozen=True)
@@ -369,8 +369,11 @@ class CatastrophicSafeguardHook(Hooks):
     permission mode, confirmation system, or general risk classifier.
     """
 
+    def __init__(self, safeguard: Safeguard):
+        self.safeguard = safeguard
+
     def preflight_tool(self, name, args):
-        reason = catastrophic_reason(name, args)
+        reason = self.safeguard.reason(name, args)
         if reason is None:
             return PROCEED
         return ToolPreflight(
