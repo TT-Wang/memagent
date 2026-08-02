@@ -23,7 +23,7 @@ import time
 from collections import Counter, deque
 from collections.abc import Mapping
 
-from sliceagent.access import AllAccess, FileAccess, ReadAllAccess
+from .access import AllAccess, FileAccess, ReadAllAccess
 from .context_overflow import ContextOverflow
 from .context import ContextUnfitError, SeedPlan
 from .events import (
@@ -51,7 +51,7 @@ from .events import (
 )
 from .interfaces import PeerMessage, PeerParkControl
 from .tool_identity import DEDUP_SAFE_TOOL_NAMES, canonical_tool_args
-from sliceagent.guidance import BUDGET_EXHAUSTED
+from .guidance import BUDGET_EXHAUSTED
 from .hooks import Hooks, ToolPreflight
 from .errors import IndeterminateModelCallError, RetryCancelledError
 from .model_runner import complete_model_call
