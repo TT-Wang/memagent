@@ -59,6 +59,7 @@ evals/*
 !evals/context_contract_eval.py
 !evals/self_inspection_tool_eval.py
 !evals/selfnarrative_ab.py
+!evals/slipstream_replay.py
 !evals/usersim.py
 !evals/usersim_pty.py
 prototype/
