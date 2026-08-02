@@ -20,6 +20,7 @@ classifiers = [
 # Pi-style supply-chain policy: every DIRECT dependency is EXACT-pinned to the uv.lock tree
 # (dependency changes are reviewed code changes, not ambient resolution). Guard: scripts/check_pinned_deps.py.
 dependencies = [
+    "sliceagent-core",
     "openai==2.45.0",
     "httpx==0.28.1",
     "mcp==1.28.1",   # official MCP SDK — connect external MCP servers as tools (Step 3.3)
@@ -98,3 +99,9 @@ ignore = ["E402", "E701", "E702", "E731"]
 # Local eval caches contain copied third-party task suites. Product pytest collection is intentionally scoped
 # to SliceAgent's own tests; benchmark runners execute their fixture tests inside isolated task environments.
 testpaths = ["tests"]
+
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[tool.uv.sources]
+sliceagent-core = { workspace = true }

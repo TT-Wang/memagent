@@ -10,6 +10,13 @@ resolution-markers = [
     "python_full_version < '3.12' and sys_platform != 'win32'",
 ]
 
+[manifest]
+members = [
+    "sliceagent",
+    "sliceagent-cli",
+    "sliceagent-core",
+]
+
 [[package]]
 name = "annotated-types"
 version = "0.7.0"
@@ -1287,6 +1294,7 @@ dependencies = [
     { name = "httpx" },
     { name = "mcp" },
     { name = "openai" },
+    { name = "sliceagent-core" },
 ]
 
 [package.optional-dependencies]
@@ -1319,10 +1327,76 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = "==9.1.1" },
     { name = "rich", marker = "extra == 'tui'", specifier = "==15.0.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = "==0.15.21" },
+    { name = "sliceagent-core", editable = "packages/sliceagent-core" },
     { name = "tree-sitter", marker = "extra == 'treesitter'", specifier = "==0.26.0" },
     { name = "tree-sitter-python", marker = "extra == 'treesitter'", specifier = "==0.25.0" },
 ]
 provides-extras = ["dev", "memory", "treesitter", "tui"]
+
+[[package]]
+name = "sliceagent-cli"
+source = { editable = "packages/sliceagent-cli" }
+dependencies = [
+    { name = "mcp" },
+    { name = "sliceagent-core" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "ruff" },
+]
+memory = [
+    { name = "memem" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+]
+treesitter = [
+    { name = "tree-sitter" },
+    { name = "tree-sitter-python" },
+]
+tui = [
+    { name = "prompt-toolkit" },
+    { name = "rich" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "mcp", specifier = "==1.28.1" },
+    { name = "memem", marker = "extra == 'memory'", specifier = "==2.9.7" },
+    { name = "numpy", marker = "extra == 'memory'", specifier = ">=1.24" },
+    { name = "prompt-toolkit", marker = "extra == 'tui'", specifier = "==3.0.52" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = "==9.1.1" },
+    { name = "rich", marker = "extra == 'tui'", specifier = "==15.0.0" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = "==0.15.21" },
+    { name = "sliceagent-core", editable = "packages/sliceagent-core" },
+    { name = "tree-sitter", marker = "extra == 'treesitter'", specifier = "==0.26.0" },
+    { name = "tree-sitter-python", marker = "extra == 'treesitter'", specifier = "==0.25.0" },
+]
+provides-extras = ["dev", "memory", "treesitter", "tui"]
+
+[[package]]
+name = "sliceagent-core"
+source = { editable = "packages/sliceagent-core" }
+dependencies = [
+    { name = "httpx" },
+    { name = "openai" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = "==0.28.1" },
+    { name = "openai", specifier = "==2.45.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = "==9.1.1" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = "==0.15.21" },
+]
+provides-extras = ["dev"]
 
 [[package]]
 name = "sniffio"

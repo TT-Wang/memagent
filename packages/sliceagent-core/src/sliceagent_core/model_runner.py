@@ -1,0 +1,61 @@
+"""Single provider-call seam for capacity preflight and retry policy."""
+from __future__ import annotations
+
+from .errors import with_retry
+from .execution import preflight_model_call
+
+
+def complete_model_call(
+    llm,
+    messages: list[dict],
+    schemas: list[dict],
+    *,
+    dispatch=None,
+    retry: bool = True,
+    allow_unknown: bool | None = None,
+    on_attempt=None,
+    should_cancel=None,
+    transport_activity=None,
+):
+    """Preflight and execute one model call through the shared retry boundary.
+
+    Usage/budget ownership stays with the calling lifecycle because routing, onboarding, background
+    consolidation, and an active turn have different accounting scopes. None bypasses physical validation.
+    ``on_attempt`` is the required pre-request publication seam: if it cannot durably publish the prepared
+    call, its failure propagates and the provider request is not opened.
+    """
+    if allow_unknown is None:
+        allow_unknown = not bool(getattr(llm, "require_known_context", False))
+
+    physical_attempt = 0
+
+    def invoke():
+        nonlocal physical_attempt
+        report = preflight_model_call(llm, messages, schemas, allow_unknown=allow_unknown)
+        physical_attempt += 1
+        if on_attempt is not None:
+            # This is lifecycle publication, not optional diagnostics. Production uses it to dispatch
+            # ModelCallPrepared through the required journal/reducer sinks before any provider I/O.
+            on_attempt(physical_attempt, messages, report)
+        # Production adapters may expose the richer per-request control seam.  Feature detection keeps the
+        # public two-argument LLMClient protocol (and every test/third-party adapter implementing it) intact;
+        # cancellation and transport activity are never smuggled into arbitrary ``complete`` callables.
+        controlled = getattr(llm, "complete_with_control", None)
+        if callable(controlled):
+            return controlled(
+                messages,
+                schemas,
+                should_cancel=should_cancel,
+                transport_activity=transport_activity,
+            )
+        return llm.complete(messages, schemas)
+
+    if not retry:
+        return invoke()
+    return with_retry(
+        invoke, is_retryable=getattr(llm, "is_retryable", None), dispatch=dispatch,
+        should_cancel=should_cancel,
+    )
+
+
+__all__ = ["complete_model_call"]

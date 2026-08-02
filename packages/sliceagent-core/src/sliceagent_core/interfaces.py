@@ -1,0 +1,431 @@
+"""The contracts the core depends on — never the implementations.
+
+The moat (loop + tiers) talks only to these. Everything commodity (LLM I/O,
+retrieval, tool execution/sandbox, verification) lives behind them and is swappable.
+Verification, budgets, and the catastrophic-command floor are supplied via hooks.py.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+import unicodedata as _unicodedata
+from typing import Protocol, runtime_checkable
+
+
+@dataclass
+class ToolCall:
+    id: str
+    name: str
+    args: dict
+
+
+@dataclass
+class AssistantMessage:
+    content: str | None
+    tool_calls: list[ToolCall] = field(default_factory=list)
+    usage: dict | None = None            # {"prompt_tokens": int, "completion_tokens": int}
+    finish_reason: str | None = None     # provider's raw finish reason → normalized by the loop
+    # Provider-private reasoning bytes required to continue some tool-call protocols (not presentation text).
+    # DeepSeek V4 thinking mode returns this alongside content and rejects the next tool-result request if the
+    # preceding assistant message omits it. Kept last so every existing positional construction stays valid.
+    reasoning_content: str | None = None
+
+
+@dataclass
+class Snippet:
+    path: str
+    text: str
+    score: float = 0.0
+
+
+@dataclass
+class PageRef:
+    """A bounded reference to one PAGE the PageTable can surface into the slice — the unified shape
+    every read/retrieval backend (code map, project-notes, cross-session episodes) returns from
+    PageTable.lookup(). Carries RAW text (`preview`); the renderer fences it (wrap_untrusted) so
+    injection-fencing stays at ONE layer. `handle` locates the page (a repo-map marker, a subtree
+    path, a session·turn locator); `untrusted` flags re-injected external content (default True)."""
+    handle: str
+    kind: str
+    preview: str
+    score: float = 0.0
+    untrusted: bool = True
+
+
+@dataclass
+class TaskRef:
+    """A bounded index row for the OTHER OPEN THREADS tier (Step 3)."""
+    task_id: str
+    title: str
+    status: str            # active | parked | done | abandoned
+    updated: str = ""
+
+
+@dataclass
+class TaskState:
+    """Resumable, distilled state for one task = the serializable Slice fields. Stores REFS
+    (file paths + anchors), never file contents — ground truth is re-read from disk on resume.
+    Transient tiers (recent, action_log, active_skills) are intentionally NOT serialized."""
+    task_id: str
+    schema_version: int = 2
+    session_id: str = ""
+    title: str = ""
+    status: str = "active"
+    goal: str = ""
+    goal_source: str = ""
+    objective_status: str = "active"
+    findings: list[str] = field(default_factory=list)
+    finding_source: dict[str, str] = field(default_factory=dict)  # finding -> provenance tier (carried; else resume upgrades 'claim'→'tool-note')
+    # v2 typed intent. `requirements` remains a derived v1 compatibility field for old checkpoint readers;
+    # when intent_entries is present it is authoritative and taskstate ignores requirements on restore.
+    current_request: str = ""
+    # Workspace frame that authored the latest local checkpoint. Restoring it prevents old-epoch resources
+    # from becoming current merely because a fresh Session counter starts at zero.
+    workspace_epoch: int = 0
+    # Source-linked Active Work graph records.  This is the durable semantic frontier, not a
+    # transcript; exact user bytes remain owned by the application event ledger/artifact store.
+    # Absence is the backwards-compatible representation for pre-Active-Work checkpoints.
+    active_work: list[dict] = field(default_factory=list)
+    intent_entries: list[dict] = field(default_factory=list)
+    intent_next_id: int = 1
+    requirements: list[dict] = field(default_factory=list)
+    plan: list[dict] = field(default_factory=list)          # PLAN / TodoWrite steps + status (carried)
+    progress_signals: list[dict] = field(default_factory=list)  # small task-scoped semantic ring
+    deliverable_requirement: dict | None = None                 # typed L1 output envelope for one logical request
+    open_report: str = ""                                   # OPEN USER REPORT blocker (carried; the "it's broken" push-back must survive resume)
+    reconciliation_required: str = ""                       # advisory evidence: an earlier effect is still unknown
+    reconciliation_targets: list[str] = field(default_factory=list)
+    world: dict = field(default_factory=dict)               # agent WORLD MODEL (carried; was dropped on resume)
+    active_files: list[str] = field(default_factory=list)
+    edited_files: list[str] = field(default_factory=list)   # list on the wire; a set in the Slice
+    edit_anchor: dict[str, str] = field(default_factory=dict)
+    last_error: str = ""
+    since_edit: int = 0
+    links: list[str] = field(default_factory=list)          # task-graph edges (Step 3)
+    tags: str = ""                                          # comma-joined (matches remember()/_tags)
+    resolution: str = ""
+
+
+@runtime_checkable
+class LLMClient(Protocol):
+    """Provider-agnostic completion + tool-calling. (implemented over an official LLM SDK)
+    May optionally expose `is_retryable(error) -> bool` for the retry policy."""
+    def complete(self, messages: list[dict], tools: list[dict]) -> AssistantMessage: ...
+
+
+@runtime_checkable
+class ToolHost(Protocol):
+    """Executes tools, ideally behind a sandbox. (backed by a container sandbox + MCP tools)"""
+    def schemas(self) -> list[dict]: ...
+    def run(self, name: str, args: dict) -> str: ...
+    def read_text(self, path: str) -> str: ...   # reconstruct the artifacts tier (raises if missing)
+    def accesses(self, name: str, args: dict) -> list: ...  # resource accesses for the scheduler
+
+
+@runtime_checkable
+class Retriever(Protocol):
+    """Code discovery for the RELATED CODE tier (repo search). (build: ripgrep + tree-sitter)"""
+    def retrieve(self, query: str, k: int = 6) -> list[Snippet]: ...
+
+
+@runtime_checkable
+class EvidenceArchive(Protocol):
+    """Mandatory L0 episode/evidence compatibility surface."""
+    is_durable: bool
+    def append_episode(self, session_id: str, task_id: str, turn: int, record: dict) -> None: ...
+    def read_episodes(self, session_id: str, *, limit: int | None = None) -> list[dict]: ...
+    def search_episodes(self, query: str, *, limit: int = 5, exclude_session: str | None = None,
+                        only_session: str | None = None) -> list[dict]: ...
+
+
+@runtime_checkable
+class WorkRepository(Protocol):
+    """Mandatory L1 checkpoint compatibility surface while canonical replay lands."""
+    def checkpoint_task(self, task: TaskState) -> None: ...
+    def load_task(self, task_id: str) -> TaskState | None: ...
+    def list_session_tasks(self, session_id: str) -> list[TaskRef]: ...
+
+
+@runtime_checkable
+class KnowledgeStore(Protocol):
+    """L2 retrieval/ingestion facade; canonical typed records live in KnowledgeRepository."""
+    def recall(self, query: str, k: int = 6, paths: list[str] | None = None) -> list[Snippet]: ...
+    def remember(self, content: str, *, title: str = "", scope: str = "default", tags: str = "",
+                 paths: list[str] | None = None) -> None: ...
+    def mark_used(self, memory_id: str) -> None: ...
+
+
+@runtime_checkable
+class Memory(Protocol):
+    """Legacy composite compatibility facade over evidence, work, and knowledge.
+
+    Distinct from Retriever (memem indexes a curated vault, NOT source code). `is_durable` is the
+    structural no-op marker: NullMemory sets it False so hosts skip cache/checkpoint wiring (keeps
+    evals deterministic). Production uses narrower contracts even while embedding hosts migrate.
+    NOTE: @runtime_checkable isinstance() verifies method-NAME presence only — not signatures or
+    return types; behavioral fidelity is enforced by the round-trip tests."""
+    is_durable: bool
+    # --- L2 knowledge compatibility methods (native typed records own production authority) ---
+    def recall(self, query: str, k: int = 6, paths: list[str] | None = None) -> list[Snippet]: ...
+    def remember(self, content: str, *, title: str = "", scope: str = "default", tags: str = "",
+                 paths: list[str] | None = None) -> None: ...
+    # --- legacy L0 episodic compatibility mirror (canonical L0 is events + artifact seals) ---
+    def append_episode(self, session_id: str, task_id: str, turn: int, record: dict) -> None: ...
+    # read side: the model's on-demand valve into the cold cache (recall_history tool). Returns
+    # raw line dicts ({v,session_id,task_id,turn,ts,record}); the host renders/bounds them.
+    def read_episodes(self, session_id: str, *, limit: int | None = None) -> list[dict]: ...
+    # cross-session FTS5 discovery over the rebuildable legacy episode sidecar.
+    # Returns bounded hit dicts; [] when the index is unavailable. Single-session reads use
+    # read_episodes; this is the ACROSS-sessions counterpart.
+    def search_episodes(self, query: str, *, limit: int = 5, exclude_session: str | None = None,
+                        only_session: str | None = None) -> list[dict]: ...
+    # --- task state / resume ---
+    def checkpoint_task(self, task: TaskState) -> None: ...
+    def load_task(self, task_id: str) -> TaskState | None: ...
+    def list_session_tasks(self, session_id: str) -> list[TaskRef]: ...
+    # --- consolidation / retrieval-feedback (declared now; implemented in later steps) ---
+    def mark_used(self, memory_id: str) -> None: ...
+    # llm = the abstract LLMClient contract (llm-agnostic — never a concrete provider type); returns a
+    # stats dict {lessons, skills, skills_rejected, errors}; "skills" counts INACTIVE auto-derived candidates
+    # for wire compatibility. Foreground /learn is the only writer that directly activates a skill.
+    def consolidate(self, session_id: str, *, llm=None, mode: str = "deterministic") -> dict: ...
+    # Release native episode/knowledge indexes. Implementations must make repeated shutdown paths safe.
+    def close(self) -> None: ...
+
+
+@runtime_checkable
+class Oracle(Protocol):
+    """Ground-truth verification independent of retrieval. (backed by the project's test/lint runners)"""
+    def verify(self) -> tuple[bool, str]: ...
+
+
+def _validate_peer_identity(value: str, field_name: str) -> None:
+    """Peer correlation/identity must be a non-empty, single-line, bounded token.
+
+    Rejects EVERY control character (Unicode category C*) and line/paragraph separator
+    (U+2028/U+2029) rather than a specific newline byte, so no one-character variant
+    (CR, LF, NEL, LS, PS, NUL, ...) can reopen the single-line durable-boundary invariant.
+    """
+    if not isinstance(value, str) or not value.strip() or len(value) > 200:
+        raise ValueError(f"{field_name} must be a non-empty string (<=200 chars)")
+    if any(_unicodedata.category(ch)[0] == "C" or ch in "\u2028\u2029" for ch in value):
+        raise ValueError(f"{field_name} must be single-line (no control or separator characters)")
+
+
+@dataclass(frozen=True)
+class PeerWait:
+    """A durable park on a peer's correlated response (the horizontal analogue of
+    waiting_user). Carried as typed Active-Work state, never scraped from prose.
+
+    ``correlation_id`` binds the park to exactly one expected peer result; only a
+    matching ``PeerResult.correlation_id`` may resume the request. ``deadline_s`` is
+    an optional wall bound after which the wait may be reaped as timed-out.
+    """
+
+    correlation_id: str
+    peer_id: str = ""
+    deadline_s: float | None = None
+
+    def __post_init__(self) -> None:
+        _validate_peer_identity(self.correlation_id, "PeerWait.correlation_id")
+        _validate_peer_identity(self.peer_id, "PeerWait.peer_id")
+        if self.deadline_s is not None:
+            import math as _math
+            if not isinstance(self.deadline_s, (int, float)) or isinstance(self.deadline_s, bool):
+                raise ValueError("PeerWait.deadline_s must be a number or None")
+            try:
+                _d = float(self.deadline_s)
+            except (OverflowError, ValueError):
+                raise ValueError("PeerWait.deadline_s is out of representable range")
+            # Bounded so a hostile durable record cannot smuggle a non-finite/absurd value past
+            # recovery; ~317 years of seconds is far beyond any legitimate collaboration deadline.
+            if not _math.isfinite(_d) or _d < 0 or _d > 1e10:
+                raise ValueError("PeerWait.deadline_s must be finite, non-negative, and bounded")
+
+
+@dataclass(frozen=True)
+class PeerResult:
+    """A correlated reply from a peer that may resume a ``PeerWait``-parked request.
+
+    Resumption is gated on ``correlation_id`` matching the park exactly; a mismatch
+    must never silently resume unrelated work.
+    """
+
+    correlation_id: str
+    peer_id: str = ""
+    status: str = "ok"
+    report: str = ""
+
+    def __post_init__(self) -> None:
+        _validate_peer_identity(self.correlation_id, "PeerResult.correlation_id")
+        _validate_peer_identity(self.peer_id, "PeerResult.peer_id")
+
+
+@dataclass(frozen=True)
+class PeerParkControl:
+    """A host tool's request to END THIS TURN parked on a peer (task #101, C1 host).
+
+    This is the typed control carrier the kernel recognises as turn-ending. It is NOT an
+    ordinary tool result appended to the trajectory: a park suspends the turn, so the loop
+    must treat it as a terminal control signal rather than data the model reasons on.
+
+    The kernel gains no new verb — a HOST-layer tool (``ask_collaborator``) mints the park —
+    and the kernel never infers a park from prose. ``peer_wait`` carries the host-derived
+    correlation/peer/deadline; the host is responsible for minting those, never the model.
+
+    MVP scope: ``peer_wait.deadline_s`` must be None. A finite deadline requires a platform
+    capability (lossless server event time plus a persistent server-side wake) that the
+    current Raft surface does not expose, so a bounded park is refused at the boundary rather
+    than accepted and silently unenforceable.
+    """
+
+    peer_wait: "PeerWait"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.peer_wait, PeerWait):
+            raise ValueError("PeerParkControl.peer_wait must be a typed PeerWait")
+        if self.peer_wait.deadline_s is not None:
+            raise ValueError(
+                "PeerParkControl: finite deadlines are not supported yet — a bounded park "
+                "needs lossless server event time and a persistent server-side wake, so it is "
+                "refused here rather than accepted and left unenforceable"
+            )
+
+
+# The ONLY legal wake contracts a peer message may carry. Delivery and resumption are separate:
+# ``none`` is ordinary in-turn delivery (correlation optional — a correlated ``none`` is an
+# informational message about an existing review/delegation, still NOT a resume request);
+# ``resume_wait`` is the only value that expresses "this reply may resume a parked PeerWait", and
+# it is meaningless without a correlation to the park it answers. An unknown value is never a
+# silently-tolerated no-op — it fails closed so a forged/typo'd wake can't smuggle new semantics.
+_PEER_WAKE_CONTRACTS = frozenset({"none", "resume_wait"})
+
+# A peer message body may be multi-line prose, but it is bounded so a hostile/looping peer cannot
+# blow the slice budget with one steer. Distinct from the 200-char single-line identity bound.
+_PEER_CONTENT_MAX = 8000
+
+
+@dataclass(frozen=True)
+class PeerMessage:
+    """A typed message from a collaborating PEER, admitted into the running turn via the steer queue.
+
+    Unlike an end-user steer (``SteerDelivered``), a peer message carries a sender identity, an
+    optional correlation to a delegation/review, and a typed ``wake`` contract. The kernel admits it
+    as typed peer INPUT and renders it under a peer-vs-end-user authority envelope; it does NOT itself
+    resume parked work — ``wake="resume_wait"`` only marks the message as a resume-eligible reply for
+    a host/bridge to correlate against a ``PeerWait``. Fail-closed matrix (validated below):
+
+    - ``wake="none"``     → correlation may be empty OR non-empty (ordinary/informational delivery).
+    - ``wake="resume_wait"`` → correlation MUST be non-empty (a resume answers a specific park).
+    - unknown ``wake`` or any non-string typed field → rejected.
+    """
+
+    message_id: str
+    peer_id: str
+    content: str
+    correlation_id: str = ""
+    wake: str = "none"
+
+    def __post_init__(self) -> None:
+        # Identity fields are non-empty, single-line, bounded tokens (same durable-boundary discipline
+        # as PeerWait/PeerResult): reject every control char and line/paragraph separator.
+        _validate_peer_identity(self.message_id, "PeerMessage.message_id")
+        _validate_peer_identity(self.peer_id, "PeerMessage.peer_id")
+        # Content: any string, but bounded, and NON-EMPTY. Multi-line is allowed (it is data, not
+        # identity), but a whitespace-only/empty body carries no peer input and must not be admitted —
+        # it would spend a whole provider step delivering nothing.
+        if not isinstance(self.content, str):
+            raise ValueError("PeerMessage.content must be a string")
+        if not self.content.strip():
+            raise ValueError("PeerMessage.content must be a non-empty string")
+        if len(self.content) > _PEER_CONTENT_MAX:
+            raise ValueError(f"PeerMessage.content must be <= {_PEER_CONTENT_MAX} chars")
+        # Wake: type-check BEFORE membership so a falsy non-string (None/False/0) fails closed on type,
+        # never silently coerced to a legal contract.
+        if not isinstance(self.wake, str):
+            raise ValueError("PeerMessage.wake must be a string")
+        if self.wake not in _PEER_WAKE_CONTRACTS:
+            raise ValueError(
+                "PeerMessage.wake must be one of: " + ", ".join(sorted(_PEER_WAKE_CONTRACTS))
+            )
+        # Correlation: type-check BEFORE any identity work so a non-string fails closed on type rather
+        # than raising AttributeError or being coerced.
+        if not isinstance(self.correlation_id, str):
+            raise ValueError("PeerMessage.correlation_id must be a string")
+        # Paired-state invariant (one-way): resume_wait REQUIRES a correlation; the reverse is legal.
+        if self.wake == "resume_wait" and not self.correlation_id:
+            raise ValueError("PeerMessage.wake='resume_wait' requires a non-empty correlation_id")
+        # Optional correlation must be EXACTLY "" or a valid single-line identity token — a blank/
+        # whitespace/control variant (" ", "\t", " ") is NOT a legal empty and is rejected. Guard
+        # on the RAW value, not `.strip()`, so blank strings reach the identity validator (linglong).
+        if self.correlation_id:
+            _validate_peer_identity(self.correlation_id, "PeerMessage.correlation_id")
+
+
+@dataclass(frozen=True)
+class PeerDelegation:
+    """A horizontal delegation request to a peer, awaiting a correlated typed result.
+
+    The correlation/deadline analogue of a vertical scoped-child spawn: ``correlation_id``
+    binds exactly one expected ``PeerResult``; ``deadline_s`` bounds how long the result
+    stays acceptable. Unlike a scoped child (keyed by invocation identity), this is a
+    peer-to-peer request/result with its own reply correlation and expiry.
+    """
+
+    correlation_id: str
+    peer_id: str
+    task: str
+    deadline_s: float | None = None
+
+    def __post_init__(self) -> None:
+        _validate_peer_identity(self.correlation_id, "PeerDelegation.correlation_id")
+        _validate_peer_identity(self.peer_id, "PeerDelegation.peer_id")
+        if not isinstance(self.task, str) or not self.task.strip() or len(self.task) > 8000:
+            raise ValueError("PeerDelegation.task must be a non-empty string (<=8000 chars)")
+        if self.deadline_s is not None:
+            import math as _math
+            if not isinstance(self.deadline_s, (int, float)) or isinstance(self.deadline_s, bool):
+                raise ValueError("PeerDelegation.deadline_s must be a number or None")
+            try:
+                _d = float(self.deadline_s)
+            except (OverflowError, ValueError):
+                raise ValueError("PeerDelegation.deadline_s is out of representable range")
+            if not _math.isfinite(_d) or _d < 0 or _d > 1e10:
+                raise ValueError("PeerDelegation.deadline_s must be finite, non-negative, and bounded")
+
+
+def correlate_peer_result(
+    delegation: PeerDelegation,
+    result: PeerResult,
+    *,
+    elapsed_s: float = 0.0,
+) -> "PeerResult | None":
+    """Return the peer result iff it correlates to the delegation and is not expired.
+
+    Correlation requires BOTH a matching ``correlation_id`` AND the expected ``peer_id`` —
+    a matching correlation from a different peer never satisfies a delegation. A result
+    arriving after ``deadline_s`` (measured by ``elapsed_s``) is rejected: an expired
+    delegation cannot be resurrected. Returns ``None`` on any mismatch/expiry (never raises
+    for an ordinary non-match), so callers get an addressable typed outcome, not parsed prose.
+    """
+    if not isinstance(delegation, PeerDelegation) or not isinstance(result, PeerResult):
+        raise ValueError("correlate_peer_result requires typed PeerDelegation and PeerResult")
+    if not result.correlation_id or result.correlation_id != delegation.correlation_id:
+        return None
+    if result.peer_id != delegation.peer_id:
+        return None
+    # Normalize elapsed_s to the same finite/non-negative discipline as the deadline itself:
+    # a NaN elapsed silently passes any `>` comparison (NaN>x is False), and a negative elapsed is a
+    # result "from the future" — both would bypass the deadline authority boundary (the C1 lesson).
+    import math as _math
+    if delegation.deadline_s is not None:
+        if isinstance(elapsed_s, bool) or not isinstance(elapsed_s, (int, float)):
+            raise ValueError("correlate_peer_result elapsed_s must be a number")
+        try:
+            _e = float(elapsed_s)
+        except (OverflowError, ValueError):
+            return None
+        if not _math.isfinite(_e) or _e < 0.0:
+            return None
+        if _e > float(delegation.deadline_s):
+            return None
+    return result
