@@ -28,6 +28,7 @@ from sliceagent_core.platform_compat import (
     win_path_candidates,
 )
 from sliceagent_core.sensory_cortex import _is_ignored
+from sliceagent_core.tool_host import with_note
 
 from sliceagent.binsniff import looks_binary
 from sliceagent.fuzzy import fuzzy_find_unique
@@ -60,7 +61,6 @@ from .tools import (
     _strip_line_numbers,
     _unrunnable_verify_program,
     run_item_verification,
-    with_note,
 )
 
 _SECRET_DIRS = set(SENSITIVE_DIR_NAMES)

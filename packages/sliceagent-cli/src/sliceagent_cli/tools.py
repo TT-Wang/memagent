@@ -12,6 +12,11 @@ from sliceagent_core.active_work import (
     build_work_delta as build_work_delta,
 )
 from sliceagent_core.execution import ToolStatus
+from sliceagent_core.tool_host import (
+    NOTE_PROP as NOTE_PROP,
+    function_schema as _fn,
+    with_note as with_note,
+)
 
 # I1 PROVENANCE — host SELF-INFLICTED error sentinels. These name failures caused by the HOST's own
 # capability boundaries (file-tool confinement or OS denial), NOT by a real bug in the user's code. Lesson
@@ -162,46 +167,10 @@ def run(cmd, timeout=120):
     return _o if _p.returncode == 0 else f"[exit {_p.returncode}]\\n{_o}"
 '''
 
-def _fn(name: str, desc: str, props: dict, req: list[str]) -> dict:
-    return {
-        "type": "function",
-        "function": {"name": name, "description": desc,
-                     "parameters": {"type": "object", "properties": props, "required": req}},
-    }
-
-# The FINDINGS-capture seam. Every tool call carries a 'note' — the model's distilled conclusion
-# for this turn. It rides on the call the model is ALREADY making (no extra round-trip, unlike a
-# dedicated note tool) and is folded into the slice's FINDINGS tier. This is how a Markov/slice
-# agent gives a REASONING model its own prior conclusions back: the slice has no transcript, so
-# without it the model re-derives the situation each turn (big reasoning bursts → slow). Reasoning
-# models (e.g. deepseek) emit empty message content while tool-calling, so a tool ARG — not message
-# text — is the only reliable capture point.
-NOTE_PROP = {
-    "note": {
-        "type": "string",
-        "description": ("Optional — usually leave EMPTY. Fill ONLY when this call established a NEW durable FACT "
-                        "(root cause, a confirmed fix, a ruled-out hypothesis, or 'task done'), in <=15 words — a "
-                        "conclusion, NOT the action you're taking. Saved across turns so you never re-derive it; "
-                        "routine reads/edits need no note."),
-    }
-}
-
 _LEGACY_SEMANTIC_STATE_TOOLS = frozenset({
     "world_set", "world_clear", "require", "requirement_done", "supersede_requirement",
     "drop_requirement",
 })
-
-def with_note(schema: dict) -> dict:
-    """Inject the 'note' arg (first, OPTIONAL) into a tool schema — the FINDINGS capture seam.
-    Applied to EVERY tool the model sees, regardless of source (builtin/MCP/plugin/skill).
-    Optional, not required: the model writes it only when it has a genuine durable fact, so the
-    tier fills with conclusions — not the action-narration that forcing a note on every call
-    produces (and which can self-reinforce loops)."""
-    fn = schema.get("function") or {}
-    params = fn.get("parameters") or {"type": "object", "properties": {}, "required": []}
-    props = {**NOTE_PROP, **(params.get("properties") or {})}
-    req = [r for r in (params.get("required") or []) if r != "note"]
-    return {**schema, "function": {**fn, "parameters": {**params, "properties": props, "required": req}}}
 
 # _IGNORE_NAMES/_IGNORE_SUFFIX/_is_ignored (the ignore-aware directory-walk primitive shared with
 # repo_map) now live in sensory_cortex.py — "ignore-aware walking" is itself a SENSORY CORTEX concern
