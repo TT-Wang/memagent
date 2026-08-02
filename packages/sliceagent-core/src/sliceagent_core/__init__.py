@@ -17,4 +17,6 @@ __version__ = "0.1.0"
 #   from .loop import SliceAgent
 #   from .interfaces import LLMClient, ToolHost, Retriever, Memory, PersistenceStore, ContextPolicy, EventSink
 #   from .retriever import NullRetriever
-__all__ = ["__version__"]
+from .memory_null import NullMemory  # the Memory contract's deterministic default
+
+__all__ = ["__version__", "NullMemory"]
