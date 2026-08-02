@@ -21,6 +21,7 @@ from .context import (
     reserved_resource_ref,
 )
 from .receipts import receipt_summary_parts
+from .regions import RESERVE_PRIORITY, reserve_keep
 
 
 # These are host-owned live control surfaces, not optional topical furniture. Child outcomes are ordinary
@@ -237,12 +238,21 @@ def _adjacency_blocks(s, *, order: int = 10_000) -> tuple[ContextBlock, ...]:
     ]
     if not prior:
         return ()
-    chosen = prior[-_ADJACENCY_ROUNDS:]          # chronological: oldest first ... immediate prior last
+    # VERBATIM USER RESERVE (both lanes — the legacy conversation region mirrors this in
+    # build_context_blocks; a one-lane implementation would make behavior turn-type-dependent,
+    # the known path-asymmetry bug class): keep the newest exchanges up to the reserve budget
+    # (floor = the legacy _ADJACENCY_ROUNDS), and mark the within-budget ones RESERVE_PRIORITY
+    # so they degrade only as the true last resort — soft, so ContextUnfit semantics survive.
+    chosen = prior[-reserve_keep(prior, floor=_ADJACENCY_ROUNDS):]   # oldest first ... immediate prior last
+    reserved = reserve_keep(chosen, floor=0)      # how many NEWEST pairs fit the budget outright
     newest = len(chosen) - 1
     blocks: list[ContextBlock] = []
     for idx, row in enumerate(chosen):
         age = newest - idx                        # 0 = immediate prior; larger = older
-        blocks.extend(_one_adjacency(row, age=age, order=order + idx, priority=90 - age))
+        # Reserved band ASCENDS with recency (never flat): equal priorities would tie-break on
+        # savings and page the LARGEST reserved pair first, inverting oldest-pages-first.
+        priority = (RESERVE_PRIORITY + (reserved - 1 - age)) if age < reserved else 90 - age
+        blocks.extend(_one_adjacency(row, age=age, order=order + idx, priority=priority))
     return tuple(blocks)
 
 

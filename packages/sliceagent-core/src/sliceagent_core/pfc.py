@@ -34,7 +34,7 @@ from typing import ClassVar
 
 from .active_work import WorkGraph
 from .intent import IntentState
-from .regions import MAX_CONVERSATION
+from .regions import MAX_CONVERSATION, reserve_keep
 from .slice_state import (ContinuityState, EvidenceState, TaskProgress,
                           TurnRuntime, WorkingSet)
 from .swap import READ_BUDGET, READ_BUDGET_MAX, _DEFAULT_SWAP
@@ -418,11 +418,15 @@ def record_user(s: Slice, message: str, *, source_artifact: str | None = None,
         s.task.goal_source = source_artifact
     # RECENT CONVERSATION ring — VERBATIM (including whitespace, NOT truncated): the last few turns are the
     # active loop's antecedents, so a deictic follow-up ("go with your recommendation", "save this") resolves
-    # against the real text, not a lossy gist. Count-bounded by MAX_CONVERSATION; older turns page out to history/.
+    # against the real text, not a lossy gist. Floor of MAX_CONVERSATION rows, widened by the verbatim user
+    # reserve (regions.reserve_keep): newest exchanges stay resident while their total chars fit the
+    # USER_RESERVE_TOKENS budget, hard-capped at RESERVE_ROWS_CEILING. The old fixed [-MAX_CONVERSATION:]
+    # trim discarded turn 5+ AT WRITE TIME — before elasticity ever saw them — which is exactly the
+    # mid-distance window the reserve exists to keep. Older turns still page out to history/.
     s.conversation.append({
         "user": str(message or ""), "assistant": "", "artifact_id": source_artifact or "",
     })
-    s.conversation = s.conversation[-MAX_CONVERSATION:]
+    s.conversation = s.conversation[-reserve_keep(s.conversation, floor=MAX_CONVERSATION):]
 
 
 def consolidate_checkpoint(s: "Slice", *, compact: bool = True) -> str:

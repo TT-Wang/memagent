@@ -27,6 +27,24 @@ def _emit(s, name, text):
     slice_sink(s)(ToolResult(name=name, args={"text": text}, output="ok", failing=False))
 
 
+def _authority_sections(user: str) -> str:
+    """The user-AUTHORITY regions of a rendered seed. The anti-resurrection invariant is scoped
+    HERE: superseded wording must never appear as authority. Since the verbatim user reserve
+    (regions.USER_RESERVE_TOKENS), the same wording MAY legitimately remain visible in the
+    RECENT CONVERSATION / adjacency history framing — that is bounded verbatim history, priced
+    by the reserve budget, explicitly framed as historical text and overridden by the
+    corrections region. Authority and history are different regions on purpose."""
+    keep = ("# ACTIVE USER INTENT", "# STABLE TASK OBJECTIVE", "# RETAINED USER CORRECTIONS",
+            "# PARENT TASK CONSTRAINTS", "# CURRENT REQUEST")
+    out, keeping = [], False
+    for line in user.splitlines():
+        if line.startswith("# "):
+            keeping = line.startswith(keep)
+        if keeping:
+            out.append(line)
+    return "\n".join(out)
+
+
 @check
 def exact_user_clause_gets_provenance_range():
     request = "Refactor auth; keep the public API stable; support Python 3.11."
@@ -254,7 +272,7 @@ def equivalent_wording_correction_cannot_resurrect_the_stable_objective():
     assert old not in resident and correction in resident
     host = LocalToolHost(tempfile.mkdtemp(prefix="intent-equivalent-correction-"))
     user = make_build_slice(s, host, None, NullMemory(), "fallback task")()[1]["content"]
-    assert old not in user
+    assert old not in _authority_sections(user)   # history framing may keep it; authority may not
     assert "# STABLE TASK OBJECTIVE" not in user, "equivalent correction must retire the old objective"
 
 
@@ -273,7 +291,7 @@ def ordinary_version_correction_cannot_disappear_or_resurrect_the_old_objective(
     assert correction_entry is not None and correction_entry.status == "active"
     host = LocalToolHost(tempfile.mkdtemp(prefix="intent-version-correction-"))
     user = make_build_slice(s, host, None, NullMemory(), "fallback task")()[1]["content"]
-    assert old not in user and correction in user
+    assert old not in _authority_sections(user) and correction in user
     assert "# STABLE TASK OBJECTIVE" not in user
 
 
@@ -296,11 +314,12 @@ def actually_corrections_are_retained_and_retire_parallel_directives():
         assert old_entry is not None and correction_entry is not None and correction_entry.status == "active"
         host = LocalToolHost(tempfile.mkdtemp(prefix="intent-actually-correction-"))
         user = make_build_slice(s, host, None, NullMemory(), "fallback task")()[1]["content"]
+        auth = _authority_sections(user)
         if case_index < 2:
-            assert old_entry.status == "superseded" and old not in user
+            assert old_entry.status == "superseded" and old not in auth
         else:
             assert old_entry.status == "active" and correction_entry.kind == "correction"
-            assert user.index(old) < user.index(correction)
+            assert auth.index(old) < auth.index(correction)
         assert correction in user
 
 
@@ -329,7 +348,7 @@ def one_correction_cannot_retire_sibling_requirements_with_the_same_action():
         assert s.intent.find(retained).status == "active"
         host = LocalToolHost(tempfile.mkdtemp(prefix="intent-sibling-correction-"))
         user = make_build_slice(s, host, None, NullMemory(), "fallback task")()[1]["content"]
-        assert replaced not in user and retained in user and correction in user
+        assert replaced not in _authority_sections(user) and retained in user and correction in user
 
 
 @check
@@ -431,15 +450,21 @@ def execution_uncertainty_is_mandatory_advisory_context():
 
 @check
 def raw_historical_requests_do_not_accumulate_in_seed():
+    # The bound is O(1) in session length: the verbatim reserve widens the ring up to its token
+    # budget / RESERVE_ROWS_CEILING, but NEVER O(turns) — requests beyond the reserve leave the
+    # resident context entirely (they page to history/).
+    from sliceagent.regions import RESERVE_ROWS_CEILING
     s = Slice(); s.reset("start")
-    for i in range(12):
+    for i in range(30):
         record_user(s, f"unique-old-request-{i}")
+    assert len(s.conversation) == RESERVE_ROWS_CEILING
     host = LocalToolHost(tempfile.mkdtemp(prefix="intent-history-"))
     user = make_build_slice(s, host, None, NullMemory(), "fallback")()[1]["content"]
     assert "# USER INSTRUCTIONS" not in user
     assert "unique-old-request-0" not in user, "old raw messages must not remain resident context"
-    # The current request and bounded recent ring remain available.
-    assert "unique-old-request-11" in user and "unique-old-request-9" in user
+    assert "unique-old-request-10" not in user, "beyond the reserve ceiling must page out"
+    # The current request and the reserve-bounded recent ring remain available.
+    assert "unique-old-request-29" in user and "unique-old-request-25" in user
 
 
 @check

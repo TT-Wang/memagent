@@ -44,12 +44,57 @@ MAX_ACTION_SHOWN = 12    # cap on REPEATED/FAILING entries rendered (highest-sig
 FULL_FILE_LINES = 1200
 REGION_LINES = 400
 DISCOVERY_K = 6
-MAX_CONVERSATION = 4     # RECENT CONVERSATION ring — the last N completed user<->assistant exchanges, kept
-# VERBATIM (no per-message truncation). The bound is this COUNT, not a byte cap: the last few turns are the active
-# loop's antecedents ("go with your recommendation" / "save this") and must survive intact so a deictic follow-up
-# resolves against them directly instead of falling to relevance-recall. Peak flexes with recent reply size but
-# stays bounded across SESSION LENGTH (older turns page to @sliceagent/history/ and recall on demand).
+MAX_CONVERSATION = 4     # RECENT CONVERSATION ring — the FLOOR: the last N completed user<->assistant exchanges,
+# kept VERBATIM (no per-message truncation). The bound is a COUNT floor + the token-budget reserve below, never a
+# per-message byte cap: the last few turns are the active loop's antecedents ("go with your recommendation" /
+# "save this") and must survive intact so a deictic follow-up resolves against them directly instead of falling to
+# relevance-recall. Peak flexes with recent reply size but stays bounded across SESSION LENGTH (older turns page
+# to @sliceagent/history/ and recall on demand).
 # (render_conversation drops the in-progress turn, so this surfaces the last MAX_CONVERSATION-1 completed turns.)
+
+# ── VERBATIM USER RESERVE (Codex-parity, adapted) ────────────────────────────
+# Codex CLI exempts the newest ~20k tokens of user messages from all compaction. The sliceagent
+# adaptation reserves PAIRED EXCHANGES (user verbatim + its response — adjacency semantics need the
+# pair) under a token budget, SOFT: reserved rows carry RESERVE_PRIORITY so they degrade only as the
+# true last resort, never becoming hard-unfit (a hard exemption inflates the ContextUnfitError floor
+# on small windows — measured risk, see the convergence spec P0.3). The budget prices the WHOLE pair
+# (user + assistant chars), so the widened ring can never inflate the per-turn peak by more than the
+# reserve constant: the bound stays a constant, which is the moat invariant. This closes the
+# mid-distance window: turns 5..~12 whose request roots completed used to leave the prompt entirely.
+USER_RESERVE_TOKENS = 20_000   # ONE knob; chars via execution.tokens_to_chars (shared _TOKENS_PER_BYTE)
+RESERVE_ROWS_CEILING = 12      # hard O(1) cap on the widened ring/adjacency, independent of budget
+RESERVE_PRIORITY = 98          # BASE of the reserved band: above every ordinary DEGRADABLE region
+# (highest non-mandatory region priority is 97; mandatory regions are never degradation candidates).
+# Reserved adjacency pairs ascend from this base with RECENCY (base + reserved-1 - age): a FLAT band
+# would let tie-breaking fall to savings, degrading the LARGEST reserved pair first and inverting the
+# oldest-pages-first invariant the adjacency tests pin. Still soft: every reserved block keeps its
+# locator alternative, so ContextUnfit semantics are preserved.
+
+
+def user_reserve_chars() -> int:
+    from .execution import tokens_to_chars   # lazy: regions stays a rendering/metadata layer
+    return tokens_to_chars(USER_RESERVE_TOKENS)
+
+
+def reserve_keep(rows, *, floor: int, ceiling: int = RESERVE_ROWS_CEILING) -> int:
+    """How many NEWEST conversation rows to keep/reserve.
+
+    Walks newest-first accumulating len(user)+len(assistant) chars. Always keeps `floor` rows
+    (legacy count bound — giant messages inside the floor are kept regardless, they degrade via
+    the elasticity path instead); beyond the floor, extends only while the cumulative chars fit
+    the reserve budget; hard-capped at `ceiling` so the ring stays O(1). floor=0 answers "how
+    many newest rows are RESERVED" (within budget) for priority marking."""
+    budget = user_reserve_chars()
+    keep = used = 0
+    for row in reversed(tuple(rows)):
+        if keep >= ceiling:
+            break
+        row_chars = len(str(row.get("user") or "")) + len(str(row.get("assistant") or ""))
+        if keep >= floor and used + row_chars > budget:
+            break
+        keep += 1
+        used += row_chars
+    return keep
 
 
 # ── PER-REGION RENDER: UNCAPPED-BY-RELEVANCE ──────────────────────────────────
@@ -1798,6 +1843,16 @@ def _region_provenance(name: str, ctx: dict) -> tuple[EpistemicRole, tuple[str, 
     return role, scope, tuple(dict.fromkeys(sources)), tuple(dict.fromkeys(resources))
 
 
+def _ring_within_reserve(s) -> bool:
+    """True when the WHOLE conversation ring fits the verbatim reserve budget (then the legacy
+    conversation region is soft-reserved; an over-budget ring degrades normally)."""
+    rows = tuple(getattr(s, "conversation", ()) or ())
+    if not rows:
+        return False
+    total = sum(len(str(r.get("user") or "")) + len(str(r.get("assistant") or "")) for r in rows)
+    return total <= user_reserve_chars()
+
+
 def build_context_blocks(ctx: dict) -> tuple[ContextBlock, ...]:
     """Project every non-empty region into the shared elasticity contract."""
     out = []
@@ -1818,6 +1873,13 @@ def build_context_blocks(ctx: dict) -> tuple[ContextBlock, ...]:
             priority, authority, freshness, mandatory = (
                 28, InstructionClass.TASK_STATE, FreshnessClass.HISTORICAL, False,
             )
+        if name == "conversation" and _ring_within_reserve(ctx.get("s")):
+            # VERBATIM USER RESERVE, legacy (no-graph) lane — mirrors _adjacency_blocks' reserved
+            # priority so behavior is lane-independent (the known path-asymmetry bug class). SOFT:
+            # the locator alternative below stays available as the true last resort. A ring whose
+            # total chars exceed the budget (giant pastes inside the floor) keeps normal priority
+            # and degrades like any region.
+            priority = RESERVE_PRIORITY
         group = f"region:{name}"
         role, scope, source_refs, resource_refs = _region_provenance(name, ctx)
         out.append(ContextBlock(

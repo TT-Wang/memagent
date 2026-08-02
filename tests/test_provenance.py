@@ -56,7 +56,10 @@ def distinct_assistant_status_turns_do_not_form_a_shadow_transcript():
         record_user(s, f"continue {index}")
         sink(AssistantText(f"status update {index}: still working"))
         s.seal()
-    assert len(s.conversation) == 4
+    # Bounded O(1), not O(turns): the verbatim reserve widens the ring up to its budget/ceiling,
+    # but 25 turns must land on the same constant as 12 would — never a growing transcript.
+    from sliceagent.regions import RESERVE_ROWS_CEILING
+    assert len(s.conversation) == RESERVE_ROWS_CEILING
     assert s.findings == [] and s.finding_source == {}
 
 

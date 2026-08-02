@@ -20,12 +20,21 @@ def check(fn):
 
 @check
 def record_user_counts_turns_and_bounds_the_ring():
+    from sliceagent_core.regions import RESERVE_ROWS_CEILING, user_reserve_chars
     s = Slice(); s.reset("t")
-    for i in range(10):
+    for i in range(20):
         record_user(s, f"message {i}")
-    assert s.turns == 10, s.turns
-    assert len(s.conversation) == MAX_CONVERSATION, len(s.conversation)
-    assert s.conversation[-1]["user"] == "message 9"
+    assert s.turns == 20, s.turns
+    # Small messages: the verbatim reserve widens past the MAX_CONVERSATION floor up to the O(1)
+    # ceiling — never O(turns).
+    assert len(s.conversation) == RESERVE_ROWS_CEILING, len(s.conversation)
+    assert s.conversation[-1]["user"] == "message 19"
+    # Big messages: the token budget binds and the ring falls back to the floor.
+    s2 = Slice(); s2.reset("t")
+    big = "x" * (user_reserve_chars() // 2 + 1)
+    for i in range(10):
+        record_user(s2, big + str(i))
+    assert len(s2.conversation) == MAX_CONVERSATION, len(s2.conversation)
 
 
 @check
@@ -65,7 +74,7 @@ def ring_preserves_multiline_whitespace_and_code_verbatim():
 @check
 def older_turns_get_a_recall_pointer():
     s = Slice(); s.reset("t")
-    for i in range(6):                         # 6 turns, ring holds last 4
+    for i in range(16):                        # 16 turns: beyond the reserve ceiling, so some page out
         record_user(s, f"req {i}")
         slice_sink(s)(AssistantText(f"reply {i}"))
     out = render_conversation(s)
