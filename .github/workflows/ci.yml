@@ -6,6 +6,33 @@ on:
   pull_request:
 
 jobs:
+  core-standalone:
+    name: core wheel · standalone turn · py${{ matrix.python }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Build the zero-dependency core wheel
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install build
+          python -m build --wheel --outdir dist/core packages/sliceagent-core
+
+      - name: Install only core and execute a real turn
+        run: |
+          CORE_SMOKE_VENV="$RUNNER_TEMP/sliceagent-core-smoke"
+          python -m venv "$CORE_SMOKE_VENV"
+          "$CORE_SMOKE_VENV/bin/python" -m pip install --no-deps dist/core/sliceagent_core-*.whl
+          "$CORE_SMOKE_VENV/bin/python" -I scripts/check_core_standalone.py
+
   test:
     name: ${{ matrix.os }} · py${{ matrix.python }}
     runs-on: ${{ matrix.os }}
