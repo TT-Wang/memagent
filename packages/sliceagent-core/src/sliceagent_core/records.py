@@ -15,7 +15,7 @@ import json
 import os
 
 from .context import Fidelity
-from .events import Event, StepEnd, ToolResult, TurnEnd, TurnInterrupted
+from .events import Event, SliceBuilt, StepEnd, ToolResult, TurnEnd, TurnInterrupted
 from .private_state import open_private_append, private_dir, private_file
 from .recovery import state_dir
 
@@ -234,6 +234,41 @@ class AdmissionMetrics:
             "missing_source": sum(str(getattr(b, "content", "") or "").count(marker) for b in blocks),
             "deref_of_degraded": deref_of_degraded,
         }
+
+
+class ReplaySeedRecorder:
+    """Opt-in (AGENT_RECORD_REPLAY=1) observer journaling each turn's exact replay seed: the
+    SliceBuilt provider messages (system + user, byte-exact) and the offered tool-roster names.
+    Closes the two corpus gaps evals/slipstream_replay.py currently works around (a NEUTRAL
+    substitute system prompt; a rebuilt roster): future corpora replay byte-exact. Rows are large
+    (a full seed per turn) — that is why this is opt-in, unlike the always-on metrics rows."""
+
+    def __init__(self, journal: Journal, roster_provider=None):
+        self.journal = journal
+        self._roster = roster_provider
+        self._turn = 0
+
+    def __call__(self, e: Event) -> None:
+        if not isinstance(e, SliceBuilt):
+            return
+        self._turn += 1
+        roster: list = []
+        try:
+            roster = list(self._roster() or []) if self._roster is not None else []
+        except Exception:  # noqa: BLE001 — observer: never break the turn
+            roster = []
+        messages = []
+        for m in e.messages or ():
+            if isinstance(m, dict):
+                content = m.get("content")
+                if isinstance(content, list):   # multimodal parts: keep the text parts verbatim
+                    content = "".join(str(p.get("text") or "") for p in content
+                                      if isinstance(p, dict) and p.get("type") == "text")
+                messages.append({"role": str(m.get("role") or ""), "content": str(content or "")})
+        try:
+            self.journal.record("replay_seed", turn=self._turn, messages=messages, roster=roster)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def total_usage(journal: Journal) -> dict:

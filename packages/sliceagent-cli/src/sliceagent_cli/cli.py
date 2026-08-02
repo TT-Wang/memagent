@@ -1888,24 +1888,36 @@ def main() -> None:
     # admission-precision axis (per-region admitted/degraded/referenced + missed-need deltas). The
     # seed-plan box is filled by _capture_seed_plan wrapping each turn's build_slice; session.active()
     # is the live Slice. Best-effort: a journal failure never blocks startup or a turn.
-    _seed_plan_box: dict = {"plan": None}
+    _seed_plan_box: dict = {"plan": None, "roster": []}
 
-    def _capture_seed_plan(inner):
+    def _capture_seed_plan(inner, tools=None):
+        roster = []
+        try:
+            roster = [str(s.get("function", {}).get("name") or "")
+                      for s in (tools.schemas() if tools is not None and hasattr(tools, "schemas") else [])]
+        except Exception:  # noqa: BLE001 — roster capture is observability, never load-bearing
+            roster = []
+
         def _build():
             plan = inner()
             _seed_plan_box["plan"] = plan
+            _seed_plan_box["roster"] = roster
             return plan
         return _build
 
     try:
-        from sliceagent_core.records import AdmissionMetrics, Journal, UsageRecorder
+        from sliceagent_core.records import AdmissionMetrics, Journal, ReplaySeedRecorder, UsageRecorder
         _records_journal = Journal(session.session_id)
         _admission_metrics = AdmissionMetrics(
             _records_journal, lambda: _seed_plan_box["plan"], lambda: session.active())
         _usage_recorder = UsageRecorder(_records_journal, model=str(getattr(llm, "model", "") or ""))
+        # Opt-in byte-exact replay corpus (system prompt + roster — the slipstream gaps).
+        _replay_recorder = (ReplaySeedRecorder(_records_journal, lambda: _seed_plan_box["roster"])
+                            if os.environ.get("AGENT_RECORD_REPLAY") else None)
     except Exception:  # noqa: BLE001 — observers must never block startup
         _admission_metrics = None
         _usage_recorder = None
+        _replay_recorder = None
     # EXACTLY ONE renderer is wired: the rich+prompt_toolkit sink (TUI), OR the plain stdout sink
     # (headless/eval). Never two.
     if _tui:
@@ -1938,6 +1950,8 @@ def main() -> None:
             sinks.append(_admission_metrics)
         if _usage_recorder is not None:
             sinks.append(_usage_recorder)
+        if _replay_recorder is not None:
+            sinks.append(_replay_recorder)
         sinks.append(_workspace_presentation_sink(_workspace_handoff, _presentation_sink))
         if dispatch_monitor is not None:
             sinks.append(dispatch_monitor)
@@ -2533,7 +2547,7 @@ def main() -> None:
                     session, turn_tools, retriever, memory, text, session.session_id,
                     model_id=llm.model, event_ledger=_event_ledger,
                     system_extra=_planning.pop("overlay", "") or "",
-                ))
+                ), tools=turn_tools)
             except KeyboardInterrupt:
                 live_dispatch(TurnInterrupted("aborted", "cancelled during context preparation"))
                 if _seal_local_turn("aborted", live_dispatch):
@@ -2774,7 +2788,7 @@ def main() -> None:
                         session, turn_tools, retriever, memory, line, session.session_id,
                         model_id=llm.model, event_ledger=_event_ledger,
                         system_extra=_planning.pop("overlay", "") or "",
-                    ))
+                    ), tools=turn_tools)
                 except KeyboardInterrupt:
                     dispatch(TurnInterrupted("aborted", "cancelled during context preparation"))
                     if _seal_local_turn("aborted", dispatch):

@@ -161,6 +161,24 @@ def derefs_reset_between_turns():
     assert rows[1]["referenced"] == []
 
 
+@check
+def replay_seed_recorder_journals_messages_and_roster():
+    from sliceagent_core.events import SliceBuilt
+    from sliceagent_core.records import ReplaySeedRecorder
+    journal = Journal("t", root=tempfile.mkdtemp())
+    rec = ReplaySeedRecorder(journal, lambda: ["read_file", "grep"])
+    rec(SliceBuilt("rendered user text", [
+        {"role": "system", "content": "SYSTEM PREFIX"},
+        {"role": "user", "content": [{"type": "text", "text": "multimodal user part"}]},
+    ]))
+    row = journal.read("replay_seed")[0]
+    assert row["turn"] == 1 and row["roster"] == ["read_file", "grep"]
+    assert row["messages"][0] == {"role": "system", "content": "SYSTEM PREFIX"}
+    assert row["messages"][1]["content"] == "multimodal user part"   # parts flattened verbatim
+    rec(SliceBuilt("r2", None))                                      # None messages: row still writes
+    assert journal.read("replay_seed")[1]["messages"] == []
+
+
 def main():
     failed = 0
     for fn in CHECKS:
