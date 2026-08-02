@@ -30,6 +30,24 @@ from sliceagent.scheduler import ScheduledTool, run_ordered  # noqa: E402
 
 CHECKS = []
 
+# Scheduler pins race a real clock. They assert a PAIR of facts — a bound fires (a hung child is
+# cut) while a sibling that keeps working is NOT cut — so what they actually pin is the RATIO
+# between two budgets, never the absolute milliseconds. Calibrated on an idle laptop those budgets
+# get as tight as 10ms, and on a contended CI runner a 10ms sleep routinely overshoots 50ms: the
+# live child misses its touch window, looks inactive, and the pin goes red for a reason that has
+# nothing to do with the invariant. That is the whole macOS-py3.12 flake class.
+#
+# T() stretches every budget in this file by the SAME factor, so the ratios survive intact while
+# the absolute margins grow past runner jitter. Local runs stay at 1.0 (fast); CI sets the env var.
+# Scaling one budget and not its sibling would be worse than not scaling at all — it would silently
+# retune the invariant instead of the clock, so every budget below goes through T().
+_TIME_SCALE = float(os.environ.get("SLICE_TEST_TIME_SCALE") or 1.0)
+
+
+def T(seconds: float) -> float:
+    """Scale a scheduler timing budget by SLICE_TEST_TIME_SCALE (default 1.0)."""
+    return seconds * _TIME_SCALE
+
 
 def check(fn):
     CHECKS.append(fn)
@@ -216,7 +234,7 @@ def lifecycle_child_wave_caps_parallel_full_model_loops_at_four():
                 state["maximum"] = max(state["maximum"], state["active"])
                 if state["active"] >= 4:
                     four_running.set()
-            assert release.wait(2)
+            assert release.wait(T(2))
             with lock:
                 state["active"] -= 1
             return ToolOutcome(invocation, ToolStatus.SUCCEEDED, "done")
@@ -231,11 +249,11 @@ def lifecycle_child_wave_caps_parallel_full_model_loops_at_four():
         daemon=True,
     )
     runner.start()
-    assert four_running.wait(1)
-    time.sleep(0.05)  # give an incorrectly uncapped wave ample time to launch children 5-7
+    assert four_running.wait(T(1))
+    time.sleep(T(0.05))  # give an incorrectly uncapped wave ample time to launch children 5-7
     assert state["maximum"] == 4, state
     release.set()
-    runner.join(2)
+    runner.join(T(2))
     assert not runner.is_alive()
     assert len(box["outcomes"]) == 7
 
@@ -255,13 +273,13 @@ def indeterminate_lifecycle_child_cancels_only_the_unadmitted_wave_tail():
                 started.append(index)
                 if len(started) == 4:
                     four_running.set()
-            assert four_running.wait(2)
+            assert four_running.wait(T(2))
             if index == 0:
                 return ToolOutcome(
                     invocation, ToolStatus.INDETERMINATE,
                     "provider watchdog expired; request may still be in flight",
                 )
-            assert release_started.wait(2)
+            assert release_started.wait(T(2))
             return ToolOutcome(invocation, ToolStatus.SUCCEEDED, "settled")
 
         return ScheduledTool(invocation, ToolPurity.PURE_READ, run, timeout_safe=False)
@@ -273,12 +291,12 @@ def indeterminate_lifecycle_child_cancels_only_the_unadmitted_wave_tail():
     )
     runner.start()
     try:
-        assert four_running.wait(1)
-        time.sleep(0.12)  # allow the scheduler to observe child 0 and close the queued tail
+        assert four_running.wait(T(1))
+        time.sleep(T(0.12))  # allow the scheduler to observe child 0 and close the queued tail
         with lock:
             assert sorted(started) == [0, 1, 2, 3], started
         release_started.set()
-        runner.join(2)
+        runner.join(T(2))
         assert not runner.is_alive()
         outcomes = box["outcomes"]
         assert [outcome.status for outcome in outcomes] == [
@@ -296,7 +314,7 @@ def indeterminate_lifecycle_child_cancels_only_the_unadmitted_wave_tail():
         assert [outcome.text for outcome in outcomes[4:]] == [expected, expected]
     finally:
         release_started.set()
-        runner.join(1)
+        runner.join(T(1))
 
 
 @check
@@ -362,33 +380,33 @@ def child_inactivity_timeout_is_per_job_not_pooled_by_a_live_sibling():
     live_inv = ToolInvocation("live-child", "spawn_agent", {}, 1)
 
     def inactive():
-        assert inactive_cancel.wait(1)
+        assert inactive_cancel.wait(T(1))
         return ToolOutcome(inactive_inv, ToolStatus.CANCELLED, "inactive child closed")
 
     def live():
-        until = time.monotonic() + 0.18
+        until = time.monotonic() + T(0.18)
         while time.monotonic() < until:
             assert not live_cancel.is_set(), "live child was cancelled by its sibling's inactivity"
             live_activity.touch()
-            time.sleep(0.01)
+            time.sleep(T(0.01))
         return ToolOutcome(live_inv, ToolStatus.SUCCEEDED, "live child completed")
 
     outcomes = run_ordered([
         ScheduledTool(
             inactive_inv, ToolPurity.PURE_READ, inactive, timeout_safe=False,
-            request_cancel=lambda _kind: inactive_cancel.set(), cancel_grace=0.2,
+            request_cancel=lambda _kind: inactive_cancel.set(), cancel_grace=T(0.2),
             activity=inactive_activity,
         ),
         ScheduledTool(
             live_inv, ToolPurity.PURE_READ, live, timeout_safe=False,
-            request_cancel=lambda _kind: live_cancel.set(), cancel_grace=0.2,
+            request_cancel=lambda _kind: live_cancel.set(), cancel_grace=T(0.2),
             activity=live_activity,
         ),
-    ], lifecycle_timeout=0.05, lifecycle_absolute=1.0)
+    ], lifecycle_timeout=T(0.05), lifecycle_absolute=T(1.0))
     assert [outcome.status for outcome in outcomes] == [
         ToolStatus.FAILED, ToolStatus.SUCCEEDED,
     ], outcomes
-    assert "no activity for 0.05s" in outcomes[0].text
+    assert f"no activity for {T(0.05):g}s" in outcomes[0].text
     assert not live_cancel.is_set()
 
 
@@ -399,18 +417,18 @@ def active_child_still_stops_at_absolute_delegation_guard():
     invocation = ToolInvocation("long-child", "spawn_agent", {}, 0)
 
     def active():
-        while not cancel.wait(0.01):
+        while not cancel.wait(T(0.01)):
             activity.touch()
         return ToolOutcome(invocation, ToolStatus.CANCELLED, "active child closed")
 
     outcomes = run_ordered([
         ScheduledTool(
             invocation, ToolPurity.PURE_READ, active, timeout_safe=False,
-            request_cancel=lambda _kind: cancel.set(), cancel_grace=0.2, activity=activity,
+            request_cancel=lambda _kind: cancel.set(), cancel_grace=T(0.2), activity=activity,
         ),
-    ], lifecycle_timeout=0.05, lifecycle_absolute=0.12)
+    ], lifecycle_timeout=T(0.05), lifecycle_absolute=T(0.12))
     assert outcomes[0].status is ToolStatus.FAILED
-    assert "0.12s absolute delegation leak guard" in outcomes[0].text
+    assert f"{T(0.12):g}s absolute delegation leak guard" in outcomes[0].text
 
 
 @check
@@ -427,12 +445,12 @@ def omitted_lifecycle_absolute_retains_the_scheduler_leak_guard():
     invocation = ToolInvocation("default-absolute-child", "spawn_agent", {}, 0)
 
     def active():
-        while not cancel.wait(0.01):
+        while not cancel.wait(T(0.01)):
             activity.touch()
         return ToolOutcome(invocation, ToolStatus.CANCELLED, "active child closed")
 
     prior = scheduler.DEFAULT_LIFECYCLE_ABSOLUTE
-    scheduler.DEFAULT_LIFECYCLE_ABSOLUTE = 0.12
+    scheduler.DEFAULT_LIFECYCLE_ABSOLUTE = T(0.12)
     try:
         outcomes = run_ordered([
             ScheduledTool(
@@ -441,15 +459,15 @@ def omitted_lifecycle_absolute_retains_the_scheduler_leak_guard():
                 active,
                 timeout_safe=False,
                 request_cancel=lambda _kind: cancel.set(),
-                cancel_grace=0.2,
+                cancel_grace=T(0.2),
                 activity=activity,
             ),
-        ], lifecycle_timeout=0.05)
+        ], lifecycle_timeout=T(0.05))
     finally:
         scheduler.DEFAULT_LIFECYCLE_ABSOLUTE = prior
 
     assert outcomes[0].status is ToolStatus.FAILED
-    assert "0.12s absolute delegation leak guard" in outcomes[0].text
+    assert f"{T(0.12):g}s absolute delegation leak guard" in outcomes[0].text
 
 
 @check
@@ -469,20 +487,20 @@ def wedged_children_over_the_wave_ceiling_cannot_freeze_the_parent_turn():
         invocation = ToolInvocation(f"wedged-{index}", "spawn_agent", {}, index)
         tasks.append(ScheduledTool(
             invocation, ToolPurity.PURE_READ,
-            lambda: (wedge.wait(30), "never")[1],      # never returns: slot.release() never runs
+            lambda: (wedge.wait(T(30)), "never")[1],      # never returns: slot.release() never runs
             timeout_safe=False,
             request_cancel=lambda _kind: None,          # accepts the lease, ignores it
-            cancel_grace=0.05, activity=ChildActivity(),
+            cancel_grace=T(0.05), activity=ChildActivity(),
         ))
 
     box: dict = {}
     runner = threading.Thread(
         target=lambda: box.setdefault(
-            "outcomes", run_ordered(tasks, lifecycle_timeout=0.3, lifecycle_absolute=0.6)),
+            "outcomes", run_ordered(tasks, lifecycle_timeout=T(0.3), lifecycle_absolute=T(0.6))),
         daemon=True,
     )
     runner.start()
-    runner.join(15.0)
+    runner.join(T(15.0))
     frozen = runner.is_alive()
     wedge.set()                                          # let the daemon threads unwind either way
     assert not frozen, (
@@ -538,26 +556,26 @@ def per_job_reap_outranks_a_later_parent_cancel_in_assembly():
     a_inv = ToolInvocation("reaped-then-settled", "spawn_agent", {}, 0)
     b_inv = ToolInvocation("live-sibling", "spawn_agent", {}, 1)
     a_activity, b_activity = ChildActivity(), ChildActivity()
-    cancel_at = time.monotonic() + 0.7
+    cancel_at = time.monotonic() + T(0.7)
 
     def child_a():
-        time.sleep(0.5)                      # silent past the 0.3s window -> reaped; settles inside grace
+        time.sleep(T(0.5))                      # silent past the 0.3s window -> reaped; settles inside grace
         return ToolOutcome(a_inv, ToolStatus.SUCCEEDED, "late but present")
 
     def child_b():
-        until = time.monotonic() + 1.4
+        until = time.monotonic() + T(1.4)
         while time.monotonic() < until:
             b_activity.touch()               # provably live the whole time
-            time.sleep(0.02)
+            time.sleep(T(0.02))
         return ToolOutcome(b_inv, ToolStatus.SUCCEEDED, "b done")
 
     tasks = [
         ScheduledTool(a_inv, ToolPurity.PURE_READ, child_a, timeout_safe=False,
-                      request_cancel=lambda _k: None, cancel_grace=0.4, activity=a_activity),
+                      request_cancel=lambda _k: None, cancel_grace=T(0.4), activity=a_activity),
         ScheduledTool(b_inv, ToolPurity.PURE_READ, child_b, timeout_safe=False,
-                      request_cancel=lambda _k: None, cancel_grace=0.4, activity=b_activity),
+                      request_cancel=lambda _k: None, cancel_grace=T(0.4), activity=b_activity),
     ]
-    outcomes = run_ordered(tasks, lifecycle_timeout=0.3, lifecycle_absolute=5.0,
+    outcomes = run_ordered(tasks, lifecycle_timeout=T(0.3), lifecycle_absolute=T(5.0),
                            should_cancel=lambda: time.monotonic() >= cancel_at)
     assert len(outcomes) == 2
     a_out = outcomes[0]
@@ -590,7 +608,7 @@ def a_queued_steer_cuts_the_wave_early_and_keeps_every_report():
         def run():
             deadline = start + 30                       # natural settle: 30s from now
             while time.monotonic() < deadline and not lease.is_set():
-                time.sleep(0.02)
+                time.sleep(T(0.02))
             if report:
                 # the child sealed a partial report inside its cancel grace — typed, kept
                 return ToolOutcome(inv, ToolStatus.SUCCEEDED, f"[partial] {report}")
@@ -602,14 +620,14 @@ def a_queued_steer_cuts_the_wave_early_and_keeps_every_report():
     quiet_run, quiet_lease = blocking(quiet_inv, "")
     tasks = [
         ScheduledTool(fast_inv, ToolPurity.PURE_READ, fast, timeout_safe=False,
-                      request_cancel=lambda _kind: None, cancel_grace=0.2),
+                      request_cancel=lambda _kind: None, cancel_grace=T(0.2)),
         ScheduledTool(partial_inv, ToolPurity.PURE_READ, partial_run, timeout_safe=False,
-                      request_cancel=lambda _kind: partial_lease.set(), cancel_grace=0.2),
+                      request_cancel=lambda _kind: partial_lease.set(), cancel_grace=T(0.2)),
         ScheduledTool(quiet_inv, ToolPurity.PURE_READ, quiet_run, timeout_safe=False,
-                      request_cancel=lambda _kind: quiet_lease.set(), cancel_grace=0.2),
+                      request_cancel=lambda _kind: quiet_lease.set(), cancel_grace=T(0.2)),
     ]
     probe_at = start + 0.4
-    outcomes = run_ordered(tasks, lifecycle_timeout=30.0, lifecycle_absolute=60.0,
+    outcomes = run_ordered(tasks, lifecycle_timeout=T(30.0), lifecycle_absolute=T(60.0),
                            steer_probe=lambda: time.monotonic() >= probe_at)
     elapsed = time.monotonic() - start
     assert elapsed < 10, f"the steer was held hostage by the wave for {elapsed:.1f}s (natural: 30s)"
@@ -631,13 +649,13 @@ def the_wave_runs_to_natural_settle_without_a_steer_probe():
     start = time.monotonic()
 
     def slow():
-        time.sleep(1.2)
+        time.sleep(T(1.2))
         return ToolOutcome(inv, ToolStatus.SUCCEEDED, "slow done")
 
     outcomes = run_ordered([
         ScheduledTool(inv, ToolPurity.PURE_READ, slow, timeout_safe=False,
-                      request_cancel=lambda _kind: None, cancel_grace=0.1),
-    ], lifecycle_timeout=30.0, lifecycle_absolute=60.0)
+                      request_cancel=lambda _kind: None, cancel_grace=T(0.1)),
+    ], lifecycle_timeout=T(30.0), lifecycle_absolute=T(60.0))
     assert time.monotonic() - start >= 1.2 and outcomes[0].status is ToolStatus.SUCCEEDED
 
 
@@ -682,16 +700,16 @@ def a_prompting_command_fails_fast_instead_of_hanging_to_the_deadline():
 @check
 def the_leak_guard_wait_does_not_busy_spin_once_it_elapses():
     """REGRESSION: clamping the poll to a deadline already in the PAST pins wait_for to 0.0, so
-    condition.wait(0.0) spins on the scheduler lock until the wave breaks — and that spin starves the
+    condition.wait(T(0.0)) spins on the scheduler lock until the wave breaks — and that spin starves the
     worker trying to TAKE the lock to publish its settlement, flipping typed closes to INDETERMINATE.
     Measured 0.104s CPU vs 0.005s for the same 0.9s of wall. Assert the RATIO, not a wall-clock."""
     wedge = threading.Event()
 
     def task(i):
         inv = ToolInvocation(f"spin-{i}", "spawn_agent", {}, i)
-        return ScheduledTool(inv, ToolPurity.PURE_READ, lambda: (wedge.wait(20), "x")[1],
+        return ScheduledTool(inv, ToolPurity.PURE_READ, lambda: (wedge.wait(T(20)), "x")[1],
                              timeout_safe=False, request_cancel=lambda _k: None,
-                             cancel_grace=0.05, activity=ChildActivity())
+                             cancel_grace=T(0.05), activity=ChildActivity())
 
     box: dict = {}
     # process_time() is user+system CPU for the whole process — the same quantity as
@@ -700,9 +718,9 @@ def the_leak_guard_wait_does_not_busy_spin_once_it_elapses():
     started = time.monotonic()
     runner = threading.Thread(target=lambda: box.setdefault(
         "o", run_ordered([task(i) for i in range(4)],
-                         lifecycle_timeout=None, lifecycle_absolute=0.5)), daemon=True)
+                         lifecycle_timeout=None, lifecycle_absolute=T(0.5))), daemon=True)
     runner.start()
-    runner.join(12.0)
+    runner.join(T(12.0))
     alive = runner.is_alive()
     wedge.set()
     wall = time.monotonic() - started
@@ -727,17 +745,17 @@ def the_absolute_leak_guard_holds_without_an_inactivity_window():
     wedge = threading.Event()
     invocation = ToolInvocation("no-window", "spawn_agent", {}, 0)
     task = ScheduledTool(
-        invocation, ToolPurity.PURE_READ, lambda: (wedge.wait(30), "never")[1],
-        timeout_safe=False, request_cancel=lambda _k: None, cancel_grace=0.05,
+        invocation, ToolPurity.PURE_READ, lambda: (wedge.wait(T(30)), "never")[1],
+        timeout_safe=False, request_cancel=lambda _k: None, cancel_grace=T(0.05),
         activity=ChildActivity(),
     )
     box: dict = {}
     runner = threading.Thread(
         target=lambda: box.setdefault(
-            "outcomes", run_ordered([task], lifecycle_timeout=None, lifecycle_absolute=0.5)),
+            "outcomes", run_ordered([task], lifecycle_timeout=None, lifecycle_absolute=T(0.5))),
         daemon=True)
     runner.start()
-    runner.join(12.0)
+    runner.join(T(12.0))
     frozen = runner.is_alive()
     wedge.set()
     assert not frozen, (
@@ -757,15 +775,15 @@ def queued_child_inactivity_starts_at_physical_admission():
     second_started = []
 
     def first():
-        until = time.monotonic() + 0.12
+        until = time.monotonic() + T(0.12)
         while time.monotonic() < until:
             first_activity.touch()
-            time.sleep(0.01)
+            time.sleep(T(0.01))
         return ToolOutcome(first_inv, ToolStatus.SUCCEEDED, "first complete")
 
     def second():
         second_started.append(True)
-        time.sleep(0.02)
+        time.sleep(T(0.02))
         return ToolOutcome(second_inv, ToolStatus.SUCCEEDED, "queued child complete")
 
     outcomes = run_ordered([
@@ -777,7 +795,7 @@ def queued_child_inactivity_starts_at_physical_admission():
             second_inv, ToolPurity.PURE_READ, second, timeout_safe=False,
             request_cancel=lambda _kind: None, activity=second_activity,
         ),
-    ], max_workers=1, lifecycle_timeout=0.05, lifecycle_absolute=1.0)
+    ], max_workers=1, lifecycle_timeout=T(0.05), lifecycle_absolute=T(1.0))
     assert second_started == [True], "queue wait was incorrectly charged as child inactivity"
     assert [outcome.status for outcome in outcomes] == [
         ToolStatus.SUCCEEDED, ToolStatus.SUCCEEDED,
@@ -795,19 +813,19 @@ def parent_cancellation_outranks_child_liveness_cutoffs():
 
     def child():
         entered.set()
-        assert child_cancel.wait(1)
+        assert child_cancel.wait(T(1))
         return ToolOutcome(invocation, ToolStatus.CANCELLED, "child closed")
 
     runner = threading.Thread(target=lambda: box.setdefault("outcomes", run_ordered([
         ScheduledTool(
             invocation, ToolPurity.PURE_READ, child, timeout_safe=False,
-            request_cancel=lambda _kind: child_cancel.set(), cancel_grace=0.2, activity=activity,
+            request_cancel=lambda _kind: child_cancel.set(), cancel_grace=T(0.2), activity=activity,
         ),
-    ], lifecycle_timeout=0.5, lifecycle_absolute=1.0, should_cancel=parent_cancel.is_set)), daemon=True)
+    ], lifecycle_timeout=T(0.5), lifecycle_absolute=T(1.0), should_cancel=parent_cancel.is_set)), daemon=True)
     runner.start()
-    assert entered.wait(1)
+    assert entered.wait(T(1))
     parent_cancel.set()
-    runner.join(1)
+    runner.join(T(1))
     assert not runner.is_alive()
     assert box["outcomes"][0].status is ToolStatus.CANCELLED
     assert "parent turn cancellation" in box["outcomes"][0].text
@@ -1432,7 +1450,7 @@ def provider_order_prevents_read_from_overtaking_write():
 
         def run(self, name, _args):
             if name == "read_file":
-                time.sleep(0.03)
+                time.sleep(T(0.03))
                 return state["value"]
             state["value"] = "new"
             return "written"
@@ -1476,7 +1494,7 @@ def unkillable_effectful_timeout_waits_before_later_barrier():
         def run(self, name, _args):
             ran.append(name)
             if name == "unknown_mutator":
-                time.sleep(0.12)
+                time.sleep(T(0.12))
             return "ok"
 
     calls = [_tc("unknown_mutator", {}, "slow"), _tc("edit_file", {"path": "x"}, "later")]
@@ -1505,7 +1523,7 @@ def local_command_timeout_is_adopted_with_progress_preserved():
         # finish line is PRESERVED — the reap path could never produce it.
         assert outcome.status is ToolStatus.SUCCEEDED
         assert "was NOT killed" in str(outcome)
-        time.sleep(1.2)
+        time.sleep(T(1.2))
         if os.name != "nt":
             assert os.path.exists(target), (
                 "adoption must preserve late work; only a reap would make this file absent")
@@ -1525,7 +1543,7 @@ def execute_code_inner_timeout_is_failed_and_reaps_background_tree():
         outcome = host.run("execute_code", {"code": f"run({command!r}, timeout=1)"})
         assert outcome.status is ToolStatus.FAILED, outcome
         assert "re-read before re-running" in str(outcome)
-        time.sleep(0.6)
+        time.sleep(T(0.6))
         if os.name != "nt":   # Windows taskkill /T is best-effort on a detached `&` subshell — see above
             assert not os.path.exists(target), "the nested run() descendant mutated after timeout return"
 
@@ -1542,7 +1560,7 @@ def read_only_child_is_parallelizable_but_not_abandoned_by_generic_timeout():
             return [ReadAllAccess()]
 
         def run(self, _name, _args):
-            time.sleep(0.1)
+            time.sleep(T(0.1))
             return "sealed child"
 
     started = time.monotonic()
@@ -1556,7 +1574,7 @@ def read_only_child_is_parallelizable_but_not_abandoned_by_generic_timeout():
             os.environ.pop("AGENT_TOOL_TIMEOUT", None)
         else:
             os.environ["AGENT_TOOL_TIMEOUT"] = prior
-    assert time.monotonic() - started >= 0.09
+    assert time.monotonic() - started >= T(0.09)
     assert results[0]["status"] == "succeeded"
 
 
@@ -1584,6 +1602,9 @@ def pure_read_timeout_returns_failure_feedback_without_reconciliation():
             return []
 
         def run(self, _name, _args):
+            # NOT T(): this races the scheduler's fixed _TIMEOUT_GRACE_SECONDS (0.10). The read must
+            # settle INSIDE grace, which holds only while (duration - deadline) < 0.10 — scaling
+            # both ends pushes it out and breaks the invariant instead of the clock.
             time.sleep(0.06)
             return "late"
 
@@ -1718,7 +1739,7 @@ def local_ctrl_c_reaps_the_started_command_group():
                 pass
         finally:
             timer.cancel()
-        time.sleep(1.0)
+        time.sleep(T(1.0))
         assert not os.path.exists(target), "an interrupted command descendant mutated after the turn returned"
 
 
@@ -1744,6 +1765,7 @@ def read_settling_during_grace_preserves_later_barrier():
         def run(self, name, _args):
             ran.append(f"{name}:start")
             if name == "read_file":
+                # NOT T(): must settle inside the fixed _TIMEOUT_GRACE_SECONDS (0.10) window.
                 time.sleep(0.06)
                 ran.append("read_file:end")
             return "ok"
@@ -1790,16 +1812,16 @@ def hung_read_returns_indeterminate_cancels_tail_and_releases_fixture():
         outcomes = run_ordered([
             ScheduledTool(read_inv, ToolPurity.PURE_READ, hung_read),
             ScheduledTool(edit_inv, ToolPurity.EFFECTFUL, edit),
-        ], timeout=0.03)
+        ], timeout=T(0.03))
         elapsed = time.monotonic() - started
         assert [outcome.status for outcome in outcomes] == [
             ToolStatus.INDETERMINATE, ToolStatus.CANCELLED,
         ]
         assert not ran_effect, "a later mutation must not overtake a still-running reader"
-        assert elapsed < 0.35, "the scheduler must return after deadline + bounded grace"
+        assert elapsed < T(0.35), "the scheduler must return after deadline + bounded grace"
     finally:
         release.set()
-        assert finished.wait(1), "the daemon read fixture must settle after release"
+        assert finished.wait(T(1)), "the daemon read fixture must settle after release"
 
 
 @check
@@ -1826,12 +1848,12 @@ def hung_read_polls_turn_cancellation_during_long_deadline():
             should_cancel=cancel.is_set,
         )
         assert outcomes[0].status is ToolStatus.INDETERMINATE
-        assert time.monotonic() - started < 0.5, "cancellation must be polled inside the read wave"
+        assert time.monotonic() - started < T(0.5), "cancellation must be polled inside the read wave"
     finally:
         timer.cancel()
         timer.join(timeout=1)
         release.set()
-        assert finished.wait(1), "the cancelled daemon read fixture must settle after release"
+        assert finished.wait(T(1)), "the cancelled daemon read fixture must settle after release"
 
 
 @check
@@ -1864,12 +1886,12 @@ def no_timeout_parallel_reads_honor_cancellation_without_joining_workers():
     try:
         outcomes = run_ordered([task(0), task(1)], should_cancel=cancel.is_set)
         assert all(outcome.status is ToolStatus.INDETERMINATE for outcome in outcomes), outcomes
-        assert time.monotonic() - started < 0.5, "cancellation must not join no-timeout read workers"
+        assert time.monotonic() - started < T(0.5), "cancellation must not join no-timeout read workers"
     finally:
         timer.cancel()
         timer.join(timeout=1)
         release.set()
-        assert finished.wait(1), "both abandoned read fixtures must eventually release"
+        assert finished.wait(T(1)), "both abandoned read fixtures must eventually release"
 
 
 @check
@@ -1904,7 +1926,7 @@ def sigint_does_not_freeze_on_no_timeout_parallel_reads():
                             return
                     except OSError:
                         pass
-                    time.sleep(0.01)
+                    time.sleep(T(0.01))
             threading.Thread(target=interrupt_when_ready, daemon=True).start()
         try:
             run_ordered([task(0), task(1)])
@@ -1920,14 +1942,14 @@ def sigint_does_not_freeze_on_no_timeout_parallel_reads():
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
         )
         try:
-            deadline = time.monotonic() + 2
+            deadline = time.monotonic() + T(2)
             while time.monotonic() < deadline:
                 try:
                     if len(open(ready_path, encoding="utf-8").read().splitlines()) == 2:
                         break
                 except OSError:
                     pass
-                time.sleep(0.02)
+                time.sleep(T(0.02))
             else:
                 output, _ = process.communicate(timeout=1)
                 raise AssertionError(f"parallel read workers never became ready: {output!r}")
@@ -2115,11 +2137,11 @@ def launched_but_unentered_reader_never_starts_after_deadline_settlement():
         on_start=lambda: events.append("started"),
     )
     try:
-        outcome = run_ordered([task], timeout=0.01)
+        outcome = run_ordered([task], timeout=T(0.01))
         assert outcome[0].status is ToolStatus.CANCELLED, outcome
         assert events == [], "an unentered call must settle as not-started"
         release_entry.set()
-        time.sleep(0.05)
+        time.sleep(T(0.05))
         assert events == [], "a settled call must never announce/start later"
     finally:
         release_entry.set()
@@ -2143,7 +2165,7 @@ def timed_read_waits_for_a_concurrent_slot_until_its_own_deadline():
                 invocation, ToolPurity.PURE_READ,
                 lambda: ToolOutcome(invocation, ToolStatus.SUCCEEDED, "ok"),
             ),
-        ], timeout=0.2)
+        ], timeout=T(0.2))
         assert outcome[0].status is ToolStatus.SUCCEEDED, outcome
     finally:
         release_slot.cancel()
@@ -2171,7 +2193,7 @@ def exhausted_reader_slots_settle_without_a_configured_tool_timeout():
                 ))[1],
             ),
         ])
-        assert time.monotonic() - started < 0.5
+        assert time.monotonic() - started < T(0.5)
         assert outcome[0].status is ToolStatus.CANCELLED
         assert "capacity" in outcome[0].text
         assert ran == []
@@ -2208,7 +2230,7 @@ def lifecycle_read_does_not_disable_an_adjacent_read_deadline():
             box["outcomes"] = run_ordered([
                 ScheduledTool(read_inv, ToolPurity.PURE_READ, read, timeout_safe=True),
                 ScheduledTool(child_inv, ToolPurity.PURE_READ, child, timeout_safe=False),
-            ], timeout=0.5)
+            ], timeout=T(0.5))
         except BaseException as error:  # noqa: BLE001 - surfaced on the test thread below
             box["error"] = error
         finally:
@@ -2217,8 +2239,8 @@ def lifecycle_read_does_not_disable_an_adjacent_read_deadline():
     controller = threading.Thread(target=schedule, daemon=True)
     controller.start()
     try:
-        assert entered.wait(2), "ordinary read never crossed the execution boundary"
-        assert returned.wait(3), "adjacent lifecycle work disabled the ordinary read deadline"
+        assert entered.wait(T(2)), "ordinary read never crossed the execution boundary"
+        assert returned.wait(T(3)), "adjacent lifecycle work disabled the ordinary read deadline"
         assert "error" not in box, box
         outcomes = box["outcomes"]
         assert [outcome.status for outcome in outcomes] == [
@@ -2227,9 +2249,9 @@ def lifecycle_read_does_not_disable_an_adjacent_read_deadline():
         assert child_ran == []
     finally:
         release.set()
-        controller.join(1)
+        controller.join(T(1))
         assert not controller.is_alive(), "scheduler controller did not retire after fixture release"
-        assert finished.wait(1)
+        assert finished.wait(T(1))
 
 
 @check
@@ -2254,7 +2276,7 @@ def late_indeterminate_read_still_closes_later_effect_barriers():
                 ScheduledTool(
                     read_inv, ToolPurity.PURE_READ, uncertain_read,
                     request_cancel=lambda kind: cutoff.set() if kind == "deadline" else None,
-                    cancel_grace=3.0,
+                    cancel_grace=T(3.0),
                 ),
                 ScheduledTool(
                     edit_inv, ToolPurity.EFFECTFUL,
@@ -2262,7 +2284,7 @@ def late_indeterminate_read_still_closes_later_effect_barriers():
                         edit_inv, ToolStatus.SUCCEEDED, "edited",
                     ))[1],
                 ),
-            ], timeout=0.5)
+            ], timeout=T(0.5))
         except BaseException as error:  # noqa: BLE001 - surfaced on the test thread below
             box["error"] = error
         finally:
@@ -2271,10 +2293,10 @@ def late_indeterminate_read_still_closes_later_effect_barriers():
     controller = threading.Thread(target=schedule, daemon=True)
     controller.start()
     try:
-        assert entered.wait(2), "read never crossed the execution boundary"
-        assert cutoff.wait(2), "read did not cross the configured deadline"
+        assert entered.wait(T(2)), "read never crossed the execution boundary"
+        assert cutoff.wait(T(2)), "read did not cross the configured deadline"
         return_read.set()
-        assert returned.wait(2), "late indeterminate result did not settle during its cancellation grace"
+        assert returned.wait(T(2)), "late indeterminate result did not settle during its cancellation grace"
         assert "error" not in box, box
         outcomes = box["outcomes"]
         assert [outcome.status for outcome in outcomes] == [
@@ -2284,7 +2306,7 @@ def late_indeterminate_read_still_closes_later_effect_barriers():
         assert edits == []
     finally:
         return_read.set()
-        controller.join(1)
+        controller.join(T(1))
         assert not controller.is_alive(), "scheduler controller did not retire after fixture release"
 
 
@@ -2325,18 +2347,18 @@ def blocking_start_publication_times_out_without_entering_handler_or_late_tool_s
     thread = threading.Thread(target=invoke, daemon=True)
     try:
         thread.start()
-        assert publication_entered.wait(1)
-        thread.join(0.4)
+        assert publication_entered.wait(T(1))
+        thread.join(T(0.4))
         assert not thread.is_alive(), "deadline must remain enforceable while start publication blocks"
         assert result[0]["status"] == "indeterminate"
         assert handler_ran == []
         gate.set()
-        time.sleep(0.05)
+        time.sleep(T(0.05))
         assert not any(isinstance(event, ToolStarted) for event in events), \
             "the guarded start boundary must not publish ToolStarted after settlement"
     finally:
         gate.set()
-        thread.join(1)
+        thread.join(T(1))
         if prior is None:
             os.environ.pop("AGENT_TOOL_TIMEOUT", None)
         else:
@@ -2392,19 +2414,19 @@ def in_flight_tool_started_is_pinned_to_original_dispatch_epoch():
     )
     try:
         thread.start()
-        assert started_edge.wait(1)
-        thread.join(0.4)
+        assert started_edge.wait(T(1))
+        thread.join(T(0.4))
         assert not thread.is_alive() and result[0]["status"] == "indeterminate"
         route["sink"] = new_sink       # simulate a new turn/workspace becoming the router target
         release_edge.set()
-        time.sleep(0.05)
+        time.sleep(T(0.05))
         assert handler_ran == []
         assert any(isinstance(event, ToolStarted) for event in old_events)
         assert not any(isinstance(event, ToolStarted) for event in new_events), \
             "an admitted edge already in flight must remain pinned to the original dispatch epoch"
     finally:
         release_edge.set()
-        thread.join(1)
+        thread.join(T(1))
         if prior is None:
             os.environ.pop("AGENT_TOOL_TIMEOUT", None)
         else:
@@ -2531,7 +2553,7 @@ def timed_read_worker_cap_cancels_unstarted_calls_without_leaking_threads():
         outcomes = run_ordered([
             task(0), task(1), task(2),
             ScheduledTool(effect_inv, ToolPurity.EFFECTFUL, effect),
-        ], max_workers=3, timeout=0.03)
+        ], max_workers=3, timeout=T(0.03))
         statuses = [outcome.status for outcome in outcomes]
         assert statuses[:3].count(ToolStatus.INDETERMINATE) == 2
         assert statuses[:3].count(ToolStatus.CANCELLED) == 1
@@ -2541,7 +2563,7 @@ def timed_read_worker_cap_cancels_unstarted_calls_without_leaking_threads():
     finally:
         scheduler._TIMEOUT_READER_SLOTS = original_slots
         release.set()
-        assert all_finished.wait(1), "every admitted daemon fixture must release its captured slot"
+        assert all_finished.wait(T(1)), "every admitted daemon fixture must release its captured slot"
 
 
 @check
@@ -2965,7 +2987,7 @@ def a_polled_cancel_aborts_a_blocking_shell_wait_and_reaps():
         pass
     elapsed = time.monotonic() - start
     assert elapsed < 5, f"the polled cancel took {elapsed:.1f}s — the Event still can't reach the wait"
-    time.sleep(0.3)
+    time.sleep(T(0.3))
     assert not os.path.exists(target), "the reaper must take the process group down with the wait"
     # and with no token bound, the same wait respects only the deadline
     box2 = LocalSandbox(scrub_secrets=False)
@@ -3160,7 +3182,7 @@ def an_abandoned_readers_slot_is_released_so_the_session_never_blinds():
     gate = threading.Event()
 
     def wedged():
-        gate.wait(30)
+        gate.wait(T(30))
         return ToolOutcome(inv, ToolStatus.SUCCEEDED, "unblocked")
 
     held = [_TIMEOUT_READER_SLOTS.acquire(blocking=False) for _ in range(31)]
@@ -3169,7 +3191,7 @@ def an_abandoned_readers_slot_is_released_so_the_session_never_blinds():
         outcomes = run_ordered([
             ScheduledTool(inv, ToolPurity.PURE_READ, wedged, timeout_safe=True,
                           request_cancel=lambda _k: None),
-        ], timeout=0.5, lifecycle_absolute=5.0)
+        ], timeout=T(0.5), lifecycle_absolute=T(5.0))
         assert outcomes[0].status is ToolStatus.INDETERMINATE, outcomes[0].status
         # the wedged thread is STILL blocked — the slot can only be free if the WAVE released it
         acquired = _TIMEOUT_READER_SLOTS.acquire(blocking=False)
