@@ -31,7 +31,12 @@ import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(ROOT, "src"))
+_REPO_PATHS = (
+    os.path.join(ROOT, "packages", "sliceagent-core", "src"),
+    os.path.join(ROOT, "packages", "sliceagent-cli", "src"),
+    os.path.join(ROOT, "src"),
+)
+sys.path[:0] = list(_REPO_PATHS)
 sys.path.insert(0, os.path.join(ROOT, "evals"))
 
 from receipt_claims import extract_receipt_truth, merge_receipt_truth, score_reply  # noqa: E402

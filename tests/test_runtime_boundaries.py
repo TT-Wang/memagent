@@ -59,7 +59,7 @@ def _pid_is_gone(pid: int, timeout: float = 3.0) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            os.kill(pid, 0)
+            os.kill(pid, 0)  # windows-footgun: ok -- callers are POSIX-gated
         except ProcessLookupError:
             return True
         time.sleep(0.025)
@@ -171,7 +171,7 @@ def proc_kill_escalates_and_proves_orphan_group_extinction():
     command = f"trap '' TERM HUP; sleep 120 & echo $! > {shlex.quote(marker)}; exit 0"
     handle = pm.start(command, cwd="/tmp")
     child_pid = _wait_pid_file(marker)
-    os.kill(child_pid, 0)
+    os.kill(child_pid, 0)  # windows-footgun: ok -- function is POSIX-gated
     result = pm.kill(handle)
     try:
         assert "killed" in result and _pid_is_gone(child_pid), result
@@ -188,7 +188,7 @@ def terminal_close_reaches_descendant_after_leader_exit():
     command = f"trap '' HUP; sleep 120 & echo $! > {shlex.quote(marker)}; exit 0"
     sessions.open("orphan", cwd="/tmp", command=command)
     child_pid = _wait_pid_file(marker)
-    os.kill(child_pid, 0)
+    os.kill(child_pid, 0)  # windows-footgun: ok -- function is POSIX-gated
     # Let Popen observe the leader exit so this specifically pins the old leader-gated teardown bug.
     deadline = time.monotonic() + 2.0
     while sessions._s["orphan"].popen.poll() is None and time.monotonic() < deadline:

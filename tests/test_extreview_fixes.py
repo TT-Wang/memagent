@@ -75,19 +75,19 @@ def h14_proc_kill_reaps_orphaned_background_child():
     child_pid = None
     for _ in range(60):
         try:
-            v = open(marker).read().strip()
+            v = open(marker, encoding="utf-8").read().strip()
         except OSError:
             v = ""
         if v:
             child_pid = int(v); break
         time.sleep(0.05)
     assert child_pid, "background child never recorded its pid"
-    os.kill(child_pid, 0)                     # alive now
+    os.kill(child_pid, 0)  # windows-footgun: ok -- function is POSIX-gated
     pm.kill(handle)
     dead = False
     for _ in range(80):
         try:
-            os.kill(child_pid, 0); time.sleep(0.05)
+            os.kill(child_pid, 0); time.sleep(0.05)  # windows-footgun: ok -- POSIX-gated
         except ProcessLookupError:
             dead = True; break
     for p in (marker,):

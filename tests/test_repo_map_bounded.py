@@ -24,7 +24,7 @@ def _make_tree(root: pathlib.Path, n_dirs: int) -> None:
     for i in range(n_dirs):
         d = root / f"pkg{i:03d}"
         d.mkdir(parents=True)
-        (d / "mod.py").write_text("x = 1\n")
+        (d / "mod.py").write_text("x = 1\n", encoding="utf-8")
 
 
 @check
@@ -63,7 +63,7 @@ def default_budget_maps_a_normal_project_fully():
 def os_account_home_never_counts_as_a_project_even_with_home_overridden():
     import tempfile
     fake_os_home = pathlib.Path(tempfile.mkdtemp())          # stands in for pw_dir
-    (fake_os_home / "package.json").write_text("{}")          # the stray marker that caused the live bug
+    (fake_os_home / "package.json").write_text("{}", encoding="utf-8")  # the stray marker that caused the live bug
     orig = sc._os_home
     sc._os_home = lambda: fake_os_home.resolve()
     try:
@@ -73,7 +73,7 @@ def os_account_home_never_counts_as_a_project_even_with_home_overridden():
         # ...while a real project UNDER the home is still detected
         proj = fake_os_home / "code" / "myproj"
         proj.mkdir(parents=True)
-        (proj / "pyproject.toml").write_text("[project]\nname='x'\n")
+        (proj / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
         got = sc._marker_root(proj)
         assert got is not None and got.name == "myproj", f"real subproject must still resolve, got {got}"
     finally:

@@ -87,11 +87,11 @@ def resume_emits_no_convergence_nudge():
 @check
 def resume_uses_live_ground_truth():
     tmp = tempfile.mkdtemp()
-    with open(os.path.join(tmp, "a.py"), "w") as f:
+    with open(os.path.join(tmp, "a.py"), "w", encoding="utf-8") as f:
         f.write("v1\n")
     s = Slice(); s.reset("g"); s.active_files = ["a.py"]; s.edited_files = {"a.py"}
     ts = slice_to_task_state(s, "t4")
-    with open(os.path.join(tmp, "a.py"), "w") as f:      # modify AFTER checkpoint
+    with open(os.path.join(tmp, "a.py"), "w", encoding="utf-8") as f:      # modify AFTER checkpoint
         f.write("v2-modified\n")
     art = build_artifacts(task_state_to_slice(ts), LocalToolHost(tmp))
     assert "v2-modified" in art and "v1\n" not in art    # re-read live, contents not stored
@@ -128,7 +128,7 @@ def memem_disk_roundtrip_if_available():
                      {"steps": [{"slice": "S", "action": [], "observation": ["o"]}],
                       "note": "", "meta": {}})
     import json
-    line = json.loads(open(os.path.join(tmp, "episodic", "sz.jsonl")).read().strip())
+    line = json.loads(open(os.path.join(tmp, "episodic", "sz.jsonl"), encoding="utf-8").read().strip())
     assert line["record"]["steps"][0]["observation"] == ["o"]
 
 

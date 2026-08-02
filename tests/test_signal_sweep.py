@@ -32,7 +32,7 @@ def _drive(script: str, wd: str):
 
 def _alive(pid: int) -> bool:
     try:
-        os.kill(pid, 0)
+        os.kill(pid, 0)  # windows-footgun: ok -- signal-sweep suite is POSIX-only
         return True
     except OSError:
         return False
@@ -40,7 +40,7 @@ def _alive(pid: int) -> bool:
 
 def _reap_quietly(pid: int) -> None:
     try:
-        os.kill(pid, signal.SIGKILL)
+        os.kill(pid, signal.SIGKILL)  # windows-footgun: ok -- POSIX-only
     except OSError:
         pass
 
@@ -71,7 +71,7 @@ def a_second_signal_mid_sweep_dies_BY_the_signal_not_a_fake_graceful_143():
     bg_pid = None
     try:
         assert p.stdout.readline().strip() == "READY", "child never started"
-        bg_pid = int(open(pidfile).read())
+        bg_pid = int(open(pidfile, encoding="utf-8").read())
         assert _alive(bg_pid), "the SIGTERM-ignoring background child never spawned"
         time.sleep(0.6)                    # let the child actually INSTALL its SIG_IGN first —
         # signalling inside the import/install window kills it with the default disposition and
@@ -116,7 +116,7 @@ def the_signal_sweep_is_bounded_under_a_supervisor_deadline():
     p = _drive(script, wd)
     try:
         assert p.stdout.readline().strip() == "READY", "child never started"
-        pids = [int(x) for x in open(pidfile).read().split()]
+        pids = [int(x) for x in open(pidfile, encoding="utf-8").read().split()]
         assert len(pids) == 3 and all(_alive(pid) for pid in pids)
         time.sleep(0.6)                    # let all three children INSTALL SIG_IGN before signalling
         start = time.monotonic()
@@ -129,7 +129,7 @@ def the_signal_sweep_is_bounded_under_a_supervisor_deadline():
             "the unbounded 3s+2s grace shape is back (measured 9.22s in the review)")
         assert not any(_alive(pid) for pid in pids), "the bounded sweep left a group alive"
     finally:
-        for pid in [int(x) for x in open(pidfile).read().split()] if os.path.exists(pidfile) else []:
+        for pid in [int(x) for x in open(pidfile, encoding="utf-8").read().split()] if os.path.exists(pidfile) else []:
             _reap_quietly(pid)
         if p.poll() is None:
             p.kill()
@@ -163,7 +163,7 @@ def sigterm_reaps_the_in_flight_FOREGROUND_command():
         while time.monotonic() < deadline and not os.path.exists(pidfile):
             time.sleep(0.05)
         assert os.path.exists(pidfile), "the foreground command never spawned"
-        fg_pid = int(open(pidfile).read())
+        fg_pid = int(open(pidfile, encoding="utf-8").read())
         assert _alive(fg_pid), "the foreground sleep never started"
         p.send_signal(signal.SIGTERM)
         rc = p.wait(timeout=20)

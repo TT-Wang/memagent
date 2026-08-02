@@ -30,7 +30,7 @@ def _repo():
     for rel, body in files.items():
         p = os.path.join(root, rel)
         os.makedirs(os.path.dirname(p) or root, exist_ok=True)
-        with open(p, "w") as f:
+        with open(p, "w", encoding="utf-8") as f:
             f.write(body)
     return root
 
@@ -92,7 +92,7 @@ def no_code_returns_empty():
     if _skip_no_rg():
         print("  (skip: no rg)"); return
     root = tempfile.mkdtemp()
-    with open(os.path.join(root, "notes.txt"), "w") as f:
+    with open(os.path.join(root, "notes.txt"), "w", encoding="utf-8") as f:
         f.write("just prose, no code files\n")
     idx = RipgrepCodeIndex(root=root)
     assert idx.retrieve("anything") == [] and idx.graph_map("anything") == ""
@@ -111,7 +111,7 @@ def _graph_repo():
     for rel, body in files.items():
         p = os.path.join(root, rel)
         os.makedirs(os.path.dirname(p) or root, exist_ok=True)
-        with open(p, "w") as f:
+        with open(p, "w", encoding="utf-8") as f:
             f.write(body)
     return root
 
@@ -176,7 +176,7 @@ def graph_cache_reuses_until_tree_changes():
     idx.graph_map(q); idx.graph_map("other query")
     assert idx._graph_builds == 1                 # query changes don't rebuild the graph
     # edit a file → fingerprint changes → exactly one rebuild, new defs reflected
-    with open(os.path.join(root, "svc/billing.py"), "a") as f:
+    with open(os.path.join(root, "svc/billing.py"), "a", encoding="utf-8") as f:
         f.write("\n\ndef refund(amount):\n    return amount\n")
     out = idx.graph_map(q)
     assert idx._graph_builds == 2 and "def refund" in out

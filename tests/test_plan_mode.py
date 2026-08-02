@@ -310,7 +310,7 @@ def zero_mutation_holds_through_the_loop_preflight_dispatch_path(tmp_path=None):
         assert not os.path.exists(marker), "a mutating command EXECUTED during a planning turn"
         assert rows and rows[0]["outcome"].status is ToolStatus.CANCELLED, rows
         # a legit read still flows through the same path
-        (open(os.path.join(root, "x.txt"), "w").write("hi"))
+        (open(os.path.join(root, "x.txt"), "w", encoding="utf-8").write("hi"))
         read = NS(name="read_file", args={"path": "x.txt"}, id="c2")
         _, rrows = run_tool_batch([read], surface, lambda _e: None, Hooks(), step=2, turn_id="t")
         assert "hi" in str(rrows[0]["outcome"].text)

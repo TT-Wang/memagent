@@ -10,6 +10,7 @@ keywords = ["coding-agent", "cli", "llm", "agent", "mcp"]
 # CLI depends on the core runtime + carries the domain-specific deps (mcp tools).
 dependencies = [
     "sliceagent-core",
+    "httpx==0.28.1",
     "mcp==1.28.1",
 ]
 

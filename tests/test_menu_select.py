@@ -45,7 +45,8 @@ def _run(presses: list) -> tuple:
         return None, b""
     env = {**os.environ, "PYTHONPATH": os.path.abspath(_SRC), "COLUMNS": "120", "LINES": "40"}
     p = subprocess.Popen([sys.executable, "-c", _CHILD], stdin=slave, stdout=slave,
-                         stderr=subprocess.DEVNULL, env=env, start_new_session=True)
+                         stderr=subprocess.DEVNULL, env=env,
+                         start_new_session=True)  # windows-footgun: ok -- module requires pty
     os.close(slave)
     buf = bytearray()
     deadline = time.monotonic() + 15

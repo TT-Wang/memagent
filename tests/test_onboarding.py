@@ -203,7 +203,7 @@ def write_config_is_atomic_and_cleans_up_on_failure():
     home = tempfile.mkdtemp(prefix="cfg-fail-")
     path = onboarding._config_path(home)
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    open(path, "w").write("EXISTING\n")
+    open(path, "w", encoding="utf-8").write("EXISTING\n")
     orig = os.write
     os.write = lambda *a, **k: (_ for _ in ()).throw(OSError("disk full"))
     try:
@@ -217,7 +217,7 @@ def write_config_is_atomic_and_cleans_up_on_failure():
     assert raised, "a write failure must propagate"
     leftover = [f for f in os.listdir(os.path.dirname(path)) if f.startswith(".sliceagent-cfg-")]
     assert not leftover, f"temp file (holds the key!) leaked on failure: {leftover}"
-    assert open(path).read() == "EXISTING\n", "the existing config must be intact (atomic write)"
+    assert open(path, encoding="utf-8").read() == "EXISTING\n", "the existing config must be intact (atomic write)"
 
 
 @check

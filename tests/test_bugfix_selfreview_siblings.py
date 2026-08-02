@@ -34,9 +34,9 @@ def checkpoint_task_redacts_state_to_disk():  # Class 2 / task-state + session i
                    title=f"work on {SECRET}", goal=f"use {SECRET}",
                    findings=[f"the key is {SECRET}"], last_error=f"failed with {SECRET}")
     m.checkpoint_task(ts)
-    task_md = open(os.path.join(vault, "tasks", "t1.md")).read()
+    task_md = open(os.path.join(vault, "tasks", "t1.md"), encoding="utf-8").read()
     assert SECRET not in task_md, "task-state markdown must be redacted on disk (Class 2 sibling)"
-    sess_md = open(os.path.join(vault, "sessions", "s1.md")).read()
+    sess_md = open(os.path.join(vault, "sessions", "s1.md"), encoding="utf-8").read()
     assert SECRET not in sess_md, "session index (title) must be redacted on disk"
 
 

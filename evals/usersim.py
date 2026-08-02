@@ -14,8 +14,8 @@ Run (deepseek is cheap + fast):
   set -a; source .env; set +a
   export LLM_API_KEY="$DEEPSEEK_API_KEY" LLM_BASE_URL="https://api.deepseek.com/v1" \
          AGENT_MODEL=deepseek-chat AGENT_PROXY=off
-  PYTHONPATH=src python evals/usersim.py            # all personas
-  PYTHONPATH=src python evals/usersim.py find-and-open-project   # one persona
+  python evals/usersim.py            # all personas
+  python evals/usersim.py find-and-open-project   # one persona
 """
 from __future__ import annotations
 
@@ -28,7 +28,13 @@ import time
 import traceback
 from collections import Counter
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_REPO_PATHS = (
+    os.path.join(_REPO, "packages", "sliceagent-core", "src"),
+    os.path.join(_REPO, "packages", "sliceagent-cli", "src"),
+    os.path.join(_REPO, "src"),
+)
+sys.path[:0] = list(_REPO_PATHS)
 
 from sliceagent.code_index import make_code_index           # noqa: E402
 from sliceagent.events import AssistantText, ToolResult, make_dispatcher  # noqa: E402

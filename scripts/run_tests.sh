@@ -7,16 +7,23 @@ cd "$(dirname "$0")/.." || exit 2
 
 PY="${PYTHON:-.venv/bin/python}"
 command -v "$PY" >/dev/null 2>&1 || PY="python3"   # CI installs the package, so a plain python3 works too
-export PYTHONPATH="src${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH="packages/sliceagent-core/src:packages/sliceagent-cli/src:src${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONUTF8=1   # Windows console defaults to cp1252; test output contains UTF-8 (no-op on POSIX)
 
 # Registration guard FIRST: a test defined below its file's runner block never executes, so the
 # suite would report green in both directions while covering nothing (the U2a/c dead-check).
 "$PY" scripts/check_test_registration.py || exit 1
 
+shopt -s nullglob
+test_files=(tests/test_*.py packages/*/tests/test_*.py)
+if [ "${#test_files[@]}" -eq 0 ]; then
+  echo "suite: no test files discovered" >&2
+  exit 2
+fi
+
 pass=0; fail=0; failed=""
 log="$(mktemp)"
-for t in tests/test_*.py; do
+for t in "${test_files[@]}"; do
   # A file with no __main__ block defines its tests and exits 0 without running ANY of them, so the
   # wrapper counted it green while it verified nothing (18 of 165 files were silently inert). Those are
   # pytest-style; hand them to pytest so every file in tests/ actually executes.
@@ -28,7 +35,7 @@ for t in tests/test_*.py; do
   if "${runner[@]}" >"$log" 2>&1; then
     pass=$((pass + 1))
   else
-    fail=$((fail + 1)); failed="$failed ${t##*/}"
+    fail=$((fail + 1)); failed="$failed $t"
     echo "── FAIL: $t ─────────────────────────────"
     # the FAIL/Traceback lines first (a chatty file scrolls them out of a blind tail), then the tail
     grep -E "^FAIL |Traceback|^[A-Za-z]*Error" "$log" | head -15

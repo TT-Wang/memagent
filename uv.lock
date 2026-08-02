@@ -1335,6 +1335,7 @@ provides-extras = ["dev", "memory", "treesitter", "tui"]
 name = "sliceagent-cli"
 source = { editable = "packages/sliceagent-cli" }
 dependencies = [
+    { name = "httpx" },
     { name = "mcp" },
     { name = "sliceagent-core" },
 ]
@@ -1360,6 +1361,7 @@ tui = [
 
 [package.metadata]
 requires-dist = [
+    { name = "httpx", specifier = "==0.28.1" },
     { name = "mcp", specifier = "==1.28.1" },
     { name = "memem", marker = "extra == 'memory'", specifier = "==2.9.7" },
     { name = "numpy", marker = "extra == 'memory'", specifier = ">=1.24" },

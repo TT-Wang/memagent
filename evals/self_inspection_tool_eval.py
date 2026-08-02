@@ -16,7 +16,12 @@ import sys
 from typing import Any
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(ROOT, "src"))
+_REPO_PATHS = (
+    os.path.join(ROOT, "packages", "sliceagent-core", "src"),
+    os.path.join(ROOT, "packages", "sliceagent-cli", "src"),
+    os.path.join(ROOT, "src"),
+)
+sys.path[:0] = list(_REPO_PATHS)
 
 from sliceagent.interfaces import AssistantMessage  # noqa: E402
 from sliceagent.prompt import (MEMORY_ACCUMULATE, SYSTEM_PROMPT,  # noqa: E402

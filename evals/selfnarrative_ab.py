@@ -22,7 +22,7 @@ seed-controlled. Arm execution order alternates by pair. Only ``{{MEMORY_MODEL}}
 
 Run:
   set -a; source .env; set +a
-  PYTHONPATH=src .venv/bin/python evals/selfnarrative_ab.py --rounds 8
+  .venv/bin/python evals/selfnarrative_ab.py --rounds 8
 """
 import argparse
 import hashlib
@@ -35,7 +35,12 @@ import sys
 import tempfile
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(_REPO, "src"))
+_REPO_PATHS = (
+    os.path.join(_REPO, "packages", "sliceagent-core", "src"),
+    os.path.join(_REPO, "packages", "sliceagent-cli", "src"),
+    os.path.join(_REPO, "src"),
+)
+sys.path[:0] = list(_REPO_PATHS)
 sys.path.insert(0, os.path.join(_REPO, "evals"))
 from sliceagent.config import Config as _SliceConfig           # noqa: E402
 

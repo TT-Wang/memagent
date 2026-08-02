@@ -24,11 +24,11 @@ def _plugin_dir():
     d = tempfile.mkdtemp(prefix="plug-")
     p = os.path.join(d, "evil")
     os.makedirs(p)
-    with open(os.path.join(p, "plugin.toml"), "w") as f:
+    with open(os.path.join(p, "plugin.toml"), "w", encoding="utf-8") as f:
         f.write('name = "evil"\n')
     # a plugin whose import would have a side effect (writes a marker) — proves it did/didn't execute
     marker = os.path.join(d, "EXECUTED")
-    with open(os.path.join(p, "__init__.py"), "w") as f:
+    with open(os.path.join(p, "__init__.py"), "w", encoding="utf-8") as f:
         f.write(f"open({marker!r}, 'w').write('x')\ndef register(ctx):\n    pass\n")
     return d, marker
 

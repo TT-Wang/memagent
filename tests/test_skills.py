@@ -78,7 +78,7 @@ def project_skills_load_only_under_trust():
 
     # the marker file admits the workspace
     os.makedirs(os.path.join(workspace, ".sliceagent"), exist_ok=True)
-    open(os.path.join(workspace, ".sliceagent", "skills-trust"), "w").close()
+    open(os.path.join(workspace, ".sliceagent", "skills-trust"), "w", encoding="utf-8").close()
     trusted = SkillManager([project_root], project_root=workspace,
                            trust_project=os.path.isfile(
                                os.path.join(workspace, ".sliceagent", "skills-trust")))

@@ -261,10 +261,10 @@ def rg_exit2_with_results_is_partial_success_not_failure():
     if os.name == "nt" or os.geteuid() == 0:
         return  # chmod 000 has no effect on Windows / for root
     root = tempfile.mkdtemp(prefix="rg-partial-")
-    with open(os.path.join(root, "calc.py"), "w") as f:
+    with open(os.path.join(root, "calc.py"), "w", encoding="utf-8") as f:
         f.write("def add(a, b):\n    return a + b\n")
     os.mkdir(os.path.join(root, "secret"))
-    with open(os.path.join(root, "secret", "hidden.py"), "w") as f:
+    with open(os.path.join(root, "secret", "hidden.py"), "w", encoding="utf-8") as f:
         f.write("def hidden():\n    pass\n")
     os.chmod(os.path.join(root, "secret"), 0)
     try:

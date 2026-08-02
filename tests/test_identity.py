@@ -15,7 +15,7 @@ def test_non_git_workspace_identity_is_stable(tmp_path, monkeypatch):
     second = resolve_project_identity(str(workspace))
     assert first.project_id == second.project_id
     assert first.label == "workspace"
-    assert json.loads(registry.read_text())["version"] == 1
+    assert json.loads(registry.read_text(encoding="utf-8"))["version"] == 1
 
 
 def test_git_worktrees_share_project_identity(tmp_path, monkeypatch):
@@ -27,7 +27,7 @@ def test_git_worktrees_share_project_identity(tmp_path, monkeypatch):
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
     subprocess.run(["git", "-C", str(repo), "config", "user.email", "test@example.com"], check=True)
     subprocess.run(["git", "-C", str(repo), "config", "user.name", "Test"], check=True)
-    (repo / "README.md").write_text("test\n")
+    (repo / "README.md").write_text("test\n", encoding="utf-8")
     subprocess.run(["git", "-C", str(repo), "add", "README.md"], check=True)
     subprocess.run(["git", "-C", str(repo), "commit", "-qm", "init"], check=True)
     subprocess.run(["git", "-C", str(repo), "worktree", "add", "-q", "-b", "feature", str(worktree)], check=True)

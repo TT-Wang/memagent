@@ -63,7 +63,7 @@ def drive_a_repl():
 def successive_prompts():
     """A program that asks two questions in turn — read live, answer, read the next (text game)."""
     wd, h = _host()
-    open(os.path.join(wd, "quiz.py"), "w").write(
+    open(os.path.join(wd, "quiz.py"), "w", encoding="utf-8").write(
         "import sys\n"
         "print('Q1?', flush=True); a = sys.stdin.readline().strip()\n"
         "print(f'got:{a}', flush=True)\n"

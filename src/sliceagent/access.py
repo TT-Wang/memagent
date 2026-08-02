@@ -1,6 +1,5 @@
 """P3 compat shim — the generic resource-access model moved to core."""
-import sys as _sys
 
-import sliceagent_core.access as _impl
+from ._compat import alias_module as _alias_module
 
-_sys.modules[__name__] = _impl
+_alias_module(__name__, __spec__, "sliceagent_core.access")

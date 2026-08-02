@@ -55,7 +55,7 @@ jobs:
           echo "$OUT" | grep -q "0.1.0" && { echo "smoke: reports member version, not the product"; exit 1; } || true
 
       - name: Lint (ruff)
-        run: ruff check src/sliceagent tests
+        run: ruff check packages src tests
 
       - name: Tests
         run: bash scripts/run_tests.sh

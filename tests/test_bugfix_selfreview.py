@@ -26,7 +26,7 @@ def prelude_list_files_is_confined():  # #1
     cwd0 = os.getcwd()
     os.chdir(wd)
     try:
-        os.mkdir("sub"); open("a.txt", "w").write("x")
+        os.mkdir("sub"); open("a.txt", "w", encoding="utf-8").write("x")
         ns = {}
         exec(_CODE_PRELUDE, ns)
         assert "a.txt" in ns["list_files"]("."), "in-workspace listing still works"

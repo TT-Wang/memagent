@@ -117,7 +117,7 @@ def verbatim_header_line_round_trips():
     from sliceagent.interfaces import TaskState
     ts = TaskState(task_id="t1", session_id="s1", resolution="## My Heading\nbody line", goal="g")
     p = os.path.join(tempfile.mkdtemp(prefix="tm-"), "t.md")
-    open(p, "w").write(M._render_task_md(ts, created="c", updated="u"))
+    open(p, "w", encoding="utf-8").write(M._render_task_md(ts, created="c", updated="u"))
     assert M._parse_task_md(p).resolution == "## My Heading\nbody line"
 
 
@@ -130,7 +130,7 @@ def finding_source_round_trips():
     s = Slice(); s.goal = "g"; s.findings = ["f1"]; s.finding_source = {"f1": "claim"}
     ts = slice_to_task_state(s, "t1", session_id="s1")
     p = os.path.join(tempfile.mkdtemp(prefix="fs-"), "t.md")
-    open(p, "w").write(M._render_task_md(ts, created="c", updated="u"))
+    open(p, "w", encoding="utf-8").write(M._render_task_md(ts, created="c", updated="u"))
     assert task_state_to_slice(M._parse_task_md(p)).finding_source == {"f1": "claim"}
 
 
@@ -205,7 +205,7 @@ def build_artifacts_renders_protected_dep_past_read_budget():
     root = tempfile.mkdtemp(prefix="ba-")
     names = ["dep.py", "edited.py", "r1.py", "r2.py", "r3.py", "r4.py", "r5.py"]
     for n in names:
-        open(os.path.join(root, n), "w").write(f"# {n}\n")
+        open(os.path.join(root, n), "w", encoding="utf-8").write(f"# {n}\n")
     s = Slice(); s.active_files = list(names); s.edited_files = {"edited.py"}; s.protected_deps = {"dep.py"}
     out = build_artifacts(s, LocalToolHost(root=root), read_budget=2)
     assert "dep.py" in out, "a resident protected dep must render even when pushed past read_budget"
@@ -440,7 +440,7 @@ def subdir_hints_symlink_escape_blocked():
     root = tempfile.mkdtemp(prefix="sdh-root-")
     outside = tempfile.mkdtemp(prefix="sdh-out-")
     secret = os.path.join(outside, "secret.txt")
-    open(secret, "w").write("AWS_SECRET=topsecret")
+    open(secret, "w", encoding="utf-8").write("AWS_SECRET=topsecret")
     sub = os.path.join(root, "pkg"); os.makedirs(sub)
     try:
         os.symlink(secret, os.path.join(sub, "AGENTS.md"))
@@ -465,7 +465,7 @@ def agent_unclosed_frontmatter_fails_closed():
     from sliceagent.agents import _parse_agent_md
     d = tempfile.mkdtemp(prefix="ag-")
     p = os.path.join(d, "reviewer.md")
-    open(p, "w").write("---\nname: reviewer\ntools: read_file, grep\nYou review code (no closing fence)")
+    open(p, "w", encoding="utf-8").write("---\nname: reviewer\ntools: read_file, grep\nYou review code (no closing fence)")
     assert _parse_agent_md(p) is None, "unclosed frontmatter must be skipped, not promoted to writable"
 
 
@@ -561,7 +561,7 @@ def load_env_strips_quotes():
     from sliceagent.cli import _load_env
     d = tempfile.mkdtemp(prefix="env-")
     p = os.path.join(d, ".env")
-    open(p, "w").write('BUGHUNT_R13_KEY="sk-quoted-value"\n')
+    open(p, "w", encoding="utf-8").write('BUGHUNT_R13_KEY="sk-quoted-value"\n')
     _load_env(p)
     assert os.environ.get("BUGHUNT_R13_KEY") == "sk-quoted-value", os.environ.get("BUGHUNT_R13_KEY")
 
@@ -575,7 +575,7 @@ def open_report_survives_resume():
     s = Slice(); s.reset("build the thing"); s.open_report = "user says output is still wrong"
     ts = slice_to_task_state(s, "t1")
     p = os.path.join(tempfile.mkdtemp(prefix="tk-"), "t1.md")
-    open(p, "w").write(_render_task_md(ts, created="c", updated="u"))
+    open(p, "w", encoding="utf-8").write(_render_task_md(ts, created="c", updated="u"))
     s2 = task_state_to_slice(_parse_task_md(p))
     assert s2.open_report == "user says output is still wrong", repr(s2.open_report)
 
@@ -605,7 +605,7 @@ def resume_preserves_topic_goal():
 def read_file_relative_dotdot_blocked():
     from sliceagent.tools import LocalToolHost
     ws = tempfile.mkdtemp(prefix="ws-")
-    open(os.path.join(os.path.dirname(ws), "secret_outside_r15.txt"), "w").write("TOP SECRET OUTSIDE")
+    open(os.path.join(os.path.dirname(ws), "secret_outside_r15.txt"), "w", encoding="utf-8").write("TOP SECRET OUTSIDE")
     out = LocalToolHost(ws).run("read_file", {"path": "../secret_outside_r15.txt"})
     assert "TOP SECRET OUTSIDE" not in str(out), f"boundary bypass: {out!r}"
 
@@ -629,7 +629,7 @@ def episode_manifest_tail_only():
     os.environ["SLICEAGENT_VAULT"] = v
     try:
         d = os.path.join(v, "episodic"); os.makedirs(d, exist_ok=True)
-        with open(os.path.join(d, "s1.jsonl"), "w") as f:
+        with open(os.path.join(d, "s1.jsonl"), "w", encoding="utf-8") as f:
             for i in range(40):
                 f.write(json.dumps({"turn": i, "title": f"t{i}"}) + "\n")
         # The episode tape is canonical native memory.  Optional Memem is only an
@@ -661,11 +661,11 @@ def plugin_dirs_tolerates_non_string():
 def edit_resolves_same_file_as_read_across_roots():
     from sliceagent.tools import LocalToolHost
     ws = tempfile.mkdtemp(prefix="wsA-"); ext = tempfile.mkdtemp(prefix="wsB-")
-    open(os.path.join(ws, "a.txt"), "w").write("ORIGINAL")
+    open(os.path.join(ws, "a.txt"), "w", encoding="utf-8").write("ORIGINAL")
     h = LocalToolHost(ws); h.add_root(ext); h._focus = ext   # focus on the OTHER root
     assert "ORIGINAL" in str(h.run("read_file", {"path": "a.txt"}))
     h.run("str_replace", {"path": "a.txt", "old_string": "ORIGINAL", "new_string": "EDITED"})
-    assert open(os.path.join(ws, "a.txt")).read() == "EDITED", "edit must hit the file read_file showed"
+    assert open(os.path.join(ws, "a.txt"), encoding="utf-8").read() == "EDITED", "edit must hit the file read_file showed"
     assert not os.path.exists(os.path.join(ext, "a.txt")), "no phantom file in the focus root"
 
 
@@ -703,7 +703,7 @@ def world_model_survives_auth_redaction():
 
 def _write_tmp(md):
     p = os.path.join(tempfile.mkdtemp(prefix="ck-"), "t1.md")
-    open(p, "w").write(md)
+    open(p, "w", encoding="utf-8").write(md)
     return p
 
 
@@ -733,7 +733,7 @@ def subdir_hints_dotted_directory():
     from sliceagent.subdir_hints import SubdirHints
     root = tempfile.mkdtemp(prefix="sdh2-")
     d = os.path.join(root, "my.module"); os.makedirs(d)
-    open(os.path.join(d, "AGENTS.md"), "w").write("dotted-dir convention")
+    open(os.path.join(d, "AGENTS.md"), "w", encoding="utf-8").write("dotted-dir convention")
     hint = SubdirHints(root).hints_for([d])
     assert "dotted-dir convention" in hint, "a real dotted directory must surface its own convention file"
 
@@ -1012,8 +1012,8 @@ def read_file_bounds_view_and_supports_windowing():
     import tempfile
     from sliceagent.tools import LocalToolHost, _READ_MAX_LINES
     d = tempfile.mkdtemp()
-    open(os.path.join(d, "big.py"), "w").write("\n".join(f"line{i}" for i in range(1, 3001)))
-    open(os.path.join(d, "small.py"), "w").write("a\nb\nc")
+    open(os.path.join(d, "big.py"), "w", encoding="utf-8").write("\n".join(f"line{i}" for i in range(1, 3001)))
+    open(os.path.join(d, "small.py"), "w", encoding="utf-8").write("a\nb\nc")
     h = LocalToolHost(root=d)
     out = h._t_read_file({"path": "big.py"})                       # default view of a 3000-line file → capped
     assert f"lines 1-{_READ_MAX_LINES} of 3000" in out and "offset=" in out, out.splitlines()[-1]
@@ -1078,15 +1078,15 @@ def str_replace_replace_all_and_retry_after():
     from sliceagent.tools import LocalToolHost
     d = tempfile.mkdtemp()
     p = os.path.join(d, "a.py")
-    open(p, "w").write("x=1\nx=1\nx=1\n")
+    open(p, "w", encoding="utf-8").write("x=1\nx=1\nx=1\n")
     h = LocalToolHost(root=d)
     r = h._t_str_replace({"path": "a.py", "old_string": "x=1", "new_string": "x=2"})   # >1 → rejected
     assert getattr(r, "ok", True) is False and "replace_all" in str(r), r
     h._t_str_replace({"path": "a.py", "old_string": "x=1", "new_string": "x=2", "replace_all": True})
-    assert open(p).read() == "x=2\nx=2\nx=2\n", open(p).read()                          # all changed
-    one = os.path.join(d, "b.py"); open(one, "w").write("a\nb\n")
+    assert open(p, encoding="utf-8").read() == "x=2\nx=2\nx=2\n", open(p, encoding="utf-8").read()                          # all changed
+    one = os.path.join(d, "b.py"); open(one, "w", encoding="utf-8").write("a\nb\n")
     h._t_str_replace({"path": "b.py", "old_string": "a", "new_string": "z"})            # single still works
-    assert open(one).read() == "z\nb\n"
+    assert open(one, encoding="utf-8").read() == "z\nb\n"
 
     class _E(Exception):
         retry_after = 5
@@ -1113,9 +1113,9 @@ def grep_modes_and_glob_tool():
     from sliceagent.tools import LocalToolHost
     assert _expand_braces("*.{ts,tsx}") == ["*.ts", "*.tsx"]
     d = tempfile.mkdtemp()
-    open(os.path.join(d, "a.py"), "w").write("def foo():\n    return 1\n")
-    open(os.path.join(d, "b.py"), "w").write("x = foo()\n")
-    open(os.path.join(d, "c.md"), "w").write("# notes\n")
+    open(os.path.join(d, "a.py"), "w", encoding="utf-8").write("def foo():\n    return 1\n")
+    open(os.path.join(d, "b.py"), "w", encoding="utf-8").write("x = foo()\n")
+    open(os.path.join(d, "c.md"), "w", encoding="utf-8").write("# notes\n")
     assert sorted(os.path.basename(x) for x in _glob_walk(d, "*.{md,py}", 100)) == ["a.py", "b.py", "c.md"]
     if not shutil.which("rg"):
         return                                                        # rg-backed modes need ripgrep
@@ -1309,7 +1309,7 @@ def repo_map_is_char_bounded():
             sub = os.path.join(d, f"pkg{i}")
             os.makedirs(sub)
             for j in range(30):
-                open(os.path.join(sub, f"module_with_a_longish_name_{j}.py"), "w").write("x=1\n")
+                open(os.path.join(sub, f"module_with_a_longish_name_{j}.py"), "w", encoding="utf-8").write("x=1\n")
         out = repo_map(d, max_chars=4000)
         assert len(out) <= 4000 + 120, f"map must honor the char ceiling, got {len(out)}"
         assert "over map budget" in out, "truncated map should say how to drill in"
@@ -1354,8 +1354,8 @@ def glob_finds_directories_not_just_files():
     from sliceagent.tools import LocalToolHost
     d = tempfile.mkdtemp(prefix="glob-")
     os.makedirs(os.path.join(d, "sub", "hunter"))          # a nested project folder
-    open(os.path.join(d, "sub", "hunter", "main.py"), "w").write("x=1\n")  # its files aren't named *hunter*
-    open(os.path.join(d, "notes.txt"), "w").write("hi\n")
+    open(os.path.join(d, "sub", "hunter", "main.py"), "w", encoding="utf-8").write("x=1\n")  # its files aren't named *hunter*
+    open(os.path.join(d, "notes.txt"), "w", encoding="utf-8").write("hi\n")
     out = make_glob_tool(LocalToolHost(root=d)).handler({"pattern": "*hunter*"})
     out = getattr(out, "text", out)                        # ToolText or str
     assert "hunter/" in out, f"glob must return the hunter/ directory, got: {out!r}"
@@ -1414,7 +1414,7 @@ def durable_log_redacts_secrets_in_NESTED_tool_args():
     secret = "sk-verylongsecretkey1234567890abcdefghij"
     tok = "ghp_1234567890abcdefghijklmnopqrstuvwx"
     sink(ToolResult("mcp_call", {"config": {"api_key": secret}, "items": [tok]}, "ok", False))
-    body = open(path).read()
+    body = open(path, encoding="utf-8").read()
     assert secret not in body, "a secret in a NESTED dict arg must be redacted before the durable log"
     assert tok not in body, "a secret in a NESTED list arg must be redacted too"
 

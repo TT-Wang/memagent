@@ -42,9 +42,9 @@ def shell_path_grant_skips_secret_dirs():  # #31
     base = tempfile.mkdtemp(dir=home, prefix=".sliceagent-sectest-")
     try:
         secret = os.path.join(base, ".aws"); os.makedirs(secret)
-        open(os.path.join(secret, "credentials"), "w").write("x")
+        open(os.path.join(secret, "credentials"), "w", encoding="utf-8").write("x")
         normal = os.path.join(base, "data"); os.makedirs(normal)
-        open(os.path.join(normal, "f.txt"), "w").write("x")
+        open(os.path.join(normal, "f.txt"), "w", encoding="utf-8").write("x")
         host = LocalToolHost(tempfile.mkdtemp(prefix="ws-"))
         host._grant_shell_paths(f"cat '{secret}/credentials' '{normal}/f.txt'")
         roots = [os.path.realpath(r) for r in host._extra_roots]

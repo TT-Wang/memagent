@@ -51,7 +51,7 @@ def tools_registered():
 @check
 def start_poll_tail_kill():
     wd, h = _host()
-    open(os.path.join(wd, "counter.py"), "w").write(
+    open(os.path.join(wd, "counter.py"), "w", encoding="utf-8").write(
         "import time\nfor i in range(500):\n    print('tick', i, flush=True)\n    time.sleep(0.02)\n")
     msg = h.run("proc_start", {"command": f"{PY} counter.py"})
     assert "p1" in msg, msg
@@ -66,7 +66,7 @@ def start_poll_tail_kill():
 @check
 def wait_short_then_done():
     wd, h = _host()
-    open(os.path.join(wd, "sleeper.py"), "w").write(
+    open(os.path.join(wd, "sleeper.py"), "w", encoding="utf-8").write(
         "import time\ntime.sleep(0.5)\nprint('DONE', flush=True)\n")
     h.run("proc_start", {"command": f"{PY} sleeper.py"})
     early = h.run("proc_wait", {"handle": "p1", "timeout": 0.1})
@@ -98,7 +98,7 @@ def poll_does_not_equate_leader_exit_with_group_extinction():
 def server_start_probe_kill():
     """The canonical 'start a server, keep it alive, probe it' flow — impossible with one-shot run."""
     wd, h = _host()
-    open(os.path.join(wd, "hello.txt"), "w").write("OK")
+    open(os.path.join(wd, "hello.txt"), "w", encoding="utf-8").write("OK")
     # Pick a free port up front, then probe the LIVE HTTP ENDPOINT — not the server's stdout banner. Some CI
     # sandboxes (GitHub's macOS runner) don't surface a background process's stdout to proc_tail, so depending
     # on captured output is flaky; the served file is the real source of truth that the process is alive.
@@ -142,7 +142,7 @@ def unknown_handle_errors():
 @check
 def cleanup_kills_all():
     wd, h = _host()
-    open(os.path.join(wd, "s.py"), "w").write("import time\ntime.sleep(60)\n")
+    open(os.path.join(wd, "s.py"), "w", encoding="utf-8").write("import time\ntime.sleep(60)\n")
     h.run("proc_start", {"command": f"{PY} s.py"})
     h.run("proc_start", {"command": f"{PY} s.py"})
     assert "running" in h.run("proc_poll", {"handle": "p1"})
@@ -162,7 +162,7 @@ def a_deadline_hit_is_adopted_not_reaped_and_progress_survives():
     handle (never "reaped", never a failure verdict), and the process finishes on its own with its
     full output in the proc log."""
     wd, h = _host()
-    open(os.path.join(wd, "slow.py"), "w").write(
+    open(os.path.join(wd, "slow.py"), "w", encoding="utf-8").write(
         "import time\nprint('phase-1', flush=True)\ntime.sleep(3)\nprint('phase-2-done', flush=True)\n")
     out = h.run("run_command", {"command": f"{PY} slow.py", "timeout": 1})
     text = str(out)
@@ -179,7 +179,7 @@ def a_deadline_hit_is_adopted_not_reaped_and_progress_survives():
 @check
 def an_adopted_process_can_be_followed_and_killed_like_any_proc():
     wd, h = _host()
-    open(os.path.join(wd, "s.py"), "w").write("import time\ntime.sleep(30)\n")
+    open(os.path.join(wd, "s.py"), "w", encoding="utf-8").write("import time\ntime.sleep(30)\n")
     out = h.run("run_command", {"command": f"{PY} s.py", "timeout": 1})
     handle = re.search(r"background as (p\d+)", str(out)).group(1)
     assert "running" in h.run("proc_poll", {"handle": handle})
@@ -194,7 +194,7 @@ def the_oracle_and_plain_shell_timeouts_keep_the_bounded_reap():
     (a verify has no business continuing in the background), and the sandbox without the hook
     reaps exactly as before."""
     wd, h = _host()
-    open(os.path.join(wd, "s.py"), "w").write("import time\ntime.sleep(30)\n")
+    open(os.path.join(wd, "s.py"), "w", encoding="utf-8").write("import time\ntime.sleep(30)\n")
     from sliceagent.oracle import CommandOracle
     from sliceagent.execution import ToolStatus
     result = CommandOracle(f"{PY} s.py", timeout=1, root=wd).verify()
@@ -212,7 +212,7 @@ def adoption_is_gated_on_proc_tools_being_registered():
     must not fire, the text must not name unregistered tools, and the process takes the bounded
     reap instead."""
     wd, h = _host()
-    open(os.path.join(wd, "s.py"), "w").write("import time\ntime.sleep(30)\n")
+    open(os.path.join(wd, "s.py"), "w", encoding="utf-8").write("import time\ntime.sleep(30)\n")
     for name in tuple(h.registry._tools):
         if name.startswith(("proc_", "terminal_")):
             h.registry.deregister(name)
@@ -224,7 +224,7 @@ def adoption_is_gated_on_proc_tools_being_registered():
     assert getattr(out.status, "value", out.status) == "failed", out.status
     # and with the family present (a stock host) adoption still fires and names it
     _, h2 = _host()
-    open(os.path.join(h2.root(), "s.py"), "w").write("import time\ntime.sleep(30)\n")
+    open(os.path.join(h2.root(), "s.py"), "w", encoding="utf-8").write("import time\ntime.sleep(30)\n")
     out2 = h2.run("run_command", {"command": f"{PY} s.py", "timeout": 1})
     assert "was NOT killed" in str(out2)
     h2.run("proc_kill", {"handle": re.search(r"background as (p\d+)", str(out2)).group(1)})
@@ -245,7 +245,7 @@ def timeout_escalation_text_is_composed_from_the_registered_tools():
 @check
 def timeout_result_carries_the_escalation():
     wd, h = _host()
-    open(os.path.join(wd, "slow.py"), "w").write("import time\ntime.sleep(30)\n")
+    open(os.path.join(wd, "slow.py"), "w", encoding="utf-8").write("import time\ntime.sleep(30)\n")
     # run_command: the deadline now DETACHES instead of killing — the escalation made automatic.
     out = h.run("run_command", {"command": f"{PY} slow.py", "timeout": 1})
     text = str(out)
@@ -274,7 +274,7 @@ def execute_code_honours_a_raised_deadline():
     wd, h = _host()
     code = "import time\ntime.sleep(2)\nwrite_file('done.txt', 'ok')\nprint('finished')"
     assert "finished" in h.run("execute_code", {"code": code, "timeout": 60})
-    assert open(os.path.join(wd, "done.txt")).read() == "ok"
+    assert open(os.path.join(wd, "done.txt"), encoding="utf-8").read() == "ok"
     # …and the ceiling still holds: no caller can ask for an unbounded blocking call.
     assert h._call_timeout(10**9) == 600.0 and h._call_timeout("nonsense") == float(h.timeout)
 
@@ -317,7 +317,7 @@ def proc_wait_reports_byte_evidence_liveness():
     process's log growing (~1/s beats) — a frozen counter names a stall instead of looking like
     a crash (the review's Family H at the proc_wait site)."""
     wd, h = _host()
-    open(os.path.join(wd, "chatter.py"), "w").write(
+    open(os.path.join(wd, "chatter.py"), "w", encoding="utf-8").write(
         "import time\nprint('x' * 2000, flush=True)\ntime.sleep(2)\n")
     h.run("proc_start", {"command": f"{PY} chatter.py"})
     beats = []
@@ -348,6 +348,8 @@ def sigterm_runs_the_same_cleanup_as_atexit_then_exits_128_plus_signal():
     orphaned every background process — and the only escape from a wedged turn IS a signal, so this
     leak fires on the common path. The handler runs the host's atexit cleanup (procs killed, logs
     removed), then exits 128+signum (Kimi Code's 130/143 shape)."""
+    if os.name != "posix":
+        return
     import subprocess
     import sys as _sys
     wd, _ = _host()
@@ -368,13 +370,13 @@ def sigterm_runs_the_same_cleanup_as_atexit_then_exits_128_plus_signal():
                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     try:
         assert p.stdout.readline().strip() == "READY", "child never started"
-        child_pid = int(open(pidfile).read())
-        os.kill(child_pid, 0)                    # the background proc is alive pre-signal
+        child_pid = int(open(pidfile, encoding="utf-8").read())
+        os.kill(child_pid, 0)  # windows-footgun: ok -- function is POSIX-gated
         p.send_signal(15)                        # SIGTERM
         rc = p.wait(timeout=15)
         assert rc == 143, f"expected 128+SIGTERM, got {rc}"
         try:
-            os.kill(child_pid, 0)
+            os.kill(child_pid, 0)  # windows-footgun: ok -- function is POSIX-gated
             alive = True
         except OSError:
             alive = False

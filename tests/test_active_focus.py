@@ -48,7 +48,7 @@ def grant_shell_paths_sets_focus_and_file_reach():
         assert focus == os.path.realpath(proj), (focus, proj)
         assert os.path.realpath(proj) in host.allowed_roots(), "reach must follow the shell"
         # the file tools can now read inside the focus (the reach the slice now advertises)
-        open(os.path.join(proj, "index.ts"), "w").write("export const x = 1\n")
+        open(os.path.join(proj, "index.ts"), "w", encoding="utf-8").write("export const x = 1\n")
         assert "export const x" in host._t_read_file({"path": os.path.join(proj, "index.ts")})
     finally:
         shutil.rmtree(ws, ignore_errors=True); shutil.rmtree(proj, ignore_errors=True)
@@ -145,7 +145,7 @@ def open_files_stay_truthful_after_the_project_moves():
     ws, proj = _home_dirs()
     try:
         host = LocalToolHost(root=ws)
-        open(os.path.join(ws, "core.py"), "w").write("print('in ws')\n")
+        open(os.path.join(ws, "core.py"), "w", encoding="utf-8").write("print('in ws')\n")
         s = Slice(); s.reset("t"); touch_file(s, "core.py")        # pinned by relative name, base = ws
         host._grant_shell_paths(f"ls {proj}")                       # current project moves to proj
         out = build_artifacts(s, host)

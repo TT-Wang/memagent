@@ -183,7 +183,7 @@ def file_sink_persists_snapshot():
     sink.writer.drain()                          # MON2: disk I/O is async — wait for it to land
     p = os.path.join(d, "sess-A.json")
     assert os.path.exists(p)
-    snap = json.load(open(p))
+    snap = json.load(open(p, encoding="utf-8"))
     assert snap["session"] == "sess-A" and snap["steps"][0]["user"] == "USER-SLICE"
     assert [s for s, _ in _session_files(d)] == ["sess-A"]
     if os.name != "nt":
@@ -323,7 +323,7 @@ def file_write_is_off_the_hot_path_and_flushes():
         sink(sb("S", f"u{k}"))
     sink(StepEnd(1, {"prompt_tokens": 5, "completion_tokens": 5}, "end_turn"))
     assert sink.writer.drain() is True
-    snap = json.load(open(os.path.join(d, "sess-w.json")))
+    snap = json.load(open(os.path.join(d, "sess-w.json"), encoding="utf-8"))
     assert snap["session"] == "sess-w"
     assert snap["steps_total"] == 30                     # full count even though writes coalesced
     assert snap["steps"][-1]["user"] == "u29"           # freshest slice is what's served
@@ -339,7 +339,7 @@ def file_snapshot_ring_is_bounded_on_disk():
     for k in range(_RING_CAP + 25):
         sink(sb("S", f"u{k}"))
     sink(StepEnd(1, {}, "end_turn")); sink.writer.drain()
-    snap = json.load(open(os.path.join(d, "sess-big.json")))
+    snap = json.load(open(os.path.join(d, "sess-big.json"), encoding="utf-8"))
     assert len(snap["steps"]) == _RING_CAP              # bounded on disk
     assert snap["steps_total"] == _RING_CAP + 25       # but the counter is honest
 
@@ -352,7 +352,7 @@ def prune_drops_stale_keeps_newest():
     from sliceagent.monitor import _prune_sessions
     d = tempfile.mkdtemp()
     for sid in ("old-a", "old-b", "fresh"):
-        with open(os.path.join(d, f"{sid}.json"), "w") as f:
+        with open(os.path.join(d, f"{sid}.json"), "w", encoding="utf-8") as f:
             json.dump({"steps": []}, f)
     old = _t.time() - (48 * 3600)                        # 2 days old → past the 24h TTL
     os.utime(os.path.join(d, "old-a.json"), (old, old))
@@ -373,7 +373,7 @@ def prune_keeps_freshest_even_when_all_stale():
     d = tempfile.mkdtemp()
     for i, sid in enumerate(("s0", "s1", "s2")):
         p = os.path.join(d, f"{sid}.json")
-        with open(p, "w") as f:
+        with open(p, "w", encoding="utf-8") as f:
             json.dump({"steps": []}, f)
         old = _t.time() - (48 * 3600) - i               # all stale; s0 most recent
         os.utime(p, (old, old))
@@ -390,7 +390,7 @@ def prune_caps_to_most_recent_m():
     d = tempfile.mkdtemp()
     for i in range(6):
         p = os.path.join(d, f"s{i}.json")
-        with open(p, "w") as f:
+        with open(p, "w", encoding="utf-8") as f:
             json.dump({"steps": []}, f)
         t = _t.time() - i                                # s0 newest … s5 oldest, all within TTL
         os.utime(p, (t, t))

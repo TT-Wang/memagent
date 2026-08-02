@@ -3,7 +3,7 @@
 Keeps the user-facing config reference in lockstep with the code: every env var sliceagent reads is registered
 in envspec (a startup test enforces this), so this doc can never silently drift. Secrets are redacted.
 
-Run: PYTHONPATH=src python scripts/gen_config_reference.py
+Run: python scripts/gen_config_reference.py
 """
 from __future__ import annotations
 
@@ -11,7 +11,12 @@ import os
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(ROOT, "src"))
+_REPO_PATHS = (
+    os.path.join(ROOT, "packages", "sliceagent-core", "src"),
+    os.path.join(ROOT, "packages", "sliceagent-cli", "src"),
+    os.path.join(ROOT, "src"),
+)
+sys.path[:0] = list(_REPO_PATHS)
 
 from sliceagent import envspec  # noqa: E402
 

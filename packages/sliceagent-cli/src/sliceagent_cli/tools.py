@@ -12,6 +12,7 @@ from sliceagent_core.active_work import (
     build_work_delta as build_work_delta,
 )
 from sliceagent_core.execution import ToolStatus
+from sliceagent_core.registry_types import ToolEntry as ToolEntry
 from sliceagent_core.tool_host import (
     NOTE_PROP as NOTE_PROP,
     function_schema as _fn,

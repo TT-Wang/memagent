@@ -14,7 +14,11 @@ import re
 import sys
 from pathlib import Path
 
-TESTS_DIR = Path(__file__).resolve().parent.parent / "tests"
+REPO_ROOT = Path(__file__).resolve().parent.parent
+TEST_ROOTS = (
+    REPO_ROOT / "tests",
+    *sorted((REPO_ROOT / "packages").glob("*/tests")),
+)
 
 # Shapes that register a test when the module body reaches them: the @check decorator pattern
 # and bare pytest-style test definitions.
@@ -32,14 +36,15 @@ def violations(path: Path) -> list[str]:
 
 def main() -> int:
     found = []
-    for path in sorted(TESTS_DIR.glob("test_*.py")):
+    paths = sorted(path for root in TEST_ROOTS for path in root.glob("test_*.py"))
+    for path in paths:
         found.extend(violations(path))
     for line in found:
         print(f"DEAD TEST: {line}")
     if found:
         print(f"{len(found)} registrable definition(s) below a runner block — they never execute")
         return 1
-    print("test registration: clean")
+    print(f"test registration: clean ({len(paths)} files across root + package tests)")
     return 0
 
 

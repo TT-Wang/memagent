@@ -2991,18 +2991,18 @@ def a_whole_file_overwrite_is_refused_when_the_file_changed_since_the_read():
 
     root = tempfile.mkdtemp(prefix="stale-write-")
     path = os.path.join(root, "calc.py")
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         f.write("def add(a, b):\n    return a + b\n")
     host = LocalToolHost(root=root)
     host.run("read_file", {"path": "calc.py"})
     # the human saves a new function in the read→write window
-    with open(path, "a") as f:
+    with open(path, "a", encoding="utf-8") as f:
         f.write("\n\ndef human_save():\n    return 61\n")
     out = host.run("edit_file", {"path": "calc.py",
                                  "content": "def add(a, b):\n    return a + b\n\n\ndef sub(a, b):\n    return a - b\n"})
     assert out.status == ToolStatus.STEERED, out.status
     assert "changed on disk" in str(out) and "/undo" in str(out)
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         assert "human_save" in f.read(), "the human's save must survive the refused write"
     # the prescribed retry — re-read, then the edit lands
     host.run("read_file", {"path": "calc.py"})
@@ -3027,7 +3027,7 @@ def the_agents_own_str_replace_and_append_do_not_poison_the_staleness_mark():
 
     root = tempfile.mkdtemp(prefix="self-mark-")
     path = os.path.join(root, "ops.py")
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         f.write("a = 1\nb = 2\n")
     host = LocalToolHost(root=root)
     host.run("read_file", {"path": "ops.py"})
@@ -3043,7 +3043,7 @@ def the_agents_own_str_replace_and_append_do_not_poison_the_staleness_mark():
     assert "Wrote" in str(out), f"the agent's own append poisoned the mark: {str(out)[:200]}"
     # and the guard still catches a REAL external change
     host.run("read_file", {"path": "ops.py"})
-    with open(path, "a") as f:
+    with open(path, "a", encoding="utf-8") as f:
         f.write("e = 6\n")
     out = host.run("edit_file", {"path": "ops.py", "content": "# clobber\n"})
     assert out.status == ToolStatus.STEERED, "an external change must still be refused"
@@ -3061,7 +3061,7 @@ def the_streaming_view_counts_a_final_line_without_a_trailing_newline():
     root = tempfile.mkdtemp(prefix="huge-view-")
     path = os.path.join(root, "dump.jsonl")
     n_filler = (_READ_SLURP_CAP + 4096) // 1025 + 1   # each filler line is exactly 1025 bytes
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         for _ in range(n_filler):
             f.write("x" * 1024 + "\n")
         f.write("LAST-LINE-NO-NEWLINE")               # final line, NO trailing newline
@@ -3071,7 +3071,7 @@ def the_streaming_view_counts_a_final_line_without_a_trailing_newline():
     assert "LAST-LINE-NO-NEWLINE" in out, "the final newline-less line was dropped from the view"
     assert f"of {total} " in out, f"the footer total is one short: {out[-200:]!r}"
     # the degenerate case: ONE giant line, no newlines at all — the whole file is the last line
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         f.write('{"blob": "' + "y" * (_READ_SLURP_CAP + 100) + '"}')
     out = str(host.run("read_file", {"path": "dump.jsonl", "limit": 1}))
     assert "of 1 " in out, f"a single-line blob must count as one line: {out[-160:]!r}"
@@ -3093,7 +3093,7 @@ def read_file_refuses_a_fifo_instead_of_wedging_the_turn():
     assert time.monotonic() - start < 5, "a FIFO read must fail fast, never block"
     assert out.status == ToolStatus.STEERED and "FIFO" in str(out), str(out)[:160]
     # and regular files still read fine
-    with open(os.path.join(root, "a.py"), "w") as f:
+    with open(os.path.join(root, "a.py"), "w", encoding="utf-8") as f:
         f.write("x = 1\n")
     assert "x = 1" in host.run("read_file", {"path": "a.py"})
 
@@ -3108,7 +3108,7 @@ def a_huge_file_is_viewed_with_bounded_memory_and_the_same_contract():
     root = tempfile.mkdtemp(prefix="huge-view-")
     path = os.path.join(root, "big.log")
     n_lines = (_READ_SLURP_CAP // 10) + 5000   # ~10 bytes per line, comfortably over the cap
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         for i in range(1, n_lines + 1):
             f.write(f"line-{i:08d}\n")
     host = LocalToolHost(root=root)
@@ -3146,7 +3146,7 @@ def non_recursive_list_files_is_capped_like_the_recursive_branch():
 
     root = tempfile.mkdtemp(prefix="list-cap-")
     for i in range(_LIST_CAP + 50):
-        open(os.path.join(root, f"f{i:04d}.txt"), "w").close()
+        open(os.path.join(root, f"f{i:04d}.txt"), "w", encoding="utf-8").close()
     host = LocalToolHost(root=root)
     out = str(host.run("list_files", {"path": "."}))
     assert f"capped at {_LIST_CAP}" in out, out[-200:]

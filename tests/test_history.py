@@ -267,7 +267,7 @@ def host_real_file_wins_over_virtual_history():
     from sliceagent.tools import LocalToolHost
     d = tempfile.mkdtemp()
     os.makedirs(os.path.join(d, "history"), exist_ok=True)
-    with open(os.path.join(d, "history", "real.md"), "w") as f:
+    with open(os.path.join(d, "history", "real.md"), "w", encoding="utf-8") as f:
         f.write("REAL ON DISK CONTENT")
     host = LocalToolHost(root=d)
     from sliceagent.hippocampus import HistoryFS

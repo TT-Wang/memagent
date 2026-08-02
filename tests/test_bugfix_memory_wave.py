@@ -61,9 +61,9 @@ def frontmatter_newline_round_trips():  # #37
 def write_atomic_replaces_and_keeps_original_on_failure():  # #39
     p = os.path.join(tempfile.mkdtemp(prefix="aw-"), "f.txt")
     _write_atomic(p, "v1")
-    assert open(p).read() == "v1"
+    assert open(p, encoding="utf-8").read() == "v1"
     _write_atomic(p, "v2")
-    assert open(p).read() == "v2"   # replaced atomically
+    assert open(p, encoding="utf-8").read() == "v2"   # replaced atomically
     # no stray temp files left behind in the dir
     assert os.listdir(os.path.dirname(p)) == ["f.txt"]
 

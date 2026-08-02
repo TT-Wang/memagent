@@ -3,8 +3,7 @@
 Kept so existing CLI modules, integrations, tests, and downstream imports continue to
 resolve during the modular migration. Deleted when callers move to the new name.
 """
-import sys as _sys
 
-import sliceagent_cli.tools as _impl
+from ._compat import alias_module as _alias_module
 
-_sys.modules[__name__] = _impl
+_alias_module(__name__, __spec__, "sliceagent_cli.tools")

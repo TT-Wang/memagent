@@ -86,7 +86,7 @@ def interactive_first_run_auto_starts_the_wizard():
         return   # no pty on this host — skip
     p = subprocess.Popen([sys.executable, "-c", "from sliceagent.cli import main; main()"],
                          cwd=_ROOT, env=_no_key_env(), stdin=s, stdout=s, stderr=s,
-                         start_new_session=True)
+                         start_new_session=True)  # windows-footgun: ok -- guarded by pty import
     os.close(s)
     buf = bytearray()
     deadline = time.monotonic() + 30
@@ -100,7 +100,7 @@ def interactive_first_run_auto_starts_the_wizard():
         if p.poll() is not None:
             break
     try:
-        os.killpg(p.pid, signal.SIGKILL)   # wizard reached (or not) — tear the child down either way
+        os.killpg(p.pid, signal.SIGKILL)  # windows-footgun: ok -- guarded by pty import
     except (ProcessLookupError, PermissionError):
         pass
     p.wait()

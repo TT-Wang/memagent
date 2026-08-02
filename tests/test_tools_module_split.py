@@ -16,6 +16,14 @@ def test_cli_memory_consumer_uses_the_cli_tools_constant():
     assert neocortex.HOST_ERROR_SENTINELS is tools.HOST_ERROR_SENTINELS
 
 
+def test_legacy_tools_reexports_the_canonical_tool_entry():
+    from sliceagent.tools import ToolEntry as LegacyToolEntry
+    from sliceagent_cli.tools import ToolEntry as CliToolEntry
+    from sliceagent_core.registry_types import ToolEntry
+
+    assert LegacyToolEntry is CliToolEntry is ToolEntry
+
+
 def test_core_tool_host_owns_the_protocol_and_schema_utilities():
     from sliceagent_core import interfaces
     from sliceagent_core import tool_host

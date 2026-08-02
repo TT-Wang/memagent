@@ -141,7 +141,7 @@ def exception_wraps_original_and_status():
 @check
 def never_imports_openai():
     import sliceagent.context_overflow as mod
-    src = open(mod.__file__).read()
+    src = open(mod.__file__, encoding="utf-8").read()
     assert "import openai" not in src and "from openai" not in src
 
 

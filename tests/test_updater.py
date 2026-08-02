@@ -170,7 +170,7 @@ def editable_and_direct_installs_are_never_replaced_with_pypi():
 def alternative_managers_receive_exact_guidance_without_mutation():
     cases = []
     pipx_prefix = tempfile.mkdtemp(prefix="updater-pipx-")
-    open(os.path.join(pipx_prefix, "pipx_metadata.json"), "w").close()
+    open(os.path.join(pipx_prefix, "pipx_metadata.json"), "w", encoding="utf-8").close()
     cases.append((pipx_prefix, _Dist(installer="pip"), "pipx upgrade sliceagent"))
     cases.append((tempfile.mkdtemp(), _Dist(installer="pip"), "-m pip install --upgrade"))
     cases.append((tempfile.mkdtemp(), _Dist(installer="uv"), "uv pip install --python"))

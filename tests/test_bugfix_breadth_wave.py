@@ -52,7 +52,7 @@ def agent_frontmatter_accepts_yaml_list():  # #58
                         ("tools: read_file, grep", "comma"),
                         ('tools: ["read_file", grep]', "quoted")):
         p = os.path.join(d, f"a_{label}.md")
-        with open(p, "w") as f:
+        with open(p, "w", encoding="utf-8") as f:
             f.write(f"---\nname: ex\ndescription: x\n{body}\n---\nyou are ex\n")
         spec = _parse_agent_md(p)
         assert spec.tools == ("read_file", "grep"), (label, spec.tools)

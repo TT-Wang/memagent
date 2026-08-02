@@ -56,9 +56,9 @@ def code_review_returns_the_diff():
     _git(wd, "init", "-q")
     _git(wd, "config", "user.email", "t@t.dev")
     _git(wd, "config", "user.name", "t")
-    open(os.path.join(wd, "f.py"), "w").write("a = 1\n")
+    open(os.path.join(wd, "f.py"), "w", encoding="utf-8").write("a = 1\n")
     _git(wd, "add", "-A"); _git(wd, "commit", "-qm", "init")
-    open(os.path.join(wd, "f.py"), "w").write("a = 2\n")            # modify after commit
+    open(os.path.join(wd, "f.py"), "w", encoding="utf-8").write("a = 2\n")            # modify after commit
     host = LocalToolHost(root=wd)
     out = host._t_code_review({"ref": "HEAD"})
     assert "f.py" in out and "+a = 2" in out, out
@@ -75,9 +75,9 @@ def code_review_inventory_does_not_hide_untracked_files():
     _git(wd, "init", "-q")
     _git(wd, "config", "user.email", "t@t.dev")
     _git(wd, "config", "user.name", "t")
-    open(os.path.join(wd, "tracked.py"), "w").write("x = 1\n")
+    open(os.path.join(wd, "tracked.py"), "w", encoding="utf-8").write("x = 1\n")
     _git(wd, "add", "-A"); _git(wd, "commit", "-qm", "init")
-    open(os.path.join(wd, "new.py"), "w").write("created = True\n")
+    open(os.path.join(wd, "new.py"), "w", encoding="utf-8").write("created = True\n")
     out = LocalToolHost(root=wd)._t_code_review({"ref": "HEAD"})
     assert out.startswith("[code review: tracked + untracked inventory]")
     assert "?? new.py" in out and "no untracked files exist" not in out.lower(), out
@@ -91,12 +91,12 @@ def code_review_inventory_does_not_hide_ignored_late_effects():
     _git(wd, "init", "-q")
     _git(wd, "config", "user.email", "t@t.dev")
     _git(wd, "config", "user.name", "t")
-    open(os.path.join(wd, ".gitignore"), "w").write("build/\n*.late\n")
-    open(os.path.join(wd, "tracked.py"), "w").write("x = 1\n")
+    open(os.path.join(wd, ".gitignore"), "w", encoding="utf-8").write("build/\n*.late\n")
+    open(os.path.join(wd, "tracked.py"), "w", encoding="utf-8").write("x = 1\n")
     _git(wd, "add", "-A"); _git(wd, "commit", "-qm", "init")
     os.makedirs(os.path.join(wd, "build", "nested"))
     open(os.path.join(wd, "build", "nested", "result.bin"), "wb").write(b"late")
-    open(os.path.join(wd, "effect.late"), "w").write("landed")
+    open(os.path.join(wd, "effect.late"), "w", encoding="utf-8").write("landed")
     out = LocalToolHost(root=wd)._t_code_review({"ref": "HEAD", "include_ignored": True})
     assert out.startswith("[workspace observation: tracked + untracked + ignored inventory complete]")
     assert "!! effect.late" in out and "!! build/nested/result.bin" in out, out

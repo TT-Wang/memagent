@@ -1,5 +1,6 @@
 """P5b compat shim — moved to sliceagent_cli.agents. Old package is now a pure
 compatibility umbrella (shims + the loop facade); deleted when external callers migrate."""
-import sys as _sys
-import sliceagent_cli.agents as _impl
-_sys.modules[__name__] = _impl
+
+from ._compat import alias_module as _alias_module
+
+_alias_module(__name__, __spec__, "sliceagent_cli.agents")

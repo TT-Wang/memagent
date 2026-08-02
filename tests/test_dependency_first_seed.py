@@ -40,7 +40,7 @@ def state_with_graph():
 
 
 def test_active_work_without_dependencies_does_not_eagerly_fetch_global_context(tmp_path):
-    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\nversion='0'\n")
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\nversion='0'\n", encoding="utf-8")
     state = state_with_graph()
     retriever, memory = Retriever(), Memory()
     seed = make_build_slice(
@@ -55,9 +55,9 @@ def test_active_work_without_dependencies_does_not_eagerly_fetch_global_context(
 
 
 def test_typed_file_dependency_faults_in_only_that_live_resource(tmp_path):
-    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\nversion='0'\n")
-    (tmp_path / "target.py").write_text("VALUE = 7\n")
-    (tmp_path / "noise.py").write_text("NOISE = 99\n")
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\nversion='0'\n", encoding="utf-8")
+    (tmp_path / "target.py").write_text("VALUE = 7\n", encoding="utf-8")
+    (tmp_path / "noise.py").write_text("NOISE = 99\n", encoding="utf-8")
     state = state_with_graph()
     root = state.active_work.request_roots[0]
     child = WorkItem(

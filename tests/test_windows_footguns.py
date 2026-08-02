@@ -1,8 +1,10 @@
 """Windows-footgun lint gate + platform_compat POSIX-identity checks.
 
-Two guarantees: (1) scripts/check_windows_footguns.py stays clean, so the Unix-only bug CLASS
+Three guarantees: (1) scripts/check_windows_footguns.py scans the real package/source/test trees,
+(2) a planted violation makes that gate fail, so a green result cannot be vacuous, and
+(3) the Unix-only bug CLASS
 (cp1252 open, os.kill(pid,0), bare killpg/setsid, signal.SIGKILL, stray shell=True) can't creep
-back in; (2) on POSIX, platform_compat's helpers return EXACTLY what the call sites inlined before
+back in; on POSIX, platform_compat's helpers return EXACTLY what the call sites inlined before
 the seam existed — the zero-Linux/macOS-impact contract, pinned as a test.
 No model. Run: PYTHONPATH=src python tests/test_windows_footguns.py
 """
@@ -10,6 +12,8 @@ import os
 import signal
 import subprocess
 import sys
+import tempfile
+from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
@@ -24,6 +28,18 @@ def footgun_lint_is_clean():
     script = os.path.join(os.path.dirname(__file__), "..", "scripts", "check_windows_footguns.py")
     r = subprocess.run([sys.executable, script], capture_output=True, text=True)
     assert r.returncode == 0, f"footgun lint found violations:\n{r.stdout}"
+    assert "Python files" in r.stdout and "no Python files" not in r.stdout, r.stdout
+
+
+@check
+def footgun_lint_rejects_a_planted_package_violation():
+    script = Path(__file__).resolve().parent.parent / "scripts" / "check_windows_footguns.py"
+    with tempfile.TemporaryDirectory() as td:
+        bad = Path(td) / "bad.py"
+        bad.write_text("op" + 'en("payload.txt").read()\n', encoding="utf-8")
+        r = subprocess.run([sys.executable, str(script), td], capture_output=True, text=True)
+    assert r.returncode == 1, r.stdout
+    assert "bad.py:1" in r.stdout and "open() without encoding" in r.stdout, r.stdout
 
 
 @check
@@ -40,7 +56,7 @@ def posix_group_kwargs_identical():
     if pc.IS_WINDOWS:
         return
     assert pc.popen_group_kwargs() == {"start_new_session": True}
-    assert pc.SIG_KILL == signal.SIGKILL
+    assert pc.SIG_KILL == signal.SIGKILL  # windows-footgun: ok -- guarded above
 
 
 @check
@@ -49,7 +65,9 @@ def posix_kill_tree_kills_whole_group():
     from sliceagent import platform_compat as pc
     if pc.IS_WINDOWS:
         return
-    p = subprocess.Popen("sleep 30 & wait", shell=True, start_new_session=True)
+    p = subprocess.Popen(  # windows-footgun: ok -- guarded above
+        "sleep 30 & wait", shell=True, start_new_session=True  # windows-footgun: ok -- guarded
+    )
     pc.kill_tree(p, pc.SIG_KILL)
     try:
         p.wait(timeout=5)

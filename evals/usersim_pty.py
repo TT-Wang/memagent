@@ -15,7 +15,7 @@ Run:
   set -a; source .env; set +a
   export LLM_API_KEY="$DEEPSEEK_API_KEY" LLM_BASE_URL="https://api.deepseek.com/v1" \
          AGENT_MODEL=deepseek-chat AGENT_PROXY=off
-  PYTHONPATH=src python evals/usersim_pty.py [persona-name]
+  python evals/usersim_pty.py [persona-name]
 """
 from __future__ import annotations
 
@@ -28,7 +28,13 @@ import subprocess
 import sys
 import time
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_REPO_PATHS = (
+    os.path.join(_REPO, "packages", "sliceagent-core", "src"),
+    os.path.join(_REPO, "packages", "sliceagent-cli", "src"),
+    os.path.join(_REPO, "src"),
+)
+sys.path[:0] = list(_REPO_PATHS)
 sys.path.insert(0, os.path.dirname(__file__))
 
 from sliceagent.llm import OpenAILLM                          # noqa: E402
@@ -52,16 +58,16 @@ def _strip_prompt(s: str) -> str:
 
 
 # ── PTY-driven sliceagent ───────────────────────────────────────────────────────────────────────
-_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-
 class PtyAgent:
     def __init__(self, root: str, env_extra: dict | None = None):
         self.master, slave = pty.openpty()
         # cwd is the FIXTURE workspace, so the interpreter + PYTHONPATH must be ABSOLUTE (repo-rooted).
         # PLAIN mode (AGENT_TUI=off) → clean line-based stdout the persona/judge can read (the rich TUI's
         # full-screen panels are unreadable over a pty). Still the real binary over a real pty.
-        env = {**os.environ, "PYTHONPATH": os.path.join(_REPO, "src"), "AGENT_TUI": "off",
+        repo_pythonpath = os.pathsep.join(_REPO_PATHS)
+        if os.environ.get("PYTHONPATH"):
+            repo_pythonpath += os.pathsep + os.environ["PYTHONPATH"]
+        env = {**os.environ, "PYTHONPATH": repo_pythonpath, "AGENT_TUI": "off",
                "TERM": "xterm-256color",
                "COLUMNS": "120", "LINES": "40",
                "HOME": root, "SLICEAGENT_CACHE_DIR": os.path.join(root, ".sliceagent"),  # sandbox ~ into fixture

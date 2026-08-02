@@ -152,7 +152,7 @@ def save_prefs_none_deletes_a_stale_pin():
         try:
             _cfgmod.save_prefs({"model": "a", "provider": "openrouter"})
             _cfgmod.save_prefs({"model": "b", "provider": None})       # typed /model → pin removed
-            got = json.load(open(os.path.join(tmp, "prefs.json")))
+            got = json.load(open(os.path.join(tmp, "prefs.json"), encoding="utf-8"))
             assert got.get("model") == "b" and "provider" not in got, f"stale pin survived: {got}"
             if os.name != "nt":
                 assert stat.S_IMODE(os.stat(tmp).st_mode) == 0o700
@@ -222,14 +222,14 @@ def config_save_backs_up_a_corrupt_config_instead_of_erasing_keys():
     from sliceagent.onboarding import _save_provider
     with tempfile.TemporaryDirectory() as d:
         p = os.path.join(d, "config.toml")
-        with open(p, "w") as f:
+        with open(p, "w", encoding="utf-8") as f:
             f.write('[providers.deepseek]\napi_key = "sk-PRECIOUS"\nmodel = "deepseek-chat"\n')
-        with open(p, "w") as f:
+        with open(p, "w", encoding="utf-8") as f:
             f.write('[providers.deepseek\napi_key = "sk-PRECIOUS"\n')   # one-char TOML typo
         bak = _save_provider(p, pid="openai", model="gpt-5.5", api_key="sk-new", base_url="")
         assert bak and os.path.exists(bak), "an unparseable config must be moved aside, not erased"
-        assert "sk-PRECIOUS" in open(bak).read(), "the old key must survive in the backup"
-        assert "sk-new" in open(p).read(), "the new provider must still be written"
+        assert "sk-PRECIOUS" in open(bak, encoding="utf-8").read(), "the old key must survive in the backup"
+        assert "sk-new" in open(p, encoding="utf-8").read(), "the new provider must still be written"
 
 
 @check
@@ -251,7 +251,7 @@ def config_show_tolerates_a_scalar_under_providers():
     from sliceagent.onboarding import run_config
     with tempfile.TemporaryDirectory() as d:
         cfgdir = os.path.join(d, ".sliceagent"); os.makedirs(cfgdir)
-        with open(os.path.join(cfgdir, "config.toml"), "w") as f:
+        with open(os.path.join(cfgdir, "config.toml"), "w", encoding="utf-8") as f:
             f.write('[providers]\nfoo = "bar"\n')               # scalar, not a table
         assert run_config([], home=d) == 0, "a scalar under [providers] must not crash `config`"
 

@@ -31,11 +31,11 @@ def _mk_repo() -> str:
     os.makedirs(os.path.join(wd, "pkg"))
     os.makedirs(os.path.join(wd, ".venv", "lib"))          # junk that MUST be pruned
     os.makedirs(os.path.join(wd, "__pycache__"))
-    open(os.path.join(wd, "pyproject.toml"), "w").write("[project]\nname='x'\n")
-    open(os.path.join(wd, "pkg", "core.py"), "w").write("def a():\n    return 1\n")
-    open(os.path.join(wd, "pkg", "util.py"), "w").write("def b():\n    return 2\n")
-    open(os.path.join(wd, ".venv", "lib", "junk.py"), "w").write("# noise\n")
-    open(os.path.join(wd, "__pycache__", "x.pyc"), "w").write("noise")
+    open(os.path.join(wd, "pyproject.toml"), "w", encoding="utf-8").write("[project]\nname='x'\n")
+    open(os.path.join(wd, "pkg", "core.py"), "w", encoding="utf-8").write("def a():\n    return 1\n")
+    open(os.path.join(wd, "pkg", "util.py"), "w", encoding="utf-8").write("def b():\n    return 2\n")
+    open(os.path.join(wd, ".venv", "lib", "junk.py"), "w", encoding="utf-8").write("# noise\n")
+    open(os.path.join(wd, "__pycache__", "x.pyc"), "w", encoding="utf-8").write("noise")
     _git(wd, "init"); _git(wd, "add", "-A"); _git(wd, "-c", "user.email=a@b.c", "-c", "user.name=t", "commit", "-m", "init")
     return wd
 
@@ -46,8 +46,8 @@ def worktree_clean_then_dirty():
     wd = _mk_repo()
     ws = git_worktree_state(wd)
     assert "working tree clean" in ws, ws
-    open(os.path.join(wd, "pkg", "core.py"), "a").write("# edit\n")     # make it dirty
-    open(os.path.join(wd, "new.py"), "w").write("x=1\n")               # untracked
+    open(os.path.join(wd, "pkg", "core.py"), "a", encoding="utf-8").write("# edit\n")     # make it dirty
+    open(os.path.join(wd, "new.py"), "w", encoding="utf-8").write("x=1\n")               # untracked
     ws2 = git_worktree_state(wd)
     assert "changed file" in ws2 and "modified: pkg/core.py" in ws2 and "untracked: new.py" in ws2, ws2
 
@@ -56,7 +56,7 @@ def worktree_clean_then_dirty():
 def worktree_bounded():
     wd = _mk_repo()
     for i in range(40):
-        open(os.path.join(wd, f"f{i}.py"), "w").write("x\n")
+        open(os.path.join(wd, f"f{i}.py"), "w", encoding="utf-8").write("x\n")
     ws = git_worktree_state(wd, max_files=20)
     assert "more" in ws and ws.count("\n") <= 23, f"not bounded: {ws.count(chr(10))} lines"
 
@@ -94,7 +94,7 @@ def _build(wd, goal="review the repo"):
 @check
 def slice_contains_repo_map_and_live_worktree():
     wd = _mk_repo()
-    open(os.path.join(wd, "pkg", "core.py"), "a").write("# edit\n")
+    open(os.path.join(wd, "pkg", "core.py"), "a", encoding="utf-8").write("# edit\n")
     _, build = _build(wd)
     msgs = build()
     system, user = msgs[0]["content"], msgs[1]["content"]
@@ -116,7 +116,7 @@ def bare_nonproject_dir_gets_no_repo_map():
     # the HOME-launch fix: cwd is NOT a project (no .git, no marker) → system-prompt-only, no REPO MAP
     # (which would otherwise os.walk the whole dir → the cold-start overflow on a simple "who are you").
     wd = tempfile.mkdtemp(prefix="home-")
-    open(os.path.join(wd, "notes.txt"), "w").write("hello\n")
+    open(os.path.join(wd, "notes.txt"), "w", encoding="utf-8").write("hello\n")
     _, build = _build(wd)
     system = build()[0]["content"]
     assert "# REPO MAP" not in system, "a non-project dir must not get a repo map"
@@ -128,7 +128,7 @@ def system_message_byte_stable_but_worktree_is_live():
     wd = _mk_repo()
     _, build = _build(wd)
     sys1 = build()[0]["content"]
-    open(os.path.join(wd, "new2.py"), "w").write("x=1\n")              # change the world
+    open(os.path.join(wd, "new2.py"), "w", encoding="utf-8").write("x=1\n")              # change the world
     msgs2 = build()
     sys2, user2 = msgs2[0]["content"], msgs2[1]["content"]
     assert sys1 == sys2, "system message must stay byte-stable across builds (prompt cache)"

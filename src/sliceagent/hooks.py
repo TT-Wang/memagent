@@ -1,4 +1,5 @@
 """Compatibility shim for CLI hook composition; core hooks live in sliceagent_core.hooks."""
-import sys as _sys
-import sliceagent_cli.hooks as _impl
-_sys.modules[__name__] = _impl
+
+from ._compat import alias_module as _alias_module
+
+_alias_module(__name__, __spec__, "sliceagent_cli.hooks")

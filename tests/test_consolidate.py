@@ -203,7 +203,7 @@ def consolidate_routes_facts_and_inactive_procedure_candidates_if_memem():
         skills = [d for d in os.listdir(candidate_root)
                   if os.path.isdir(os.path.join(candidate_root, d))]
         assert skills, "expected an inactive procedure candidate written"
-        body = open(os.path.join(candidate_root, skills[0], "SKILL.md")).read()
+        body = open(os.path.join(candidate_root, skills[0], "SKILL.md"), encoding="utf-8").read()
         assert body.startswith("---\nname:") and "## Process" in body and "read_file" in body
     finally:
         os.environ.pop("SLICEAGENT_SKILLS_DIR", None)
@@ -317,7 +317,7 @@ def write_skill_tool_writes_user_provenance_and_validates():
                             "body": "## When to use\nbefore a release\n## Process\n1. build\n2. push"})
         assert "saved" in out.lower(), out
         import glob
-        body = open(glob.glob(os.path.join(sk, "*", "SKILL.md"))[0]).read()
+        body = open(glob.glob(os.path.join(sk, "*", "SKILL.md"))[0], encoding="utf-8").read()
         assert "provenance: user" in body and "deploy the app to staging" in body
         assert "deploy-flow" in body[:80]                                        # name slugged
         invalid = tool.handler({"name": "x"})
