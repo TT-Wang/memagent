@@ -14,7 +14,7 @@ The field's default is *bigger windows + summarize*. sliceagent does the opposit
 
 *Pre-1.0: on `0.x`, CLI flags, config keys, and APIs may change between releases; breaking changes are noted in the [CHANGELOG](CHANGELOG.md).*
 
-**Contents:** [How it works](#how-it-works) · [Benchmark](#benchmark) · [Install & quickstart](#install--quickstart) · [Usage](#usage) · [License](#license) · [Acknowledgements](#acknowledgements) · [Contact](#contact)
+**Contents:** [How it works](#how-it-works) · [Packages & embedding](#packages--embedding) · [Benchmark](#benchmark) · [Install & quickstart](#install--quickstart) · [Usage](#usage) · [License](#license) · [Acknowledgements](#acknowledgements) · [Contact](#contact)
 
 ## How it works
 
@@ -68,6 +68,16 @@ from conversational residue.
 ```
 
 Each turn faults in what the active task references — the carried slice, live views, selected artifacts, and applicable typed USER, PROJECT, or CRAFT knowledge — and hands the model an elastic **Seed**. The model acts; observations fold back into working memory; at the turn boundary the episode is sealed into an immutable local artifact and the next checkpoint is published. Qualifying evidence may then consolidate into a native typed lesson; optional semantic retrieval may index it but is not required. Net effect: **for stable active task state, context does not grow merely with session age; it can still expand with genuine task complexity.**
+
+## Packages & embedding
+
+The repository has a one-way package boundary:
+
+- **`sliceagent-core`** is the reusable bounded-slice runtime. `run_turn(...)` includes the ordered tool scheduler by default and runs without the CLI; hosts can replace behavior through the `LLMClient`, `ToolHost`, `ToolScheduler`, `Retriever`, `Memory`, `Registry`, `Safeguard`, and `Oracle` contracts.
+- **`sliceagent-cli`** is the coding-agent host: terminal UI, coding tools, workspace retrieval, and optional Memem integration.
+- **`sliceagent`** remains the product and compatibility namespace. The current product wheel vendors both packages while existing callers migrate to the split names.
+
+The dependency points one way: CLI → core, never core → CLI. A bare core install has no required third-party dependencies; the built-in OpenAI-compatible client is available through the `openai` extra. Standalone package publishing is a separate release decision.
 
 ## Benchmark
 
