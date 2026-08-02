@@ -8,55 +8,18 @@ loop already drives.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Callable, Optional
+from sliceagent_core.access import AllAccess
+from sliceagent_core.execution import (ToolInvocation, ToolOutcome, ToolPurity,
+                                       ToolStatus)
+from sliceagent_core.registry_types import (
+    ToolAdmission,
+    ToolEntry,
+    ToolText,
+    finalize_tool_outcome,
+    tool_result_text,
+)
 
-from .access import AllAccess
-from .execution import (ToolEffect, ToolInvocation, ToolOutcome, ToolPurity,
-                        ToolStatus, coerce_tool_status)
 from .reach import ReachSteer
-
-Handler = Callable[[dict], str]      # (args) -> result string
-AccessFn = Callable[[dict], list]    # (args) -> list[Access] for scheduler conflict detection
-
-
-class ToolText(str):
-    """A tool result that carries an EXPLICIT success flag (.ok). It IS a str — every existing caller
-    that concatenates / slices / .startswith() keeps working — but the loop reads `.ok` instead of
-    re-inferring failure from prose (`startswith("Error")`), which false-flagged legitimate output that
-    merely begins with "Error"/"Exit code" (a grep hit, a log line, a docstring). A handler that fails
-    WITHOUT raising returns ToolText(msg, ok=False); the registry sets ok=True for any normal return and
-    ok=False for a raised exception. See run()."""
-    __slots__ = ("_status", "_effects", "_control")
-
-    def __new__(cls, value: str = "", ok: bool = True, *, status: ToolStatus | str | None = None,
-                effects: tuple[ToolEffect, ...] = (), control=None):
-        obj = super().__new__(cls, value)
-        obj._status = coerce_tool_status(status if status is not None else ok)  # type: ignore[attr-defined]
-        obj._effects = tuple(effects or ())  # type: ignore[attr-defined]
-        obj._control = control  # type: ignore[attr-defined]
-        return obj
-
-    @property
-    def ok(self) -> bool:
-        return self.status is ToolStatus.SUCCEEDED
-
-    @property
-    def status(self) -> ToolStatus:
-        return getattr(self, "_status", ToolStatus.SUCCEEDED)
-
-    @property
-    def effects(self) -> tuple[ToolEffect, ...]:
-        return getattr(self, "_effects", ())
-
-    @property
-    def control(self):
-        """Typed turn-control signal (task #101 park), never inferred from this string's text."""
-        return getattr(self, "_control", None)
-
-
-def _all_access(_args: dict) -> list:
-    return [AllAccess()]
 
 
 def _missing_required(schema: dict, args: dict) -> list:
@@ -110,110 +73,6 @@ _PARK_STAMP = "_park_authority"
 def park_authorized(entry: object) -> bool:
     """True only for an entry granted authority through the host-held TurnControlRegistrar."""
     return getattr(entry, _PARK_STAMP, None) is _PARK_AUTHORITY
-
-
-@dataclass
-class ToolEntry:
-    name: str
-    schema: dict                              # {"type":"function","function":{name,description,parameters}}
-    handler: Handler
-    accesses: AccessFn = _all_access
-    check: Optional[Callable[[], bool]] = None  # availability gate (None = always available)
-    source: str = "builtin"                  # builtin | mcp | plugin | skill
-    purity: ToolPurity = ToolPurity.UNKNOWN
-    deduplicable: bool = False
-    # SCHEDULING METADATA ONLY (task #101 ask_collaborator): it isolates the call in its
-    # provider batch. It confers NO park authority — see park_authorized(). Enforced
-    # generically by the loop: such a call must be ALONE in its provider batch, rejected before
-    # ANY handler runs. Detecting the conflict after execution would be too late — by then each
-    # handler may already have prepared/dispatched durable side effects that cannot be undone.
-    turn_exclusive: bool = False
-    capabilities: frozenset[str] = frozenset()
-    effect_factory: Optional[
-        Callable[[ToolInvocation, ToolStatus, str], tuple[ToolEffect, ...]]
-    ] = None
-
-
-@dataclass(frozen=True)
-class ToolAdmission:
-    """One-shot proof that a specific registry entry passed pre-handler validation.
-
-    Availability checks can be volatile.  The scheduler must therefore carry the admitted entry across the
-    durable ``ToolStarted`` boundary instead of checking it a second time after claiming execution started.
-    """
-    name: str
-    entry: ToolEntry
-
-
-def tool_result_text(value) -> str:
-    """Canonical presentation coercion for handler results.
-
-    Preserve ``ToolText`` as text, keep ``None`` empty, and decode byte results rather than leaking Python's
-    ``b'...'`` representation into the model transcript.
-    """
-    if isinstance(value, str):
-        return value
-    if value is None:
-        return ""
-    if isinstance(value, (bytes, bytearray)):
-        return bytes(value).decode("utf-8", "replace")
-    return str(value)
-
-
-def finalize_tool_outcome(
-    invocation: ToolInvocation,
-    result,
-    *,
-    entry: ToolEntry | None = None,
-    default_effect_id: str | None = None,
-) -> ToolOutcome:
-    """Build the one canonical typed outcome from a completed or pre-execution-cancelled result.
-
-    Execution remains host-owned: wrappers such as ``ScopedSpawnHost`` must enforce their restrictions before
-    this boundary. This function exclusively owns status projection, effect construction, effect-factory
-    failure semantics, and the default audit effect used when a tool declares no semantic effects.
-    """
-    explicit = getattr(result, "status", None)
-    if explicit is not None:
-        status = coerce_tool_status(explicit)
-    else:
-        ok = getattr(result, "ok", None)
-        status = (coerce_tool_status(bool(ok)) if ok is not None else
-                  coerce_tool_status(None, legacy_text=tool_result_text(result)))
-    text = tool_result_text(result)
-    effects = tuple(getattr(result, "effects", ()) or ())
-    factory = getattr(entry, "effect_factory", None)
-    if factory is not None:
-        try:
-            effects = tuple(factory(invocation, status, text) or ())
-        except (Exception, SystemExit) as error:  # tool may have run; extension exit is not host process exit
-            status = ToolStatus.INDETERMINATE
-            text = f"Error: tool effect construction failed ({type(error).__name__}: {error})"
-            effects = ()
-    if not effects:
-        effect_id = default_effect_id or f"invoke:{invocation.provider_index}:{invocation.id}:0"
-        effects = (ToolEffect(
-            effect_id, "tool_outcome", {"name": invocation.name, "status": status.value},
-        ),)
-    # A host tool may return a typed PeerParkControl to END THE TURN parked on a peer. It rides
-    # the typed outcome rather than the text, so the loop recognises control flow by TYPE and can
-    # never be tricked into parking by model-authored prose.
-    from .interfaces import PeerParkControl as _PeerParkControl
-    control = result if isinstance(result, _PeerParkControl) else getattr(result, "control", None)
-    if control is not None and not isinstance(control, _PeerParkControl):
-        # Exact type only: an arbitrary object carries no wait to resume against.
-        control = None
-    if control is not None and not park_authorized(entry):
-        # "PersonaHost/ask_collaborator alone mints the park" is enforced against the authority
-        # the REGISTRAR granted, not against a boolean the entry declares about itself.
-        control = None
-    if control is not None and status is not ToolStatus.SUCCEEDED:
-        # A failed or indeterminate call must follow ordinary failure semantics and never seal a
-        # park: parking on an ask that did not succeed would wait forever for a reply nobody asked for.
-        control = None
-    return ToolOutcome(
-        invocation=invocation, status=status, text=text, effects=effects, control=control,
-    )
 
 
 # Compatibility metadata for built-ins registered before ToolEntry carried execution
@@ -284,6 +143,10 @@ class ToolRegistry:
     def entry(self, name: str) -> ToolEntry | None:
         """Canonical metadata lookup. Unknown tools stay conservative in callers."""
         return self._tools.get(name)
+
+    def park_authorized(self, entry: ToolEntry | None) -> bool:
+        """Project the private registration-path authority through the core port."""
+        return park_authorized(entry)
 
     def _available(self) -> list[ToolEntry]:
         out = []
@@ -420,6 +283,7 @@ class ToolRegistry:
         return finalize_tool_outcome(
             invocation, out, entry=admission.entry,
             default_effect_id=default_effect_id,
+            park_authorized=self.park_authorized(admission.entry),
         )
 
 

@@ -479,7 +479,7 @@ def make_topic_tools(session: "Session"):
     """Model-facing tools so the agent can route topics itself. Default behaviour is CONTINUE (no
     call); a switch/new is an explicit, recoverable action. Returns ToolEntry list for the registry."""
     from .execution import ToolStatus
-    from sliceagent.registry import ToolEntry, ToolText
+    from .registry_types import ToolEntry, ToolText
 
     def _new(args: dict) -> str:
         if session.turn_task_id is not None:

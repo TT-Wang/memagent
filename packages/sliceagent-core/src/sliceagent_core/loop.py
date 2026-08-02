@@ -60,9 +60,9 @@ from .execution import (CHILD_ACTIVITY_ARG, CHILD_CANCEL_SIGNAL_ARG, CHILD_INVOC
                         ToolInvocation, ToolOutcome, ToolPurity,
                         PreflightOverflow, ToolStatus, TurnOutcome, Usage,
                         available_content_capacity, estimate_model_call, is_delegation_tool)
-from sliceagent.registry import (
-    ToolAdmission, ToolText, finalize_tool_outcome,
-    park_authorized as _park_authorized, tool_result_text,
+from .registry_types import (
+    ToolAdmission, ToolText, finalize_tool_outcome as _finalize_tool_outcome,
+    tool_result_text,
 )
 from sliceagent.scheduler import (DEFAULT_LIFECYCLE_ABSOLUTE, ScheduledTool, run_ordered)
 
@@ -805,6 +805,16 @@ def _entry_for(tools, name: str):
         return None
 
 
+def _park_authorized(tools, entry) -> bool:
+    """Query the host registry's private authority without importing its implementation."""
+    try:
+        registry = getattr(tools, "registry", None)
+        check = getattr(registry, "park_authorized", None)
+        return bool(check(entry)) if callable(check) else False
+    except (Exception, SystemExit):
+        return False
+
+
 def _purity_for(tools, name: str, args: dict, entry) -> ToolPurity:
     if entry is not None:
         return entry.purity
@@ -918,6 +928,15 @@ def run_tool_batch(tool_calls, tools, dispatch: Dispatcher, hooks: Hooks, *, ste
             f"{effect_call_ids[invocation.provider_index]}:0"
         )
 
+    def finalize_tool_outcome(invocation, result, *, entry=None, default_effect_id=None):
+        return _finalize_tool_outcome(
+            invocation,
+            result,
+            entry=entry,
+            default_effect_id=default_effect_id,
+            park_authorized=_park_authorized(tools, entry),
+        )
+
     # WHOLE-BATCH EXCLUSIVITY, decided BEFORE any handler runs. A host may declare a tool
     # turn-exclusive (task #101 ask_collaborator): ending the turn is only coherent if that call
     # is alone, because siblings would either execute into a suspended turn or be silently
@@ -965,7 +984,7 @@ def run_tool_batch(tool_calls, tools, dispatch: Dispatcher, hooks: Hooks, *, ste
         # batch gate suppresses the handler entirely.
         dispatch(ToolRequested(_audit_projection(
             invocation,
-            _park_authorized(_entry_for(tools, getattr(tc, "name", "") or "")),
+            _park_authorized(tools, _entry_for(tools, getattr(tc, "name", "") or "")),
         )))
     for provider_index, tc in enumerate(tool_calls):
         name = getattr(tc, "name", "") or ""
@@ -999,7 +1018,7 @@ def run_tool_batch(tool_calls, tools, dispatch: Dispatcher, hooks: Hooks, *, ste
                 "deduplicable": can_dedup,
                 "admission": None, "run_preflighted": None, "prepared_not_started": False,
                 "child_cancel": child_cancel, "child_activity": child_activity}
-        if _park_authorized(entry):
+        if _park_authorized(tools, entry):
             # Body-free audit is a privilege of the authorized control tool. Keying it off the
             # public flag would let an unauthorized entry suppress its own arguments in audit.
             audit_body_free_ids.add(invocation.id)

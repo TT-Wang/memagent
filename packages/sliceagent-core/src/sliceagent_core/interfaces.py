@@ -8,7 +8,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import unicodedata as _unicodedata
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from .registry_types import ToolEntry
 
 
 @dataclass
@@ -113,8 +116,16 @@ class LLMClient(Protocol):
 
 
 @runtime_checkable
+class Registry(Protocol):
+    """Read-only registry metadata surface consumed by the runtime."""
+    def entry(self, name: str) -> ToolEntry | None: ...
+    def park_authorized(self, entry: ToolEntry | None) -> bool: ...
+
+
+@runtime_checkable
 class ToolHost(Protocol):
     """Executes tools, ideally behind a sandbox. (backed by a container sandbox + MCP tools)"""
+    registry: Registry
     def schemas(self) -> list[dict]: ...
     def run(self, name: str, args: dict) -> str: ...
     def read_text(self, path: str) -> str: ...   # reconstruct the artifacts tier (raises if missing)

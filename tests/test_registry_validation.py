@@ -7,7 +7,13 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from sliceagent.registry import ToolEntry, ToolRegistry  # noqa: E402
+from sliceagent.registry import (ToolAdmission, ToolEntry, ToolRegistry, ToolText,
+                                 finalize_tool_outcome)  # noqa: E402
+from sliceagent_core.interfaces import Registry  # noqa: E402
+from sliceagent_core.registry_types import (ToolAdmission as CoreToolAdmission,
+                                            ToolEntry as CoreToolEntry,
+                                            ToolText as CoreToolText,
+                                            finalize_tool_outcome as core_finalize_tool_outcome)  # noqa: E402
 
 CHECKS = []
 def check(fn):
@@ -21,6 +27,15 @@ def _schema(name, required):
         "parameters": {"type": "object",
                        "properties": {r: {"type": "string"} for r in required},
                        "required": required}}}
+
+
+@check
+def concrete_registry_implements_core_port_and_reexports_core_values():
+    assert isinstance(ToolRegistry(), Registry)
+    assert ToolEntry is CoreToolEntry
+    assert ToolAdmission is CoreToolAdmission
+    assert ToolText is CoreToolText
+    assert finalize_tool_outcome is core_finalize_tool_outcome
 
 
 @check

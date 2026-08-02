@@ -18,6 +18,15 @@ __version__ = "0.1.0"
 #   from .interfaces import LLMClient, ToolHost, Retriever, Memory, PersistenceStore, ContextPolicy, EventSink
 #   from .retriever import NullRetriever
 from .memory_null import NullMemory  # the Memory contract's deterministic default
-from .interfaces import Safeguard
+from .interfaces import Registry, Safeguard
+from .registry_types import ToolAdmission, ToolEntry, ToolText
 
-__all__ = ["__version__", "NullMemory", "Safeguard"]
+__all__ = [
+    "__version__",
+    "NullMemory",
+    "Registry",
+    "Safeguard",
+    "ToolAdmission",
+    "ToolEntry",
+    "ToolText",
+]
