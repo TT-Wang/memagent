@@ -241,7 +241,7 @@ def both_production_touch_sites_actually_advance_the_child_liveness_cell():
     suite green, so nothing pinned the premise of activity-based deadlines. With them neutered no real
     child ever touches its cell, and the scheduler cuts off a healthy, actively-streaming child at
     AGENT_DELEGATION_TIMEOUT — reinstating the fixed wave deadline the change existed to remove."""
-    import sliceagent.loop as loop_mod
+    import sliceagent_core.loop as loop_mod
 
     cells: list = []
     real_activity = loop_mod.ChildActivity

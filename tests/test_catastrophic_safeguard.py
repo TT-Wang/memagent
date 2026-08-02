@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from sliceagent.hooks import CatastrophicSafeguardHook  # noqa: E402
 from sliceagent.safeguards import CatastrophicSafeguard, catastrophic_reason  # noqa: E402
+from sliceagent_core.hooks import CatastrophicSafeguardHook as CoreSafeguardHook  # noqa: E402
 from sliceagent_core.interfaces import Safeguard  # noqa: E402
 
 
@@ -271,6 +272,16 @@ def hook_uses_an_explicit_catastrophic_kind_and_plain_safety_message():
     assert not allowed.stop
     assert stopped.stop and stopped.kind == "catastrophic"
     assert stopped.reason.startswith("Safety stop:") and "policy" not in stopped.reason.casefold()
+
+
+@check
+def legacy_hook_constructor_supplies_the_cli_safeguard_without_weakening_core_injection():
+    hook = CatastrophicSafeguardHook()
+    assert isinstance(hook, CoreSafeguardHook)
+    assert type(hook.safeguard) is CatastrophicSafeguard
+    assert hook.preflight_tool("run_command", {"command": "sudo shutdown now"}).stop
+    assert CoreSafeguardHook.__init__.__defaults__ is None, \
+        "the reusable core hook must continue to require an explicitly injected Safeguard"
 
 
 def main():
