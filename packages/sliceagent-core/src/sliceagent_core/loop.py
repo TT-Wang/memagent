@@ -26,6 +26,7 @@ from collections.abc import Mapping
 from .access import AllAccess, FileAccess, ReadAllAccess
 from .context_overflow import ContextOverflow
 from .context import ContextUnfitError, SeedPlan
+from .flags import Flag, enabled as _flag_enabled, register as _register_flag
 from .events import (
     AssistantText,
     Dispatcher,
@@ -261,6 +262,15 @@ class _ChildCancellationLease:
 
 # Shown when the working context overflows and can't be compacted further (the seed itself is too big).
 # With one loop mode there's no tighten-ladder fallback, so we fail SOFT here instead of crashing.
+# A/B arm (convergence spec P2.3): AGENT_EXPERIMENTAL_OVERFLOW_SIMPLE=1 collapses the CLIENT-SIDE
+# overflow elasticity — proactive converge capped at one projection, no reactive seed re-projection,
+# no micro-compaction — to the whole-exchange-drop / park terminals both arms share. Pre-registered
+# arm boundary: the recognition half (context_overflow.py) and the AGENT_MODEL_FALLBACK secondary
+# net stay in BOTH arms (fallback is a routing net, not elasticity — keeping it isolates the
+# variable); the simple arm still catches+parks, still dispatches SliceTightened (metrics/TUI
+# consume it), and never bypasses the protected-child-report park (a correctness invariant).
+_register_flag(Flag("overflow_simple", "A/B arm: drop/park-only overflow handling (no tighten/rebuild)"))
+
 OVERFLOW_MSG = ("The working context overflowed and could not be compacted further. Stopping this turn — "
                 "try a narrower request, or reduce the number of files in play, and continue.")
 
@@ -464,7 +474,7 @@ def _project_request_seed(plan: SeedPlan, trajectory: list[dict], llm, schemas: 
 
     # Each failed iteration either selects a smaller alternative or reduces the exact byte/character gap.
     # The bounded attempt count is defensive; normal plans converge in one or two passes.
-    attempts = max(4, len(plan.blocks) + 2)
+    attempts = 1 if _flag_enabled("overflow_simple") else max(4, len(plan.blocks) + 2)
     for _ in range(attempts):
         try:
             projected = plan.project(capacity)
@@ -586,7 +596,7 @@ def _prepare_model_messages(
 
     current_hook_base = hook_base
     current_original_base = original_base
-    attempts = max(4, len(seed_plan.blocks) + 4)
+    attempts = 1 if _flag_enabled("overflow_simple") else max(4, len(seed_plan.blocks) + 4)
     for _ in range(attempts):
         selected = seed_plan.last_selection
         used = int(getattr(selected, "used_chars", 0) or 0)
@@ -1929,7 +1939,8 @@ def run_turn(*, build_slice, llm, tools, scheduler: ToolScheduler | None = None,
                         # have already exhausted the projector and do not replay this reactive path.
                         provider_pressure = provider_call_started and not isinstance(overflow, PreflightOverflow)
                         failure_origin = ""  # handled pressure is no longer an outstanding provider failure
-                        if seed_plan is not None and provider_pressure:
+                        overflow_simple = _flag_enabled("overflow_simple")   # A/B arm, see flag above
+                        if seed_plan is not None and provider_pressure and not overflow_simple:
                             tighter = seed_plan.next_tighter_capacity()
                             if tighter is not None and (reactive_seed_capacity is None
                                                        or tighter < reactive_seed_capacity):
@@ -1969,7 +1980,7 @@ def run_turn(*, build_slice, llm, tools, scheduler: ToolScheduler | None = None,
                         # MICRO-COMPACTION FIRST: clear OLD tool-result BODIES — keeping the
                         # assistant reasoning, the recent window, and valid tool pairings — before resorting
                         # to dropping a whole exchange. Lossless-by-default (full content in the episode cache).
-                        micro = _micro_compact(
+                        micro = () if overflow_simple else _micro_compact(
                             messages,
                             floor=floor,
                             preserve_tool_call_ids=frozenset(protected_child_reports),

@@ -33,7 +33,16 @@ from dataclasses import dataclass, field
 from typing import ClassVar
 
 from .active_work import WorkGraph
-from .intent import IntentState
+from .flags import Flag, enabled as _flag_enabled, register as _register_flag
+from .intent import IntentState, TurnAdmission
+
+# A/B arm (convergence spec P2.2): AGENT_EXPERIMENTAL_INTENT_MECHANICAL=1 gives every no-contract
+# turn a mechanical TurnAdmission — exactly what the interactive CLI already builds — so
+# IntentState.begin_turn's analyze_turn fallback never fires. This is the B arm of the intent
+# deletion A/B: the fallback is production-reachable today via subagent scoped turns (default-on)
+# and the crash-replay window, so cutting it is a SEMANTIC change that must measure non-inferior
+# before the 31-def deletion lands. Never delete on this flag alone.
+_register_flag(Flag("intent_mechanical", "A/B arm: mechanical admission for no-contract turns"))
 from .regions import MAX_CONVERSATION, reserve_keep
 from .slice_state import (ContinuityState, EvidenceState, TaskProgress,
                           TurnRuntime, WorkingSet)
@@ -400,6 +409,8 @@ def record_user(s: Slice, message: str, *, source_artifact: str | None = None,
         s.task.deliverable_requirement = None
     # ONE authoritative verbatim request for the active turn. Persistent clauses are promoted separately
     # into intent.entries; the raw full message is archived by the turn sink rather than accumulated here.
+    if contract is None and _flag_enabled("intent_mechanical"):
+        contract = TurnAdmission(request_text=str(message or ""))   # B arm: no analyze_turn fallback
     s.intent.begin_turn(message, source_artifact=source_artifact, contract=contract)
     # Admission is deliberately mechanical: one exact source event becomes one request root.  The
     # caller binds to the application ledger's canonical (possibly persistence-redacted) bytes.  Older

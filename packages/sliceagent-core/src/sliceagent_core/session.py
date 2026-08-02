@@ -21,6 +21,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from typing import Any
 
+from .flags import enabled as _flag_enabled
 from .interfaces import TaskRef
 from .pfc import Slice
 from .regions import capture_user_report, report_retracted
@@ -164,9 +165,13 @@ class Session:
         # again here: a second seal would reset the new TurnRuntime epoch and contract the working set twice.
         if admission is not None and contract is not None and admission != contract:
             raise ValueError("pass one TurnAdmission, not competing admission/contract values")
+        selected = admission or contract
+        if selected is None and _flag_enabled("intent_mechanical"):
+            from .intent import TurnAdmission   # B arm (spec P2.2): no analyze_turn fallback
+            selected = TurnAdmission(request_text=str(message or ""))
         if install_intent:
-            s.intent.begin_turn(message, admission=admission or contract)
-        return apply_turn_continuation(s, message, resume=resume, admission=admission or contract)
+            s.intent.begin_turn(message, admission=selected)
+        return apply_turn_continuation(s, message, resume=resume, admission=selected)
 
     def start_logical_turn(
         self, *, logical_id: str, task_id: str, request: str, source_artifact_id: str,
@@ -206,6 +211,9 @@ class Session:
         # record_user/continue_topic: they would increment turns, append a duplicate conversation row, and apply
         # lexical continuation semantics to a message the user never sent twice.
         next_admission = admission if admission is not None else logical.admission
+        if next_admission is None and _flag_enabled("intent_mechanical"):
+            from .intent import TurnAdmission   # B arm (spec P2.2): no analyze_turn fallback
+            next_admission = TurnAdmission(request_text=str(logical.request or ""))
         target = os.path.realpath(workspace_path) if workspace_path else ""
         source = logical.workspace_history[-1] if logical.workspace_history else logical.source_workspace
         edge = (source, target) if source and target else None
