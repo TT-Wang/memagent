@@ -1,0 +1,36 @@
+[project]
+name = "sliceagent-cli"
+dynamic = ["version"]
+description = "The SliceAgent coding agent — a CLI host built on sliceagent-core."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "TT-Wang" }]
+keywords = ["coding-agent", "cli", "llm", "agent", "mcp"]
+# CLI depends on the core runtime + carries the domain-specific deps (mcp tools).
+dependencies = [
+    "sliceagent-core",
+    "mcp==1.28.1",
+]
+
+[project.optional-dependencies]
+# The Memem memory stack, injected into core via the Memory contract.
+memory = ["numpy>=1.24", "memem==2.9.7"]
+# Precise symbol graph for the RELATED CODE map (code_index falls back to regex without it).
+treesitter = ["tree-sitter==0.26.0", "tree-sitter-python==0.25.0"]
+# Rich terminal UI (falls back to plain print/input when absent).
+tui = ["rich==15.0.0", "prompt_toolkit==3.0.52"]
+dev = ["pytest==9.1.1", "ruff==0.15.21"]
+
+[project.scripts]
+sliceagent = "sliceagent_cli.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "src/sliceagent_cli/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sliceagent_cli"]

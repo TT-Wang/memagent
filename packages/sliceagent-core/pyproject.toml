@@ -1,0 +1,28 @@
+[project]
+name = "sliceagent-core"
+dynamic = ["version"]   # single-sourced from src/sliceagent_core/__init__.py
+description = "The bounded-slice agent runtime — history-bounded, task-elastic reconstructed context. Reusable engine, no CLI."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "TT-Wang" }]
+keywords = ["agent-runtime", "llm", "context-engineering", "bounded-slice", "long-horizon"]
+# Deps are provisional for the P1 scaffold — confirmed as modules move in P1/P3.
+# Core carries only the model-runner client; everything domain-specific is injected via a contract.
+dependencies = [
+    "openai==2.45.0",
+    "httpx==0.28.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest==9.1.1", "ruff==0.15.21"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "src/sliceagent_core/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sliceagent_core"]
