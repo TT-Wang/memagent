@@ -694,7 +694,7 @@ def _prepare_workspace_resources(
     from .skills import make_skill_manager, make_skill_tool
     from .scoped_spawn import ScopedSpawnHost
     from .text_utils import one_line
-    from .tools import LocalToolHost
+    from sliceagent_cli.coding_tool_host import CodingToolHost
 
     root = os.path.realpath(root)
     project_identity = resolve_project_identity(root)
@@ -718,7 +718,7 @@ def _prepare_workspace_resources(
         sandbox = make_sandbox(
             cfg.sandbox_backend, image=cfg.sandbox_image, network=cfg.sandbox_network,
         )
-        base_tools = LocalToolHost(root, sandbox=sandbox)
+        base_tools = CodingToolHost(root, sandbox=sandbox)
         base_tools._verify_notify = notify_host   # live "verify · <cmd>" on the status line
         cleanup.base_tools = base_tools
         base_tools.on_workspace_switch = schedule_workspace

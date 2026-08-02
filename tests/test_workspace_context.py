@@ -172,7 +172,7 @@ def test_workspace_lease_precedes_plugins_and_plugin_failure_rolls_back_once():
     root = tempfile.mkdtemp(prefix="workspace-context-order-")
     with (
         mock.patch("sliceagent.runtime_persistence.LocalTurnStore", Store),
-        mock.patch("sliceagent.tools.LocalToolHost", Tools),
+        mock.patch("sliceagent_cli.coding_tool_host.CodingToolHost", Tools),
         mock.patch("sliceagent.plugins.load_plugins", fail_plugins),
     ):
         try:
