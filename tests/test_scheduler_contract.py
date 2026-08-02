@@ -47,3 +47,17 @@ def test_core_defaults_ordered_scheduler_and_port_stays_overridable() -> None:
     # legacy facade is now a pure re-export of core — same functions, same defaults
     assert legacy_loop.run_turn is core_loop.run_turn
     assert legacy_loop.run_tool_batch is core_loop.run_tool_batch
+
+
+def test_legacy_scheduler_monkeypatch_reaches_core() -> None:
+    """The product alias stays the same module, so legacy monkeypatches reach core."""
+    import sliceagent.scheduler as legacy
+    import sliceagent_core.scheduler as core
+
+    assert legacy is core
+    sentinel = object()
+    legacy._monkeypatch_probe = sentinel
+    try:
+        assert core._monkeypatch_probe is sentinel
+    finally:
+        del core._monkeypatch_probe
