@@ -194,7 +194,8 @@ def chitchat_consumes_stale_continuity_but_remains_exactly_adjacent():
 
 def pending_proposal_assents_bypass_chitchat_in_both_entry_paths():
     from sliceagent.cli import _use_chitchat_fast_path
-    from sliceagent.discourse import extract_pending_proposal, interpret_turn
+    from sliceagent.discourse import extract_pending_proposal
+    from sliceagent.intent import analyze_turn
     from sliceagent.pfc import Slice
 
     proposal = extract_pending_proposal(
@@ -205,7 +206,7 @@ def pending_proposal_assents_bypass_chitchat_in_both_entry_paths():
     state.continuity.pending_proposal = proposal
 
     for answer in ("ok", "okay", "sounds good"):
-        contract = interpret_turn(answer, (), pending_proposal=proposal).contract
+        contract = analyze_turn(answer, pending_proposal=proposal)
         assert contract.effect_authority == "continuation" and contract.effect_grants
         assert not _use_chitchat_fast_path(answer, state), \
             f"{answer!r} must reach the normal admission path while the proposal is adjacent"

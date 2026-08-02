@@ -1,5 +1,4 @@
 """Projection truth: virtual resources, live capability guidance, and prompt A/B seam."""
-import json
 import os
 import sys
 import tempfile
@@ -10,10 +9,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from sliceagent.events import ToolResult  # noqa: E402
 from sliceagent.code_grep import make_grep_tool  # noqa: E402
 from sliceagent.agents import BUILTIN_AGENTS  # noqa: E402
-from sliceagent.discourse import (_deterministic_response_constraint_mismatches,  # noqa: E402
-                                  _subagent_grounding_envelope,
-                                  interpret_turn, make_evidence_snapshot)
 from sliceagent.execution import ToolInvocation  # noqa: E402
+from sliceagent.intent import analyze_turn  # noqa: E402
 from sliceagent.pfc import Slice, slice_sink  # noqa: E402
 from sliceagent.prompt import (MEMORY_ACCUMULATE, memory_model_for_eval,
                                render_delegation_guidance)  # noqa: E402
@@ -33,38 +30,6 @@ def check(fn):
     return fn
 
 
-@check
-def deterministic_quality_checks_cover_only_measurable_explicit_constraints():
-    long = " ".join(["word"] * 81)
-    brief = _deterministic_response_constraint_mismatches(
-        "What else can you help with, briefly?", long,
-    )
-    assert len(brief) == 1 and brief[0]["constraint"] == "brief_response"
-    assert brief[0]["produced_exact"] in long and "81 words" in brief[0]["explanation"]
-    assert brief[0]["produced_exact_is_bounded_prefix"]
-    assert not brief[0]["produced_exact"].endswith("wor"), "the exact prefix must end at a word boundary"
-    assert not _deterministic_response_constraint_mismatches(
-        "What else can you help with?", long,
-    ), "brevity is not inferred when the user did not request it"
-    assert not _deterministic_response_constraint_mismatches(
-        "Do not be brief; explain fully.", long,
-    )
-
-    lines = _deterministic_response_constraint_mismatches(
-        "Return exactly 3 lines.", "one\ntwo",
-    )
-    assert len(lines) == 1 and lines[0]["measurements"] == {
-        "expected_nonempty_lines": 3, "actual_nonempty_lines": 2,
-    }
-    assert not _deterministic_response_constraint_mismatches(
-        "Return exactly 3 lines.", "one\ntwo\nthree",
-    )
-    assert _deterministic_response_constraint_mismatches(
-        "Return exactly JSON.", "plain text",
-    )[0]["constraint"] == "valid_json"
-    assert not _deterministic_response_constraint_mismatches(
-        "Return exactly JSON.", '{"ok": true}',
-    )
 
 
 class _ArtifactView:
@@ -159,29 +124,6 @@ def child_evidence_page_read_keeps_root_artifact_provenance_but_is_not_a_report_
     assert state.runtime.recent_calls[-1]["observed_artifact_view"] == "evidence"
 
 
-@check
-def quality_grounding_uses_only_the_bounded_preview_not_the_full_evidence_archive():
-    full = ("FULL-ARCHIVE-ONLY\n" * 10_000) + "ARCHIVE-TAIL-SENTINEL"
-    preview = "bounded preview bytes"
-
-    def row(text, *, truncated):
-        return {
-            "v": 1, "tool": "read_file", "args": {"path": "large.py"},
-            "status": "succeeded", "view": text,
-            "redacted": False, "truncated": truncated,
-        }
-
-    envelope = _subagent_grounding_envelope({
-        "status": "ok",
-        "structured_body": {
-            "brief": {"objective": "inspect large.py", "scope": ["large.py"]},
-            "report": "child conclusion",
-            "observations": [row(full, truncated=False)],
-            "observation_preview": [row(preview, truncated=True)],
-        },
-    })
-    assert envelope["observations"][0]["view"] == preview
-    assert "ARCHIVE-TAIL-SENTINEL" not in json.dumps(envelope)
 
 
 @check
@@ -346,385 +288,37 @@ def memory_model_file_replaces_only_the_contract_and_allows_empty_arm():
     assert "No supported response-quality issue is evidenced" in MEMORY_ACCUMULATE
 
 
+
+
+
+
+
+
+
+
+
+
 @check
-def sealed_evidence_queries_preselect_relevant_sources_before_elasticity():
-    from types import SimpleNamespace
-
-    operation = {
-        "invocation_id": "spawn-1", "name": "spawn_agent", "args": {"agent": "explorer"},
-        "requested": True, "rejected_before_execution": False, "execution_started": True,
-        "settled": True, "disposition": "succeeded",
-    }
-    artifact = SimpleNamespace(
-        id="turn-review", kind="turn", timestamp="2026-07-11T00:00:00Z", task_id="task", summary="",
-        structured_body={"turn_receipt": {
-            "turn_id": "turn-review", "disposition": "completed", "warnings": [],
-            "operations": [operation],
-        }},
-    )
-    request = "Own up to your failures: which explorer failed and why?"
-    preview = interpret_turn(request, (artifact,), task_id="task")
+def source_needs_gating_survives_on_the_live_admission_producer():
+    # The interpret_turn-driven evidence-pipeline tests died with the discourse cone; the SOURCE-NEEDS
+    # region gating they exercised is LIVE (regions._region_selected_by_source_needs) and is driven by
+    # analyze_turn (intent.py) — the still-alive producer. An utterance-recall request must select the
+    # sealed-past furniture (contract + manifest) and exclude the roomy current-world regions.
+    recall = analyze_turn("What did you say in your previous response?")
+    assert recall.source_needs == ("prior_assistant_utterance",), recall.source_needs
     state = Slice(); state.reset("Review the project")
-    state.intent.current_request = request
-    state.intent.turn_admission = preview.admission
-    state.findings = ["unrelated assistant diagnostic note"]
-    state.finding_source = {"unrelated assistant diagnostic note": "claim"}
-    state.plan = [{"step": "unrelated plan", "status": "pending"}]
-    state.world = {"unrelated": "state"}
-    blocks = build_context_blocks(_slice_context(
-        state,
-        "# unrelated.py\n1: bytes that should not enter a sealed evidence query",
-        discovery="unrelated related-code candidate", memory="unrelated retrieved memory",
-        worktree="branch main", cache_manifest='turn 1 → read_file("history/turn-1.md")',
-    ))
-    names = {block.item_id for block in blocks}
-    assert "region:evidence_result" in names and "region:turn_contract" in names
-    assert "region:cache_manifest" in names
-    assert not {
-        "region:open_files", "region:related_code", "region:memory", "region:findings",
-        "region:plan", "region:world", "region:worktree", "region:action_header",
-    }.intersection(names)
-
-    live = interpret_turn("Is that failure still present now?", (artifact,), task_id="task")
-    state.intent.current_request = "Is that failure still present now?"
-    state.intent.turn_admission = live.admission
-    live_names = {block.item_id for block in build_context_blocks(_slice_context(
-        state, "# unrelated.py\n1: live bytes", discovery="live candidate", worktree="branch main",
-    ))}
-    assert "region:open_files" in live_names and "region:worktree" in live_names, \
-        "a mixed live query retains current-world sources"
-
-    recall = interpret_turn("What did you say in your previous response?", (), task_id="task")
-    assert recall.admission.evidence_query is None
-    assert recall.admission.source_needs == ("prior_assistant_utterance",)
     state.intent.current_request = "What did you say in your previous response?"
-    state.intent.turn_admission = recall.admission
-    recall_names = {block.item_id for block in build_context_blocks(_slice_context(
+    state.intent.turn_admission = recall
+    names = {block.item_id for block in build_context_blocks(_slice_context(
         state, "# unrelated.py\n1: live bytes", discovery="unrelated code",
         memory="unrelated memory", worktree="branch main",
         cache_manifest='turn 1 → read_file("history/turn-1.md")',
     ))}
-    assert "region:cache_manifest" in recall_names and "region:turn_contract" in recall_names
+    assert "region:cache_manifest" in names and "region:turn_contract" in names, names
     assert not {
-        "region:open_files", "region:related_code", "region:memory", "region:plan",
+        "region:open_files", "region:related_code", "region:memory",
         "region:world", "region:worktree", "region:action_header",
-    }.intersection(recall_names), "utterance recall should not receive unrelated roomy task furniture"
-
-
-@check
-def self_audit_projects_exact_paged_exchange_pairs_and_a_mandatory_quality_gate():
-    from types import SimpleNamespace
-
-    artifacts = (
-        SimpleNamespace(
-            id="turn-origin", kind="turn", timestamp="2026-07-11T00:00:00Z",
-            task_id="task", session_id="session", status="end_turn", brief={}, summary="lossy preview",
-            structured_body={
-                "request": "Spawn exactly three explorers and give a three-line summary.",
-                "assistant": "1. app issue\n2. auth issue\n3. util issue",
-                "turn_receipt": {"turn_id": "turn-origin", "disposition": "completed", "operations": []},
-            },
-        ),
-        SimpleNamespace(
-            id="turn-filler", kind="turn", timestamp="2026-07-11T00:01:00Z",
-            task_id="task", session_id="session", status="end_turn", brief={}, summary="different preview",
-            structured_body={
-                "request": "What model are you?", "assistant": "deepseek-chat",
-                "turn_receipt": {"turn_id": "turn-filler", "disposition": "completed", "operations": []},
-            },
-        ),
-    )
-    request = "Reflect on your performance this session: what went wrong?"
-    preview = interpret_turn(request, artifacts, task_id="task", session_id="session")
-    assert preview.admission.quality_evidence_query is not None
-    assert preview.admission.quality_evidence_query.prospective_requested is False
-    coverage = next(item for item in preview.projections
-                    if item.get("kind") == "quality_exchange_coverage")
-    assert coverage["coverage"] == "complete" and coverage["complete_exchange_pairs"] == 2
-    pairs = [item for item in preview.projections if item.get("kind") == "quality_exchange"]
-    assert pairs[0]["request"] == "Spawn exactly three explorers and give a three-line summary."
-    assert pairs[0]["assistant"] == "1. app issue\n2. auth issue\n3. util issue"
-    assert all("lossy preview" not in str(item) for item in preview.projections)
-
-    state = Slice(); state.reset("task")
-    state.intent.current_request = request
-    state.intent.turn_admission = preview.admission
-    state.runtime.source_projections = preview.projections
-    state.conversation = [{
-        "user": "What model are you?", "assistant": "deepseek-chat", "artifact_id": "turn-filler",
-    }, {"user": request, "assistant": "", "artifact_id": "turn-active"}]
-    blocks = build_context_blocks(_slice_context(state, "(no files opened yet)"))
-    by_id = {}
-    for block in blocks:
-        by_id.setdefault(block.item_id, []).append(block)
-    assert "region:quality_evidence_result" in by_id
-    assert "region:conversation" not in by_id, \
-        "exact quality pairs replace, rather than duplicate, recent exchange bytes during the audit"
-    assert all(block.mandatory for block in by_id["region:quality_evidence_result"])
-    full = next(block for block in by_id["region:quality_evidence_detail"]
-                if block.fidelity.value == "full")
-    locator = next(block for block in by_id["region:quality_evidence_detail"]
-                   if block.fidelity.value == "locator")
-    assert "three-line summary" in full.content and "1. app issue" in full.content
-    assert "four fields" in by_id["region:quality_evidence_result"][0].content
-    assert "NOT proof that every response was correct" in by_id["region:quality_evidence_result"][0].content
-    quality_protocol = by_id["region:quality_evidence_result"][0].content
-    assert "source-complete audit: examine every exact request/response pair" in quality_protocol
-    assert "private coverage certificate" in quality_protocol
-    for stale_host_promise in (
-        "host checks", "host strips", "host replaces", "before publication", "before publishing",
-    ):
-        assert stale_host_promise not in quality_protocol
-    assert "Grounding exact: <JSON string copied verbatim" \
-        in by_id["region:quality_evidence_result"][0].content
-    assert "report prose alone proves only that the child said it" \
-        in by_id["region:quality_evidence_result"][0].content
-    assert "separates `report` (what the child claimed) and `observations`" \
-        in by_id["region:quality_evidence_result"][0].content
-    assert "redacted or truncated" in by_id["region:quality_evidence_result"][0].content
-    assert "open the exact immutable turn" in locator.content
-
-
-@check
-def quality_projection_carries_receipt_grounding_and_freezes_its_exact_bytes():
-    from types import SimpleNamespace
-
-    auth_view = (
-        "     1\tdef login(username, password):\n"
-        "     2\t    stored = get_password(username)\n"
-        "     3\t    return password == stored"
-    )
-    child = SimpleNamespace(
-        id="subagent-grounding", kind="subagent", schema_version=1,
-        workspace_id="workspace", timestamp="2026-07-11T00:00:00Z",
-        task_id="task", session_id="session", parent_id="turn-grounded",
-        status="ok", title="auth explorer",
-        brief={"objective": "Inspect auth.py.", "scope": ["auth.py"]},
-        summary="password finding", files=("auth.py",), refs=(), uncertainty=(), error="",
-        structured_body={
-            "brief": {"objective": "Inspect auth.py.", "scope": ["auth.py"]},
-            # Deliberately stronger than the observed bytes: the capsule must preserve this distinction.
-            "report": "auth.py stores passwords in plaintext before comparing them.",
-            "findings": ["Passwords are stored in plaintext."],
-            "coverage": "auth.py inspected", "files": ["auth.py"],
-            "gaps": [], "uncertainty": [],
-            "observations": [{
-                "v": 1, "tool": "read_file", "args": {"path": "auth.py"},
-                "status": "succeeded", "view": auth_view,
-                "redacted": False, "truncated": False,
-            }],
-        },
-    )
-    operation = {
-        "invocation_id": "spawn-1", "name": "spawn_agent", "args": {"agent": "explorer"},
-        "requested": True, "rejected_before_execution": False, "execution_started": True,
-        "settled": True, "disposition": "succeeded", "artifact_refs": [child.id],
-    }
-    grounded_turn = SimpleNamespace(
-        id="turn-grounded", kind="turn", schema_version=1,
-        workspace_id="workspace", timestamp="2026-07-11T00:01:00Z",
-        task_id="task", session_id="session", parent_id="", status="end_turn", title="",
-        brief={}, summary="", files=(), refs=(child.id,), uncertainty=(), error="",
-        structured_body={
-            "request": "Ask an explorer for the top bug in auth.py.",
-            "assistant": "The explorer found that auth.py stores passwords in plaintext.",
-            "turn_receipt": {
-                "turn_id": "turn-grounded", "disposition": "completed", "warnings": [],
-                "artifact_refs": [child.id], "operations": [operation],
-            },
-        },
-    )
-    audit_request = "Reflect on your performance this session: what went wrong?"
-    leading = interpret_turn(
-        audit_request, (child, grounded_turn), task_id="task", session_id="session",
-    )
-    coverage = next(item for item in leading.projections
-                    if item.get("kind") == "quality_exchange_coverage")
-    row = next(item for item in leading.projections if item.get("kind") == "quality_exchange")
-    grounding = row["grounding_artifacts"][0]
-    assert coverage["coverage"] == "complete"
-    assert coverage["grounding_artifact_count"] == 1
-    assert coverage["missing_grounding_artifact_count"] == 0
-    assert row["grounding_artifact_ids"] == [child.id]
-    assert grounding["artifact_id"] == child.id and grounding["artifact_kind"] == "subagent"
-    assert grounding["source_text_kind"] == "subagent_grounding_v1"
-    envelope = json.loads(grounding["source_text"])
-    assert envelope["brief"]["scope"] == ["auth.py"]
-    assert envelope["report"] == child.structured_body["report"]
-    assert "claims" not in envelope, "typed claim projections are retired; the report is the testimony"
-    assert envelope["observations"][0]["view"] == auth_view
-    assert "plaintext" not in envelope["observations"][0]["view"].casefold(), \
-        "the child report's plaintext-storage assertion is not supported by the returned auth.py bytes"
-    assert grounding["observation_count"] == 1
-    assert grounding["complete_observation_count"] == 1
-    assert len(grounding["record_sha256"]) == 64
-    assert "record" not in grounding, "the full sealed record must not be duplicated into the model slice"
-    assert leading.snapshot_basis["quality_grounding_artifact_ids"] == [child.id]
-
-    state = Slice(); state.reset("task")
-    state.intent.current_request = audit_request
-    state.intent.turn_admission = leading.admission
-    state.runtime.source_projections = leading.projections
-    blocks = build_context_blocks(_slice_context(state, "(no files opened yet)"))
-    full = next(block for block in blocks
-                if block.item_id == "region:quality_evidence_detail"
-                and block.fidelity.value == "full")
-    locator = next(block for block in blocks
-                   if block.item_id == "region:quality_evidence_detail"
-                   and block.fidelity.value == "locator")
-    assert "Grounding source: artifacts/subagent-grounding.md" in full.content
-    assert "Grounding exact source text (verbatim)" in full.content
-    assert child.structured_body["report"] in full.content
-    assert "stored = get_password(username)" in full.content
-    assert "return password == stored" in full.content
-    assert 'read_file("artifacts/subagent-grounding.md")' in locator.content
-
-    assessment = SimpleNamespace(
-        id="turn-assessment", kind="turn", schema_version=1,
-        workspace_id="workspace", timestamp="2026-07-11T00:02:00Z",
-        task_id="task", session_id="session", parent_id="", status="end_turn", title="",
-        brief={}, summary="", files=(), refs=(), uncertainty=(), error="",
-        structured_body={
-            "request": audit_request,
-            "assistant": "No supported response-quality issue is evidenced.",
-            "turn_receipt": {
-                "turn_id": "turn-assessment", "disposition": "completed", "warnings": [],
-                "artifact_refs": [], "operations": [],
-            },
-        },
-    )
-    snapshot = make_evidence_snapshot(
-        leading.admission, leading.projections, assessment.id,
-        snapshot_basis=leading.snapshot_basis, source_generation=2,
-    )
-    assert snapshot["basis"]["quality_grounding_artifact_ids"] == [child.id]
-    challenge = interpret_turn(
-        "Is that assessment accurate? Verify it against your records.",
-        (child, grounded_turn, assessment), task_id="task", session_id="session",
-        previous_evidence_snapshot=snapshot, current_generation=2,
-    )
-    assert challenge.projections == leading.projections, \
-        "adjacent verification must rebuild the identical pair and grounding projection"
-    assert any(isinstance(ref, dict) and ref.get("kind") == "evidence_snapshot"
-               and ref.get("status") == "frozen" for ref in challenge.admission.referents)
-
-    tampered_child = SimpleNamespace(**{
-        **vars(child),
-        "structured_body": {
-            **child.structured_body,
-            "report": "A different report was substituted under the same artifact id.",
-        },
-    })
-    rejected = interpret_turn(
-        "Is that assessment accurate? Verify it against your records.",
-        (tampered_child, grounded_turn, assessment), task_id="task", session_id="session",
-        previous_evidence_snapshot=snapshot, current_generation=2,
-    )
-    rejected_coverage = next(item for item in rejected.projections
-                             if item.get("kind") == "quality_exchange_coverage")
-    assert rejected_coverage["coverage"] == "unavailable"
-    assert any(isinstance(ref, dict) and ref.get("kind") == "evidence_snapshot"
-               and ref.get("status") == "unavailable" for ref in rejected.admission.referents)
-
-
-@check
-def quality_grounding_uses_operation_provenance_not_inherited_turn_dependencies():
-    from types import SimpleNamespace
-
-    child = SimpleNamespace(
-        id="subagent-source", kind="subagent", schema_version=1,
-        workspace_id="workspace", timestamp="2026-07-11T00:00:00Z",
-        task_id="task", session_id="session", parent_id="turn-review",
-        status="ok", title="reviewer", brief={"objective": "Review app.py."},
-        summary="finding", files=("app.py",), refs=(), uncertainty=(), error="",
-        structured_body={"report": "app.py line 2 concatenates input into SQL."},
-    )
-    review = SimpleNamespace(
-        id="turn-review", kind="turn", schema_version=1,
-        workspace_id="workspace", timestamp="2026-07-11T00:01:00Z",
-        task_id="task", session_id="session", parent_id="", status="end_turn", title="",
-        brief={}, summary="", files=(), refs=(child.id,), uncertainty=(), error="",
-        structured_body={
-            "request": "Review app.py with one explorer.",
-            "assistant": "The explorer found SQL concatenation on line 2.",
-            "turn_receipt": {
-                "turn_id": "turn-review", "disposition": "completed", "warnings": [],
-                "artifact_refs": [child.id],
-                "operations": [{
-                    "invocation_id": "spawn-1", "name": "spawn_agent",
-                    "args": {"agent": "explorer"}, "requested": True,
-                    "rejected_before_execution": False, "execution_started": True,
-                    "settled": True, "disposition": "succeeded", "artifact_refs": [child.id],
-                }],
-            },
-        },
-    )
-    filler = SimpleNamespace(
-        id="turn-filler", kind="turn", schema_version=1,
-        workspace_id="workspace", timestamp="2026-07-11T00:02:00Z",
-        task_id="task", session_id="session", parent_id="", status="end_turn", title="",
-        brief={}, summary="", files=(), refs=(review.id,), uncertainty=(), error="",
-        structured_body={
-            "request": "What else can you help with?", "assistant": "I can help with tests.",
-            "turn_receipt": {
-                "turn_id": "turn-filler", "disposition": "completed", "warnings": [],
-                # This is a continuity/checkpoint dependency, not evidence for the filler response.
-                "artifact_refs": [review.id], "operations": [],
-            },
-        },
-    )
-
-    result = interpret_turn(
-        "Reflect on your performance this session: what went wrong?",
-        (child, review, filler), task_id="task", session_id="session",
-    )
-    rows = {
-        item["artifact_id"]: item for item in result.projections
-        if item.get("kind") == "quality_exchange"
-    }
-    coverage = next(item for item in result.projections
-                    if item.get("kind") == "quality_exchange_coverage")
-    assert rows[review.id]["grounding_artifact_ids"] == [child.id]
-    assert [item["artifact_id"] for item in rows[review.id]["grounding_artifacts"]] == [child.id]
-    assert rows[filler.id]["grounding_artifact_ids"] == []
-    assert rows[filler.id]["grounding_artifacts"] == []
-    assert coverage["grounding_artifact_count"] == 1
-    assert result.snapshot_basis["quality_grounding_artifact_ids"] == [child.id]
-
-
-@check
-def quality_projection_labels_interrupted_visible_text_as_partial_not_final():
-    from types import SimpleNamespace
-
-    artifact = SimpleNamespace(
-        id="turn-interrupted", kind="turn", timestamp="2026-07-11T00:00:00Z",
-        task_id="task", session_id="session", status="interrupted", brief={}, summary="",
-        structured_body={
-            "request": "Explain the issue.",
-            "assistant": "I started explaining before interruption.",
-            "assistant_provenance": "partial_or_note",
-            "turn_receipt": {"turn_id": "turn-interrupted", "disposition": "interrupted",
-                             "operations": []},
-        },
-    )
-    preview = interpret_turn(
-        "Audit your response quality.", (artifact,), task_id="task", session_id="session",
-    )
-    coverage = next(item for item in preview.projections
-                    if item.get("kind") == "quality_exchange_coverage")
-    row = next(item for item in preview.projections if item.get("kind") == "quality_exchange")
-    assert coverage["coverage"] == "complete" and coverage["partial_response_pairs"] == 1
-    assert row["assistant_provenance"] == "partial_or_note"
-
-    state = Slice(); state.reset("task")
-    state.intent.current_request = "Audit your response quality."
-    state.intent.turn_admission = preview.admission
-    state.runtime.source_projections = preview.projections
-    rendered = "\n".join(block.content for block in build_context_blocks(
-        _slice_context(state, "(no files opened yet)"),
-    ))
-    assert "assistant record provenance: partial_or_note" in rendered
-    assert "never describe it as a final answer" in rendered
+    }.intersection(names), names
 
 
 def main():

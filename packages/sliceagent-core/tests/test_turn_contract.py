@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import os
 import sys
+from types import SimpleNamespace
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from sliceagent_core.intent import (IntentState, QualityEvidenceQuery, TurnAdmission, TurnContract,
                                analyze_turn, derive_evidence_query,
                                derive_quality_evidence_query)  # noqa: E402
-from sliceagent_core.discourse import DiscourseAnchor, ResolvedAnchor, interpret_turn  # noqa: E402
+from sliceagent_core.discourse import DiscourseAnchor  # noqa: E402
 from sliceagent_core.pfc import Slice  # noqa: E402
 from sliceagent_core.regions import render_turn_contract  # noqa: E402
 
@@ -256,12 +257,13 @@ def test_admission_exposes_source_needs_and_serializable_scoped_grants():
     assert any(grant["operation"] == "workspace.edit" and grant["target"] == "README"
                for grant in body["effect_grants"])
 
-    oriented = interpret_turn("Review the Hunter project", ())
     state = Slice(); state.reset("Hunter review")
-    state.intent.begin_turn("Review the Hunter project", admission=oriented.admission)
+    state.intent.begin_turn("Review the Hunter project",
+                            admission=analyze_turn("Review the Hunter project"))
     rendered = render_turn_contract(state)
     assert "actor: SliceAgent" in rendered
-    assert "target: Hunter" in rendered
+    # (target entity resolution was interpret_turn's focus machinery — died with the discourse cone;
+    # the live analyze_turn producer derives actor but no target, matching the production admission.)
 
 
 def test_natural_execution_language_compiles_one_typed_evidence_query():
@@ -445,9 +447,10 @@ def test_rendered_contract_separates_reported_context_without_exposing_effect_au
         excerpt="2. No concurrency guard", source_range=(20, 43), artifact_id="turn-old",
     )
     request = "what was number 2?"
-    state.intent.begin_turn(request, contract=analyze_turn(
-        request, referents=(ResolvedAnchor("number 2", anchor, 10),),
-    ))
+    # `referents` is object-typed by design ("callers may attach typed resolved-anchor objects");
+    # the concrete ResolvedAnchor died with the discourse cone — any .anchor-bearing object works.
+    resolved = SimpleNamespace(text="number 2", anchor=anchor, confidence=10)
+    state.intent.begin_turn(request, contract=analyze_turn(request, referents=(resolved,)))
     rendered = render_turn_contract(state)
     assert "sealed_past" in rendered and "artifacts/turn-old.md" in rendered
     assert "HIGH findings item 2" in rendered

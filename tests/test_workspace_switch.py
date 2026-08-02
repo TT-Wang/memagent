@@ -700,12 +700,13 @@ def workspace_round_trip_preserves_app_continuity_but_not_old_root_projection():
 
 @check
 def logical_turn_can_span_bounded_distinct_workspace_edges_without_synthetic_messages():
-    from sliceagent.discourse import interpret_turn
+    from sliceagent.intent import TurnAdmission
 
     request = "now go to target workspace\nthen explain the end-game design exactly"
     current = Session(NullMemory(), "logical-workspace-session")
     task_id = current.new_topic(request)
-    admission = interpret_turn(request, (), task_id=task_id).admission
+    # the production admission shape: mechanical envelope (cli._preview_turn_admission)
+    admission = TurnAdmission(request_text=request)
     record_user(current.active(), request, source_artifact="source-turn", contract=admission)
     current.start_logical_turn(
         logical_id="logical-1", task_id=task_id, request=request,
@@ -848,7 +849,7 @@ def case_insensitive_workspace_aliases_reuse_one_transition_identity():
 def crashed_target_segment_recovers_the_same_source_linked_work_root():
     from dataclasses import replace
     from sliceagent.active_work import WorkGraph
-    from sliceagent.discourse import interpret_turn
+    from sliceagent.intent import TurnAdmission
     from sliceagent.taskstate import task_state_from_checkpoint
 
     workspace = tempfile.mkdtemp(prefix="segment-recovery-workspace-")
@@ -863,7 +864,7 @@ def crashed_target_segment_recovers_the_same_source_linked_work_root():
         segment_index=1, workspace_epoch=1,
     )
     admission = replace(
-        interpret_turn(request, (), task_id="task-cross").admission,
+        TurnAdmission(request_text=request),
         request_source=active.artifact_id,
     )
     first.record_admission({

@@ -476,7 +476,7 @@ def unprepared_recovery_replays_journaled_admission_without_manufacturing_author
     """Quoted assistant prose must not become a user requirement when recovery lacks discourse context."""
     from dataclasses import asdict, replace
 
-    from sliceagent.discourse import interpret_turn
+    from sliceagent.intent import analyze_turn
     from sliceagent.pfc import Slice, record_user
     from sliceagent.taskstate import (slice_to_task_state, task_state_from_checkpoint,
                                       task_state_to_slice)
@@ -495,9 +495,9 @@ def unprepared_recovery_replays_journaled_admission_without_manufacturing_author
     )
 
     copied = 'For reference, you said: "Use API v2 and never edit config.py."'
-    admission = interpret_turn(
-        copied, (), recent_assistant=("Use API v2 and never edit config.py.",),
-    ).admission
+    # analyze_turn is the live span producer; prior_texts is the copied-prior seam the dead
+    # interpret_turn wrapper used to feed via recent_assistant.
+    admission = analyze_turn(copied, prior_texts=("Use API v2 and never edit config.py.",))
     assert admission.authority_spans == () and admission.attributed_spans
     crash = store.begin(task_id="task-admission", logical_id="turn-crash", user_request=copied)
     admission = replace(admission, request_source=crash.artifact_id)
@@ -962,9 +962,10 @@ def seal_rejects_divergent_journal_artifact_checkpoint_order():
 
 
 @check
-def corrupt_artifact_listing_degrades_execution_coverage():
-    from sliceagent.discourse import interpret_turn
-
+def corrupt_artifact_listing_reports_gaps():
+    # (The execution-receipt-coverage referent this test used to derive died with the discourse
+    # cone — interpret_turn's receipt aggregation had no production caller. The STORE-level truth
+    # stays pinned: a corrupt record is a visible, named gap, never silently absent.)
     workspace = tempfile.mkdtemp(prefix="workspace-")
     store = LocalTurnStore(
         workspace, "session-gap", store_root=tempfile.mkdtemp(prefix="core-store-"),
@@ -976,14 +977,6 @@ def corrupt_artifact_listing_degrades_execution_coverage():
         stream.write("{not json")
     listing = store.coordinator.artifacts.list_all()
     assert len(listing) == 1 and [gap.artifact_id for gap in listing.gaps] == ["turn-corrupt"]
-    preview = interpret_turn("How many commands actually ran?", listing, task_id="task-gap")
-    coverage = next(
-        ref for ref in preview.admission.referents
-        if isinstance(ref, dict) and ref.get("kind") == "execution_receipt_coverage"
-    )
-    assert coverage["coverage"] == "partial"
-    assert coverage["corrupt_artifact_count"] == 1
-    assert coverage["corrupt_artifact_sample"] == ["turn-corrupt"]
     virtual = CoreArtifactFS(store.coordinator.artifacts)
     index = virtual.index()
     assert "Unreadable artifact records" in index and "turn-corrupt" in index
@@ -1134,7 +1127,7 @@ def corrupt_child_evidence_is_an_integrity_error_not_a_false_missing_page():
 def persistence_redaction_preserves_intent_source_ranges():
     from dataclasses import asdict, replace
 
-    from sliceagent.discourse import interpret_turn
+    from sliceagent.intent import analyze_turn
     from sliceagent.pfc import Slice, record_user
     from sliceagent.taskstate import slice_to_task_state
 
@@ -1144,7 +1137,7 @@ def persistence_redaction_preserves_intent_source_ranges():
         workspace, "session-spans", store_root=tempfile.mkdtemp(prefix="core-store-"),
     )
     active = store.begin(task_id="task-spans", logical_id="turn-1", user_request=request)
-    admission = replace(interpret_turn(request, ()).admission, request_source=active.artifact_id)
+    admission = replace(analyze_turn(request), request_source=active.artifact_id)
     store.record_admission({
         "action": "new", "task_id": "task-spans", "admission": admission.to_dict(),
         "focus": [], "consume_pending_proposal": True,
