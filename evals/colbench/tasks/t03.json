@@ -1,0 +1,17 @@
+{
+  "problem_description": "Can you write a python function to calculate the performance score of CEOs based on whether their company has separate CEO and Chairman roles? I'm not really sure what the formula should be but the score should somehow reflect better or worse performance based on this distinctionThe signature of the function is: def calculate_ceo_performance(separate_roles, company_performance)",
+  "ground_truth": "def calculate_ceo_performance(separate_roles, company_performance):\n    if separate_roles:\n        return sum(company_performance) / len(company_performance) * 1.1\n    else:\n        return sum(company_performance) / len(company_performance)",
+  "test_cases": {
+    "test1": "calculate_ceo_performance(True, [0.9, 0.8, 0.7, 0.6])",
+    "test2": "calculate_ceo_performance(False, [0.5, 0.4, 0.3, 0.2])",
+    "test3": "calculate_ceo_performance(True, [1.0, 0.9, 0.8, 0.7])",
+    "test4": "calculate_ceo_performance(False, [0.6, 0.5, 0.4, 0.3])",
+    "test5": "calculate_ceo_performance(True, [0.95, 0.9, 0.85])",
+    "test6": "calculate_ceo_performance(False, [0.75, 0.7, 0.65, 0.6])",
+    "test7": "calculate_ceo_performance(True, [0.99, 0.98, 0.97, 0.96])",
+    "test8": "calculate_ceo_performance(False, [0.4, 0.3, 0.2, 0.1])",
+    "test9": "calculate_ceo_performance(True, [0.9, 0.8, 0.7])",
+    "test10": "calculate_ceo_performance(False, [0.6, 0.5, 0.4, 0.3, 0.2])"
+  },
+  "hidden_information": "def calculate_ceo_performance(separate_roles, company_performance):\n    if separate_roles:\n        return sum(company_performance) / len(company_performance) * 1.1\n    else:\n        return sum(company_performance) / len(company_performance)"
+}

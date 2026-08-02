@@ -1,0 +1,17 @@
+{
+  "problem_description": "I need a python function that given a date, can calculate the date that is 280 days after the input date. I think it's used in health care.The signature of the function is: def calculate_due_date(lmp_date)",
+  "ground_truth": "def calculate_due_date(lmp_date):\n    from datetime import datetime, timedelta\n    lmp_date = datetime.strptime(lmp_date, '%Y-%m-%d')\n    due_date = lmp_date + timedelta(days=280)\n    return due_date.strftime('%Y-%m-%d')",
+  "test_cases": {
+    "test1": "calculate_due_date('2022-01-01')",
+    "test2": "calculate_due_date('2022-02-28')",
+    "test3": "calculate_due_date('2022-03-31')",
+    "test4": "calculate_due_date('2022-04-01')",
+    "test5": "calculate_due_date('2022-05-01')",
+    "test6": "calculate_due_date('2022-06-01')",
+    "test7": "calculate_due_date('2022-07-01')",
+    "test8": "calculate_due_date('2022-08-01')",
+    "test9": "calculate_due_date('2022-09-01')",
+    "test10": "calculate_due_date('2022-10-01')"
+  },
+  "hidden_information": "def calculate_due_date(lmp_date):\n    from datetime import datetime, timedelta\n    lmp_date = datetime.strptime(lmp_date, '%Y-%m-%d')\n    due_date = lmp_date + timedelta(days=280)\n    return due_date.strftime('%Y-%m-%d')"
+}

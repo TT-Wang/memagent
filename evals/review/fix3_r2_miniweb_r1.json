@@ -1,0 +1,79 @@
+{
+  "target": "r2_miniweb",
+  "model": "kimi-k2.7-code",
+  "reviews": {
+    "sliceagent": {
+      "agent": "sliceagent",
+      "review": "Issues found in the `miniweb` package:\n\n- `miniweb/validators.py` \u2014 `clamp()` returns `high` for almost all inputs because `min(n, low)` and `max(high, ...)` are inverted.\n- `miniweb/response.py` \u2014 `finalize()` sets `Content-Length` to `len(self.body)` (characters), not UTF-8 bytes, so non-ASCII bodies get an incorrect length.\n- `miniweb/request.py` \u2014 `__init__` uses a mutable default `params={}`, so separate `Request` instances can share the same params dict.\n- `miniweb/router.py` \u2014 `match()` uses substring matching (`route in path`), so e.g. `/foo/admin/bar` incorrectly matches a route registered as `/admin`.\n- `miniweb/auth.py` \u2014 `header()` lookup is case-sensitive, but HTTP header names are case-insensitive, so `Authorization` may be missed.\n- `miniweb/auth.py` \u2014 Logs the raw bearer token at INFO level, leaking credential material.\n- `miniweb/auth.py` \u2014 Token comparison uses `==`, which is vulnerable to timing side-channel attacks.\n- `miniweb/auth.py` \u2014 `replace(\"Bearer \", \"\")` only strips a literal, case-sensitive prefix and does not require it, so raw or oddly prefixed tokens are accepted.\n- `miniweb/cache.py` \u2014 Cache key is only `request.path`, ignoring method, query params, and headers; POST/DELETE responses can be cached/served for GETs and per-user responses can leak across requests.\n- `miniweb/cache.py` \u2014 The in-memory cache is unbounded with no eviction, allowing memory exhaustion under load.",
+      "wall_s": 65.7,
+      "steps": 5,
+      "error": ""
+    }
+  },
+  "scores": {
+    "sliceagent": {
+      "recall": 1.0,
+      "found": 8,
+      "total": 8,
+      "false_pos": 0,
+      "plausible_extra": 3,
+      "precision": 1.0,
+      "per_issue": [
+        {
+          "id": "B1",
+          "found": true,
+          "evidence": "miniweb/router.py \u2014 match() uses substring matching (route in path), so e.g. /foo/admin/bar incorrectly matches a route registered as /admin."
+        },
+        {
+          "id": "B2",
+          "found": true,
+          "evidence": "miniweb/request.py \u2014 __init__ uses a mutable default params={}, so separate Request instances can share the same params dict."
+        },
+        {
+          "id": "B3",
+          "found": true,
+          "evidence": "miniweb/auth.py \u2014 header() lookup is case-sensitive, but HTTP header names are case-insensitive, so Authorization may be missed."
+        },
+        {
+          "id": "B4",
+          "found": true,
+          "evidence": "miniweb/response.py \u2014 finalize() sets Content-Length to len(self.body) (characters), not UTF-8 bytes, so non-ASCII bodies get an incorrect length."
+        },
+        {
+          "id": "B5",
+          "found": true,
+          "evidence": "miniweb/auth.py \u2014 Logs the raw bearer token at INFO level, leaking credential material."
+        },
+        {
+          "id": "B6",
+          "found": true,
+          "evidence": "miniweb/auth.py \u2014 Token comparison uses ==, which is vulnerable to timing side-channel attacks."
+        },
+        {
+          "id": "B7",
+          "found": true,
+          "evidence": "miniweb/cache.py \u2014 Cache key is only request.path, ignoring method, query params, and headers; POST/DELETE responses can be cached/served for GETs and per-user responses can leak across requests."
+        },
+        {
+          "id": "B8",
+          "found": true,
+          "evidence": "miniweb/validators.py \u2014 clamp() returns high for almost all inputs because min(n, low) and max(high, ...) are inverted."
+        }
+      ],
+      "extra_claims": [
+        {
+          "claim": "Bearer token extraction via replace('Bearer ', '') only strips a literal, case-sensitive prefix and does not require the prefix, allowing raw or oddly prefixed tokens to be accepted.",
+          "kind": "plausible_extra"
+        },
+        {
+          "claim": "Cache key ignores HTTP method and headers (in addition to query params), allowing POST/DELETE responses to be served for GETs and per-user responses to leak across requests.",
+          "kind": "plausible_extra"
+        },
+        {
+          "claim": "The in-memory cache is unbounded with no eviction, allowing memory exhaustion under load.",
+          "kind": "plausible_extra"
+        }
+      ]
+    }
+  }
+}

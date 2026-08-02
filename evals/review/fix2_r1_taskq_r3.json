@@ -1,0 +1,61 @@
+{
+  "target": "r1_taskq",
+  "model": "kimi-k2.7-code",
+  "reviews": {
+    "sliceagent": {
+      "agent": "sliceagent",
+      "review": "Issues found in `taskq`:\n\n- `taskq/queue.py`: `__init__` uses mutable default argument `items=[]`, so separate queues share the same underlying list.\n- `taskq/queue.py`: `is_full` checks `len(self._items) > self.capacity` instead of `>=`, allowing the queue to grow one item past `capacity`.\n- `taskq/worker.py`: `run_once` opens the log file but never closes it, leaking file descriptors.\n- `taskq/worker.py`: `run_once` silently swallows all exceptions and returns `None`, hiding handler failures.\n- `taskq/scheduler.py`: `run_with_retry` never increments `attempts`, so a failing task causes an infinite loop instead of stopping after `max_retries`.\n- `taskq/scheduler.py`: `should_retry` is unused by `run_with_retry` and its `attempt` parameter semantics are inconsistent with the class\u2019s actual retry logic.\n- `taskq/store.py`: `find_by_name` builds SQL via `\"... WHERE name = '%s'\" % name`, making it vulnerable to SQL injection.",
+      "wall_s": 23.8,
+      "steps": 2,
+      "error": ""
+    }
+  },
+  "scores": {
+    "sliceagent": {
+      "recall": 1.0,
+      "found": 6,
+      "total": 6,
+      "false_pos": 1,
+      "plausible_extra": 0,
+      "precision": 0.857,
+      "per_issue": [
+        {
+          "id": "B1",
+          "found": true,
+          "evidence": "`taskq/queue.py`: `__init__` uses mutable default argument `items=[]`, so separate queues share the same underlying list."
+        },
+        {
+          "id": "B2",
+          "found": true,
+          "evidence": "`taskq/queue.py`: `is_full` checks `len(self._items) > self.capacity` instead of `>=`, allowing the queue to grow one item past `capacity`."
+        },
+        {
+          "id": "B3",
+          "found": true,
+          "evidence": "`taskq/worker.py`: `run_once` opens the log file but never closes it, leaking file descriptors."
+        },
+        {
+          "id": "B4",
+          "found": true,
+          "evidence": "`taskq/worker.py`: `run_once` silently swallows all exceptions and returns `None`, hiding handler failures."
+        },
+        {
+          "id": "B5",
+          "found": true,
+          "evidence": "`taskq/scheduler.py`: `run_with_retry` never increments `attempts`, so a failing task causes an infinite loop instead of stopping after `max_retries`."
+        },
+        {
+          "id": "B6",
+          "found": true,
+          "evidence": "`taskq/store.py`: `find_by_name` builds SQL via `\"... WHERE name = '%s'\" % name`, making it vulnerable to SQL injection."
+        }
+      ],
+      "extra_claims": [
+        {
+          "claim": "`taskq/scheduler.py`: `should_retry` is unused by `run_with_retry` and its `attempt` parameter semantics are inconsistent with the class\u2019s actual retry logic.",
+          "kind": "false_positive"
+        }
+      ]
+    }
+  }
+}

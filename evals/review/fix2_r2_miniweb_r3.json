@@ -1,0 +1,87 @@
+{
+  "target": "r2_miniweb",
+  "model": "kimi-k2.7-code",
+  "reviews": {
+    "sliceagent": {
+      "agent": "sliceagent",
+      "review": "Bugs and issues found across `miniweb`:\n\n| File | Issue |\n|------|-------|\n| `miniweb/validators.py` | `clamp(n, low, high)` is wrong: `max(high, min(n, low))` inverts `low`/`high`; should be `min(high, max(n, low))`. |\n| `miniweb/auth.py` | Token comparison `token == self.valid_token` is not constant-time (timing side-channel). |\n| `miniweb/auth.py` | Logs the secret token (`token=%s`) to plaintext logs. |\n| `miniweb/auth.py` | `replace(\"Bearer \", \"\")` only strips once and is case-sensitive; `Bearer  TOKEN` etc. won't be handled correctly. |\n| `miniweb/request.py` | Mutable default argument `params={}` shared across all `Request` instances. |\n| `miniweb/request.py` | `is_json()` accepts substrings like `application/json-patch+json` or `text/application/json` as JSON. |\n| `miniweb/cache.py` | Cache key is only `request.path`, ignoring method/query/headers, so GET/POST/HEAD collide and token headers don't differentiate cached responses. |\n| `miniweb/router.py` | `match()` uses substring `route in path`, so `/foo` matches `/foo/bar` and `/bar/foo` incorrectly. |\n| `miniweb/response.py` | `finalize()` sets `Content-Length` from `len(self.body)`, which is wrong for non-ASCII/bytes bodies and is not idempotent if called twice. |\n| `miniweb/response.py` | `with_header()` coerces value to `str` but allows header injection if value contains `\\r\\n`. |",
+      "wall_s": 16.8,
+      "steps": 3,
+      "error": ""
+    }
+  },
+  "scores": {
+    "sliceagent": {
+      "recall": 0.875,
+      "found": 7,
+      "total": 8,
+      "false_pos": 1,
+      "plausible_extra": 4,
+      "precision": 0.917,
+      "per_issue": [
+        {
+          "id": "B1",
+          "found": true,
+          "evidence": "`match()` uses substring `route in path`, so `/foo` matches `/foo/bar` and `/bar/foo` incorrectly."
+        },
+        {
+          "id": "B2",
+          "found": true,
+          "evidence": "Mutable default argument `params={}` shared across all `Request` instances."
+        },
+        {
+          "id": "B3",
+          "found": false,
+          "evidence": ""
+        },
+        {
+          "id": "B4",
+          "found": true,
+          "evidence": "`finalize()` sets `Content-Length` from `len(self.body)`, which is wrong for non-ASCII/bytes bodies"
+        },
+        {
+          "id": "B5",
+          "found": true,
+          "evidence": "Logs the secret token (`token=%s`) to plaintext logs."
+        },
+        {
+          "id": "B6",
+          "found": true,
+          "evidence": "Token comparison `token == self.valid_token` is not constant-time (timing side-channel)."
+        },
+        {
+          "id": "B7",
+          "found": true,
+          "evidence": "Cache key is only `request.path`, ignoring method/query/headers, so GET/POST/HEAD collide and token headers don't differentiate cached responses."
+        },
+        {
+          "id": "B8",
+          "found": true,
+          "evidence": "`clamp(n, low, high)` is wrong: `max(high, min(n, low))` inverts `low`/`high`; should be `min(high, max(n, low))`."
+        }
+      ],
+      "extra_claims": [
+        {
+          "claim": "Auth token extraction using `replace(\"Bearer \", \"\")` is case-sensitive and strips only once, mishandling values like `Bearer  TOKEN`.",
+          "kind": "plausible_extra"
+        },
+        {
+          "claim": "request.is_json() uses substring matching, accepting invalid media types such as `text/application/json` as JSON.",
+          "kind": "plausible_extra"
+        },
+        {
+          "claim": "Cache key ignores HTTP method and headers, causing GET/POST/HEAD and differing request headers to collide.",
+          "kind": "plausible_extra"
+        },
+        {
+          "claim": "response.finalize() is not idempotent if called twice.",
+          "kind": "false_positive"
+        },
+        {
+          "claim": "response.with_header() allows HTTP header injection if a header value contains `\\r\\n`.",
+          "kind": "plausible_extra"
+        }
+      ]
+    }
+  }
+}

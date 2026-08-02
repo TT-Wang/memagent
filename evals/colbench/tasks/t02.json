@@ -1,0 +1,17 @@
+{
+  "problem_description": "Can you write a python function to calculate the total acquisition cost for a company, considering the price of acquisition, the number of patents acquired, the profit made by the company over a certain period, and the cost of a patent license agreement? I need this function to determine the more costly scenario.The signature of the function is: def calculate_acquisition_cost(acquisition_price, number_of_patents, years_of_profit, patent_license_agreement_price)",
+  "ground_truth": "def calculate_acquisition_cost(acquisition_price, number_of_patents, years_of_profit, patent_license_agreement_price):\n    if number_of_patents * patent_license_agreement_price < acquisition_price:\n        return acquisition_price\n    else:\n        return number_of_patents * patent_license_agreement_price",
+  "test_cases": {
+    "test1": "calculate_acquisition_cost(12500000000, 25000, 2, 500000)",
+    "test2": "calculate_acquisition_cost(15000000000, 30000, 5, 600000)",
+    "test3": "calculate_acquisition_cost(10000000000, 20000, 3, 550000)",
+    "test4": "calculate_acquisition_cost(12000000000, 25000, 2, 525000)",
+    "test5": "calculate_acquisition_cost(18000000000, 35000, 4, 650000)",
+    "test6": "calculate_acquisition_cost(9000000000, 15000, 1, 400000)",
+    "test7": "calculate_acquisition_cost(16000000000, 32000, 6, 700000)",
+    "test8": "calculate_acquisition_cost(11000000000, 22000, 3, 500000)",
+    "test9": "calculate_acquisition_cost(14000000000, 28000, 2, 450000)",
+    "test10": "calculate_acquisition_cost(13000000000, 26000, 5, 575000)"
+  },
+  "hidden_information": "def calculate_acquisition_cost(acquisition_price, number_of_patents, years_of_profit, patent_license_agreement_price):\n    if number_of_patents * patent_license_agreement_price < acquisition_price:\n        return acquisition_price\n    else:\n        return number_of_patents * patent_license_agreement_price"
+}

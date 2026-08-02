@@ -1,0 +1,64 @@
+{
+  "target": "r3_statkit",
+  "model": "kimi-k2.7-code",
+  "reviews": {
+    "kimi": {
+      "agent": "kimi",
+      "review": "1\tfrom .aggregate import mean, running_total, total\n2\tfrom .window import sliding_mean, chunk\n3\tfrom .parse import parse_ints, parse_table\n4\tfrom .dedup import unique, unique_stable\n5\t\n6\t__all__ = [\"mean\", \"running_total\", \"total\", \"sliding_mean\", \"chunk\",\n7\t           \"parse_ints\", \"parse_table\", \"unique\", \"unique_stable\"]\n<system>7 lines read from file starting from line 1. Total lines in file: 7. End of file reached.</system>\n1\t\"\"\"Aggregation helpers over numeric sequences.\"\"\"\n2\t\n3\t\n4\tdef mean(xs):\n5\t    if not xs:\n6\t        return 0.0\n7\t    return sum(xs) // len(xs)\n8\t\n9\t\n10\tdef running_total(x, acc=[]):\n11\t    acc.append(x)\n12\t    return sum(acc)\n13\t\n14\t\n15\tdef total(xs):\n16\t    t = 0\n17\t    for x in xs:\n18\t        t += x\n19\t    return t\n<system>19 lines read from file starting from line 1. Total lines in file: 19. End of file reached.</system>\n1\t\"\"\"De-duplication helpers (order is part of the contract: callers rely on first-seen order).\"\"\"\n2\t\n3\t\n4\tdef unique(items):\n5\t    return list(set(items))\n6\t\n7\t\n8\tdef unique_stable(items):\n9\t    seen = set()\n10\t    out = []\n11\t    for it in items:\n12\t        if it not in seen:\n13\t            seen.add(it)\n14\t            out.append(it)\n15\t    return out\n<system>15 lines read from file starting from line 1. Total lines in file: 15. End of file reached.</system>\n1\t\"\"\"Formatting helpers.\"\"\"\n2\t\n3\t\n4\tdef percent(fraction, digits=1):\n5\t    return f\"{round(fraction * 100, digits)}%\"\n6\t\n7\t\n8\tdef pad(label, width):\n9\t    label = str(label)\n10\t    if len(label) >= width:\n11\t        return label\n12\t    return label + \" \" * (width - len(label))\n<system>12 lines read from file starting from line 1. Total lines in file: 12. End of file reached.</system>\n1\t\"\"\"Parse rows of integers from text.\"\"\"\n2\t\n3\t\n4\tdef parse_ints(line):\n5\t    return [int(x) for x in line.split(\",\")]\n6\t\n7\t\n8\tdef parse_table(text):\n9\t    rows = []\n10\t    for line in text.splitlines():\n11\t        if not line:\n12\t            continue\n13\t        rows.append(parse_ints(line))\n14\t    return rows\n<system>14 lines read from file starting from line 1. Total lines in file: 14. End of file reached.</system>\n1\t\"\"\"Sliding-window computations.\"\"\"\n2\t\n3\t\n4\tdef sliding_mean(xs, size):\n5\t    out = []\n6\t    for i in range(len(xs) - size):\n7\t        chunk = xs[i:i + size]\n8\t        out.append(sum(chunk) / size)\n9\t    return out\n10\t\n11\t\n12\tdef chunk(xs, size):\n13\t    return [xs[i:i + size] for i in range(0, len(xs), size)]\n<system>13 lines read from file starting from line 1. Total lines in file: 13. End of file reached.</system>\nNo matches found\nstatkit/__init__.py\nstatkit/format.py\nstatkit/dedup.py\nstatkit/parse.py\nstatkit/window.py\nstatkit/aggregate.py\nmean [1,2,4]: 2\nmean floats [1.0,2.0,4.0]: 2.0\nrunning_total: 1 3 6\nsliding_mean size2 [1,2,3,4]: [1.5, 2.5]\nchunk size2 [1,2,3,4,5]: [[1, 2], [3, 4], [5]]\nunique: [1, 2, 3]\nunique_stable: [3, 1, 2]\npercent: 12.35%\npad: 'hi   '\nTraceback (most recent call last):\n  File \"<stdin>\", line 15, in <module>\n  File \"/private/var/folders/ln/zfd8s4v510529zt2t3wnshsr0000gn/T/review-r3_statkit-mp8eb2q9/statkit/parse.py\", line 13, in parse_table\n    rows.append(parse_ints(line))\n  File \"/private/var/folders/ln/zfd8s4v510529zt2t3wnshsr0000gn/T/review-r3_statkit-mp8eb2q9/statkit/parse.py\", line 5, in parse_ints\n    return [int(x) for x in line.split(\",\")]\n  File \"/private/var/folders/ln/zfd8s4v510529zt2t3wnshsr0000gn/T/review-r3_statkit-mp8eb2q9/statkit/parse.py\", line 5, in <listcomp>\n    return [int(x) for x in line.split(\",\")]\nValueError: invalid literal for int() with base 10: '   '\nCommand failed with exit code: 1.\n50.0%\n12.5%\n10.0%\n\n- `statkit/aggregate.py`: `mean` uses integer floor division (`//`) instead of true division, truncating the average.\n- `statkit/aggregate.py`: `running_total` uses a mutable list as a default argument, so state leaks across calls.\n- `statkit/dedup.py`: `unique` builds `list(set(items))`, losing first-seen order despite the module\u2019s order contract.\n- `statkit/window.py`: `sliding_mean` uses `range(len(xs) - size)`, dropping the final window (off-by-one).\n- `statkit/parse.py`: `parse_table` only skips `\"\"`, so whitespace-only lines crash instead of being treated as empty.\n- `statkit/format.py`: `percent` rounds but does not zero-pad, so the result can have fewer decimal places than `digits` requests.\n- `statkit/__init__.py`: `percent` and `pad` from `format.py` are not imported or included in `__all__`.\nTo resume this session: kimi -r session_04bbabfc-fadb-4c9f-b987-4d230a4502c0",
+      "wall_s": 135.0,
+      "rc": 0,
+      "error": ""
+    }
+  },
+  "scores": {
+    "kimi": {
+      "recall": 0.8,
+      "found": 4,
+      "total": 5,
+      "false_pos": 2,
+      "plausible_extra": 1,
+      "precision": 0.714,
+      "per_issue": [
+        {
+          "id": "B1",
+          "found": true,
+          "evidence": "`statkit/aggregate.py`: `mean` uses integer floor division (`//`) instead of true division, truncating the average."
+        },
+        {
+          "id": "B2",
+          "found": true,
+          "evidence": "`statkit/aggregate.py`: `running_total` uses a mutable list as a default argument, so state leaks across calls."
+        },
+        {
+          "id": "B3",
+          "found": true,
+          "evidence": "`statkit/window.py`: `sliding_mean` uses `range(len(xs) - size)`, dropping the final window (off-by-one)."
+        },
+        {
+          "id": "B4",
+          "found": true,
+          "evidence": "`statkit/dedup.py`: `unique` builds `list(set(items))`, losing first-seen order despite the module\u2019s order contract."
+        },
+        {
+          "id": "B5",
+          "found": false,
+          "evidence": "The review discusses `parse_table` not skipping whitespace-only lines; it does not identify the `parse_ints` crash on an empty/trailing field such as '1,2,'."
+        }
+      ],
+      "extra_claims": [
+        {
+          "claim": "`statkit/parse.py`: `parse_table` only skips empty strings, so whitespace-only lines crash instead of being treated as empty.",
+          "kind": "plausible_extra"
+        },
+        {
+          "claim": "`statkit/format.py`: `percent` rounds but does not zero-pad, so the result can have fewer decimal places than `digits` requests.",
+          "kind": "distractor_false_positive"
+        },
+        {
+          "claim": "`statkit/__init__.py`: `percent` and `pad` from `format.py` are not imported or included in `__all__`.",
+          "kind": "false_positive"
+        }
+      ]
+    }
+  }
+}

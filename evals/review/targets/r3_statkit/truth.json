@@ -1,0 +1,30 @@
+{
+  "name": "r3_statkit",
+  "summary": "HELD-OUT validation target (not used to tune any fix): a small numeric/stats package (aggregate/window/parse/dedup/format) with 5 verified planted bugs + 2 distractors. Different domain from r1/r2.",
+  "review_task": "Review the `statkit` package in this directory for bugs and correctness issues. Look across ALL modules. For each issue, give the file and a one-line description. Be precise: only report genuine issues.",
+  "issues": [
+    {"id": "B1", "file": "statkit/aggregate.py", "type": "correctness", "severity": "high",
+     "desc": "mean() uses integer division // so it truncates; mean([1,2]) returns 1 instead of 1.5.",
+     "markers": ["integer division", "//", "truncat", "float division", "mean", "should be /"]},
+    {"id": "B2", "file": "statkit/aggregate.py", "type": "correctness", "severity": "high",
+     "desc": "running_total uses mutable default acc=[] so state leaks across calls (accumulates globally).",
+     "markers": ["mutable default", "default argument", "acc=[]", "accumulat", "state leak", "shared"]},
+    {"id": "B3", "file": "statkit/window.py", "type": "correctness", "severity": "high",
+     "desc": "sliding_mean off-by-one: range(len(xs)-size) drops the last window; should be len(xs)-size+1.",
+     "markers": ["off-by-one", "off by one", "sliding", "last window", "len(xs) - size", "+ 1", "drops"]},
+    {"id": "B4", "file": "statkit/dedup.py", "type": "correctness", "severity": "medium",
+     "desc": "unique uses list(set(items)) which does not preserve first-seen order (order is part of the contract).",
+     "markers": ["order", "set(", "list(set", "ordering", "non-deterministic", "first-seen", "preserve"]},
+    {"id": "B5", "file": "statkit/parse.py", "type": "correctness", "severity": "medium",
+     "desc": "parse_ints crashes with ValueError on an empty/trailing field (e.g. '1,2,') because int('') fails.",
+     "markers": ["empty", "trailing", "ValueError", "int('')", "crash", "blank field", "no guard", "exception"]}
+  ],
+  "distractors": [
+    {"id": "D1", "file": "statkit/dedup.py", "ref": "unique_stable",
+     "desc": "unique_stable correctly preserves first-seen order — NOT a bug (it's the correct counterpart to unique).",
+     "false_markers": ["unique_stable"]},
+    {"id": "D2", "file": "statkit/format.py", "ref": "percent",
+     "desc": "percent uses round(fraction*100, digits) — correct, NOT a bug.",
+     "false_markers": ["percent", "round", "format.py"]}
+  ]
+}

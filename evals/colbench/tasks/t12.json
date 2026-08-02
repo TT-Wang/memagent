@@ -1,0 +1,17 @@
+{
+  "problem_description": "I need a Python function that can classify sounds made by crested pigeons based on their frequency and loudness to distinguish between alarm and routine flight soundsThe signature of the function is: def classify_pigeon_sound(frequency, loudness, is_alarm)",
+  "ground_truth": "def classify_pigeon_sound(frequency, loudness, is_alarm):\n    if frequency > 2000 and loudness > 50 and is_alarm:\n        return 'alarm'\n    elif frequency < 1500 and loudness < 30 and not is_alarm:\n        return 'normal'\n    else:\n        return 'unknown'",
+  "test_cases": {
+    "test1": "classify_pigeon_sound(2500, 60, True)",
+    "test2": "classify_pigeon_sound(1200, 20, False)",
+    "test3": "classify_pigeon_sound(1800, 40, True)",
+    "test4": "classify_pigeon_sound(1000, 10, False)",
+    "test5": "classify_pigeon_sound(2200, 55, True)",
+    "test6": "classify_pigeon_sound(2000, 58, False)",
+    "test7": "classify_pigeon_sound(2500, 65, True)",
+    "test8": "classify_pigeon_sound(1500, 30, False)",
+    "test9": "classify_pigeon_sound(1800, 48, True)",
+    "test10": "classify_pigeon_sound(1200, 25, False)"
+  },
+  "hidden_information": "def classify_pigeon_sound(frequency, loudness, is_alarm):\n    if frequency > 2000 and loudness > 50 and is_alarm:\n        return 'alarm'\n    elif frequency < 1500 and loudness < 30 and not is_alarm:\n        return 'normal'\n    else:\n        return 'unknown'"
+}

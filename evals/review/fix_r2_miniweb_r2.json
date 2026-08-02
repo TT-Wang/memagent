@@ -1,0 +1,71 @@
+{
+  "target": "r2_miniweb",
+  "model": "kimi-k2.7-code",
+  "reviews": {
+    "sliceagent": {
+      "agent": "sliceagent",
+      "review": "Issues found in the `miniweb` package:\n\n- `miniweb/request.py` \u2014 Mutable default argument `params={}` is shared across all `Request` instances.\n- `miniweb/router.py` \u2014 `match()` uses substring check (`route in path`), so routes match unexpectedly (e.g., `/user` matches `/admin/user`).\n- `miniweb/router.py` \u2014 `match()` returns only the first route that is a substring, which can shadow longer/more-specific routes.\n- `miniweb/validators.py` \u2014 `clamp(n, low, high)` uses `max(high, min(n, low))`, which clamps to `low` rather than to the `[low, high]` range.\n- `miniweb/auth.py` \u2014 Token extraction does not enforce the `Bearer` scheme; it strips only the literal prefix `\"Bearer \"` from anywhere in the header and logs the raw token.",
+      "wall_s": 37.3,
+      "steps": 4,
+      "error": ""
+    }
+  },
+  "scores": {
+    "sliceagent": {
+      "recall": 0.5,
+      "found": 4,
+      "total": 8,
+      "false_pos": 0,
+      "plausible_extra": 1,
+      "precision": 1.0,
+      "per_issue": [
+        {
+          "id": "B1",
+          "found": true,
+          "evidence": "match() uses substring check (route in path), so routes match unexpectedly (e.g., /user matches /admin/user)."
+        },
+        {
+          "id": "B2",
+          "found": true,
+          "evidence": "Mutable default argument params={} is shared across all Request instances."
+        },
+        {
+          "id": "B3",
+          "found": false,
+          "evidence": ""
+        },
+        {
+          "id": "B4",
+          "found": false,
+          "evidence": ""
+        },
+        {
+          "id": "B5",
+          "found": true,
+          "evidence": "and logs the raw token."
+        },
+        {
+          "id": "B6",
+          "found": false,
+          "evidence": ""
+        },
+        {
+          "id": "B7",
+          "found": false,
+          "evidence": ""
+        },
+        {
+          "id": "B8",
+          "found": true,
+          "evidence": "clamp(n, low, high) uses max(high, min(n, low)), which clamps to low rather than the [low, high] range."
+        }
+      ],
+      "extra_claims": [
+        {
+          "claim": "Token extraction does not enforce the Bearer scheme; it strips only the literal prefix \"Bearer \" from anywhere in the header.",
+          "kind": "plausible_extra"
+        }
+      ]
+    }
+  }
+}

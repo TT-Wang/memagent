@@ -1,0 +1,13 @@
+{
+  "target": "r1_taskq",
+  "model": "kimi-k2.7-code",
+  "reviews": {
+    "sliceagent": {
+      "agent": "sliceagent",
+      "review": "## Issues found in `taskq/`\n\n1. **`taskq/queue.py:4`** \u2014 Mutable default argument `items=[]` causes shared state across `TaskQueue` instances.\n2. **`taskq/queue.py:10`** \u2014 `is_full()` uses `>` instead of `>=`, so the queue accepts one task beyond `capacity`.\n3. **`taskq/worker.py:11`** \u2014 Log file is opened but never closed; leaks a file descriptor.\n4. **`taskq/worker.py:19-20`** \u2014 Exceptions are silently swallowed; failures are logged neither to the log nor anywhere else.\n5. **`taskq/scheduler.py:10-18`** \u2014 `run_with_retry` ignores `should_retry`, and returns `None` after max retries without distinguishing success/failure or re-raising.\n6. **`taskq/scheduler.py:20-21`** \u2014 `should_retry` accepts an `attempt` parameter but `run_with_retry` does not use or expose it consistently.\n7. **`taskq/store.py:15-17`** \u2014 `find_by_name` uses string formatting into the SQL query, creating SQL injection vulnerability.",
+      "wall_s": 17.3,
+      "steps": 3,
+      "error": ""
+    }
+  }
+}

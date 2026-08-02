@@ -1,0 +1,17 @@
+{
+  "problem_description": "Hi LLM agent, I am from the disaster management department and we are trying to rebuild Japan. I need you to write a python function for me to calculate the total score of a particular nature-based solution in a district. The function should take into account the hazard protection, ecosystem, community and recovery values. Can you please help me write this function?The signature of the function is: def calculate_nature_based_solution_score(hazard_protection_value, ecosystem_value, community_value, recovery_value)",
+  "ground_truth": "def calculate_nature_based_solution_score(hazard_protection_value, ecosystem_value, community_value, recovery_value): return hazard_protection_value * 0.3 + ecosystem_value * 0.25 + community_value * 0.2 + recovery_value * 0.25",
+  "test_cases": {
+    "test1": "calculate_nature_based_solution_score(0.8, 0.6, 0.7, 0.9)",
+    "test2": "calculate_nature_based_solution_score(0.4, 0.3, 0.5, 0.6)",
+    "test3": "calculate_nature_based_solution_score(0.1, 0.2, 0.3, 0.4)",
+    "test4": "calculate_nature_based_solution_score(0.9, 0.95, 0.8, 0.7)",
+    "test5": "calculate_nature_based_solution_score(0.6, 0.65, 0.7, 0.75)",
+    "test6": "calculate_nature_based_solution_score(0.3, 0.35, 0.4, 0.45)",
+    "test7": "calculate_nature_based_solution_score(0.2, 0.25, 0.3, 0.35)",
+    "test8": "calculate_nature_based_solution_score(0.85, 0.8, 0.7, 0.6)",
+    "test9": "calculate_nature_based_solution_score(0.55, 0.5, 0.6, 0.65)",
+    "test10": "calculate_nature_based_solution_score(0.45, 0.4, 0.5, 0.55)"
+  },
+  "hidden_information": "def calculate_nature_based_solution_score(hazard_protection_value, ecosystem_value, community_value, recovery_value): return hazard_protection_value * 0.3 + ecosystem_value * 0.25 + community_value * 0.2 + recovery_value * 0.25"
+}

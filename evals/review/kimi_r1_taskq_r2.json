@@ -1,0 +1,56 @@
+{
+  "target": "r1_taskq",
+  "model": "kimi-k2.7-code",
+  "reviews": {
+    "kimi": {
+      "agent": "kimi",
+      "review": "1\tfrom .queue import TaskQueue\n2\tfrom .worker import Worker\n3\tfrom .scheduler import RetryScheduler\n4\tfrom .store import ResultStore\n5\t\n6\t__all__ = [\"TaskQueue\", \"Worker\", \"RetryScheduler\", \"ResultStore\"]\n<system>6 lines read from file starting from line 1. Total lines in file: 6. End of file reached.</system>\n1\t\"\"\"A bounded in-memory task queue.\"\"\"\n2\t\n3\t\n4\tclass TaskQueue:\n5\t    def __init__(self, capacity=16, items=[]):\n6\t        self.capacity = capacity\n7\t        self._items = items\n8\t\n9\t    def is_full(self):\n10\t        return len(self._items) > self.capacity\n11\t\n12\t    def enqueue(self, task):\n13\t        if self.is_full():\n14\t            raise OverflowError(\"queue full\")\n15\t        self._items.append(task)\n16\t\n17\t    def dequeue(self):\n18\t        if not self._items:\n19\t            return None\n20\t        return self._items.pop(0)\n21\t\n22\t    def snapshot(self):\n23\t        return list(self._items)\n24\t\n25\t    def __len__(self):\n26\t        return len(self._items)\n<system>26 lines read from file starting from line 1. Total lines in file: 26. End of file reached.</system>\n1\t\"\"\"Retry scheduler around a worker.\"\"\"\n2\timport time\n3\t\n4\t\n5\tclass RetryScheduler:\n6\t    def __init__(self, worker, max_retries=3, backoff=0.01):\n7\t        self.worker = worker\n8\t        self.max_retries = max_retries\n9\t        self.backoff = backoff\n10\t\n11\t    def run_with_retry(self, handler):\n12\t        attempts = 0\n13\t        last = None\n14\t        while attempts < self.max_retries:\n15\t            last = self.worker.run_once(handler)\n16\t            if last is not None:\n17\t                return last\n18\t            time.sleep(self.backoff)\n19\t        return last\n20\t\n21\t    def should_retry(self, result, attempt):\n22\t        return result is None and attempt < self.max_retries\n<system>22 lines read from file starting from line 1. Total lines in file: 22. End of file reached.</system>\n1\t\"\"\"Persist task results to SQLite.\"\"\"\n2\timport sqlite3\n3\t\n4\t\n5\tclass ResultStore:\n6\t    def __init__(self, db_path):\n7\t        self.conn = sqlite3.connect(db_path)\n8\t        self.conn.execute(\"CREATE TABLE IF NOT EXISTS results (name TEXT, value TEXT)\")\n9\t\n10\t    def save(self, name, value):\n11\t        self.conn.execute(\n12\t            \"INSERT INTO results (name, value) VALUES (?, ?)\", (name, value))\n13\t        self.conn.commit()\n14\t\n15\t    def find_by_name(self, name):\n16\t        cur = self.conn.execute(\n17\t            \"SELECT value FROM results WHERE name = '%s'\" % name)\n18\t        return [row[0] for row in cur.fetchall()]\n<system>18 lines read from file starting from line 1. Total lines in file: 18. End of file reached.</system>\n1\t\"\"\"Worker that drains a queue and logs results.\"\"\"\n2\timport os\n3\t\n4\t\n5\tclass Worker:\n6\t    def __init__(self, queue, log_path):\n7\t        self.queue = queue\n8\t        self.log_path = log_path\n9\t\n10\t    def run_once(self, handler):\n11\t        task = self.queue.dequeue()\n12\t        if task is None:\n13\t            return None\n14\t        log = open(self.log_path, \"a\")\n15\t        try:\n16\t            result = handler(task)\n17\t            log.write(\"ok: %r\\n\" % (result,))\n18\t            return result\n19\t        except Exception:\n20\t            return None\n21\t\n22\t    def drain(self, handler):\n23\t        results = []\n24\t        while len(self.queue):\n25\t            results.append(self.run_once(handler))\n26\t        return results\n27\t\n28\t    def log_dir(self):\n29\t        return os.path.dirname(self.log_path) or \".\"\n<system>29 lines read from file starting from line 1. Total lines in file: 29. End of file reached.</system>\nHere are the genuine issues I found:\n\n- **`queue.py`**: Mutable default argument `items=[]` causes separate `TaskQueue` instances to share the same backing list.\n- **`queue.py`**: `is_full()` checks `len(self._items) > self.capacity`, so the queue accepts one element beyond its stated capacity (off-by-one).\n- **`scheduler.py`**: `run_with_retry()` never increments `attempts`, causing an infinite loop whenever the worker returns `None`.\n- **`store.py`**: `find_by_name()` interpolates `name` directly into the SQL query via `\"%s\" % name`, making it vulnerable to SQL injection.\n- **`worker.py`**: `run_once()` opens the log file but never closes it, leaking file descriptors.\n- **`worker.py`**: `run_once()` catches and silently discards all handler exceptions, making task failures indistinguishable from success and leaving no error record.\nTo resume this session: kimi -r session_0e1f35cd-0ef8-49b6-acd5-70e589612957",
+      "wall_s": 54.9,
+      "rc": 0,
+      "error": ""
+    }
+  },
+  "scores": {
+    "kimi": {
+      "recall": 1.0,
+      "found": 6,
+      "total": 6,
+      "false_pos": 0,
+      "plausible_extra": 0,
+      "precision": 1.0,
+      "per_issue": [
+        {
+          "id": "B1",
+          "found": true,
+          "evidence": "Mutable default argument `items=[]` causes separate `TaskQueue` instances to share the same backing list."
+        },
+        {
+          "id": "B2",
+          "found": true,
+          "evidence": "`is_full()` checks `len(self._items) > self.capacity`, so the queue accepts one element beyond its stated capacity (off-by-one)."
+        },
+        {
+          "id": "B3",
+          "found": true,
+          "evidence": "`run_once()` opens the log file but never closes it, leaking file descriptors."
+        },
+        {
+          "id": "B4",
+          "found": true,
+          "evidence": "`run_once()` catches and silently discards all handler exceptions, making task failures indistinguishable from success and leaving no error record."
+        },
+        {
+          "id": "B5",
+          "found": true,
+          "evidence": "`run_with_retry()` never increments `attempts`, causing an infinite loop whenever the worker returns `None`."
+        },
+        {
+          "id": "B6",
+          "found": true,
+          "evidence": "`find_by_name()` interpolates `name` directly into the SQL query via `\"%s\" % name`, making it vulnerable to SQL injection."
+        }
+      ],
+      "extra_claims": []
+    }
+  }
+}

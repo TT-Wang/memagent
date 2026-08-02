@@ -1,0 +1,17 @@
+{
+  "problem_description": "I want you to write a python function that takes in a musician's career stage and their past music genres, and returns the genre of music they are most likely to produce given their current stage in their career. I want it to be similar to how Elton John's music style changed as his career progressed.The signature of the function is: def determine_music_genre(career_stage, past_genres)",
+  "ground_truth": "def determine_music_genre(career_stage, past_genres):\n\tif career_stage == 'early':\n\t\treturn 'rock'\n\telif career_stage == 'mid':\n\t\tif past_genres == ['rock', 'pop']:\n\t\t\treturn 'pop'\n\t\telse:\n\t\t\treturn 'blues'\n\telif career_stage == 'late':\n\t\tif past_genres == ['rock', 'blues'] or past_genres == ['pop', 'blues']:\n\t\t\treturn 'blues'\n\t\telse:\n\t\t\treturn 'gospel'",
+  "test_cases": {
+    "test1": "determine_music_genre('early', ['rock', 'pop'])",
+    "test2": "determine_music_genre('mid', ['rock', 'pop'])",
+    "test3": "determine_music_genre('mid', ['blues', 'gospel'])",
+    "test4": "determine_music_genre('late', ['rock', 'blues'])",
+    "test5": "determine_music_genre('late', ['pop', 'blues'])",
+    "test6": "determine_music_genre('late', ['rock', 'pop'])",
+    "test7": "determine_music_genre('early', ['blues', 'gospel'])",
+    "test8": "determine_music_genre('mid', ['rock', 'gospel'])",
+    "test9": "determine_music_genre('mid', ['pop', 'gospel'])",
+    "test10": "determine_music_genre('late', ['blues', 'gospel'])"
+  },
+  "hidden_information": "def determine_music_genre(career_stage, past_genres):\n\tif career_stage == 'early':\n\t\treturn 'rock'\n\telif career_stage == 'mid':\n\t\tif past_genres == ['rock', 'pop']:\n\t\t\treturn 'pop'\n\t\telse:\n\t\t\treturn 'blues'\n\telif career_stage == 'late':\n\t\tif past_genres == ['rock', 'blues'] or past_genres == ['pop', 'blues']:\n\t\t\treturn 'blues'\n\t\telse:\n\t\t\treturn 'gospel'"
+}

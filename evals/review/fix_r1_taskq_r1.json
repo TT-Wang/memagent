@@ -1,0 +1,56 @@
+{
+  "target": "r1_taskq",
+  "model": "kimi-k2.7-code",
+  "reviews": {
+    "sliceagent": {
+      "agent": "sliceagent",
+      "review": "- `taskq/queue.py`: Mutable default argument `items=[]` is shared across all `TaskQueue` instances.\n- `taskq/queue.py`: `is_full()` uses `>` instead of `>=`, allowing one item beyond `capacity`.\n- `taskq/worker.py`: Log file is opened but never closed in `run_once`, leaking the file descriptor on exceptions.\n- `taskq/worker.py`: `run_once` swallows all handler exceptions and returns `None`, hiding failures.\n- `taskq/scheduler.py`: `run_with_retry` never increments `attempts`, causing an infinite loop when `run_once` returns `None`.\n- `taskq/store.py`: `find_by_name` builds SQL with string formatting, making it vulnerable to SQL injection.",
+      "wall_s": 14.6,
+      "steps": 2,
+      "error": ""
+    }
+  },
+  "scores": {
+    "sliceagent": {
+      "recall": 1.0,
+      "found": 6,
+      "total": 6,
+      "false_pos": 0,
+      "plausible_extra": 0,
+      "precision": 1.0,
+      "per_issue": [
+        {
+          "id": "B1",
+          "found": true,
+          "evidence": "Mutable default argument `items=[]` is shared across all `TaskQueue` instances."
+        },
+        {
+          "id": "B2",
+          "found": true,
+          "evidence": "`is_full()` uses `>` instead of `>=`, allowing one item beyond `capacity`."
+        },
+        {
+          "id": "B3",
+          "found": true,
+          "evidence": "Log file is opened but never closed in `run_once`, leaking the file descriptor on exceptions."
+        },
+        {
+          "id": "B4",
+          "found": true,
+          "evidence": "`run_once` swallows all handler exceptions and returns `None`, hiding failures."
+        },
+        {
+          "id": "B5",
+          "found": true,
+          "evidence": "`run_with_retry` never increments `attempts`, causing an infinite loop when `run_once` returns `None`."
+        },
+        {
+          "id": "B6",
+          "found": true,
+          "evidence": "`find_by_name` builds SQL with string formatting, making it vulnerable to SQL injection."
+        }
+      ],
+      "extra_claims": []
+    }
+  }
+}

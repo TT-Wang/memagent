@@ -1,0 +1,17 @@
+{
+  "problem_description": "I need an estimation of a house's value on Nantucket. The house has fallen into disrepair and has historical significance. Can you, as an experienced real estate agent, write a python function to estimate the value of this house considering its year of construction, current condition, and the owner's intention?The signature of the function is: def estimate_house_value(year_built, current_condition, owner_intention, historical_significance)",
+  "ground_truth": "def estimate_house_value(year_built, current_condition, owner_intention, historical_significance):\n    if year_built < 1900 and historical_significance:\n        value = 2000000\n    elif current_condition == 'good' and owner_intention == 'sell':\n        value = 1500000\n    elif current_condition == 'bad' and owner_intention == 'restore':\n        value = 1000000\n    else:\n        value = 500000\n    return value\n",
+  "test_cases": {
+    "test1": "estimate_house_value(1830, 'bad', 'restore', True)",
+    "test2": "estimate_house_value(1990, 'good', 'sell', False)",
+    "test3": "estimate_house_value(1850, 'bad', 'tear_down', True)",
+    "test4": "estimate_house_value(1820, 'good', 'restore', True)",
+    "test5": "estimate_house_value(2000, 'bad', 'sell', False)",
+    "test6": "estimate_house_value(1800, 'good', 'restore', True)",
+    "test7": "estimate_house_value(1920, 'bad', 'tear_down', False)",
+    "test8": "estimate_house_value(1810, 'good', 'sell', True)",
+    "test9": "estimate_house_value(1980, 'bad', 'restore', False)",
+    "test10": "estimate_house_value(1900, 'good', 'tear_down', True)"
+  },
+  "hidden_information": "def estimate_house_value(year_built, current_condition, owner_intention, historical_significance):\n    if year_built < 1900 and historical_significance:\n        value = 2000000\n    elif current_condition == 'good' and owner_intention == 'sell':\n        value = 1500000\n    elif current_condition == 'bad' and owner_intention == 'restore':\n        value = 1000000\n    else:\n        value = 500000\n    return value\n"
+}

@@ -1,0 +1,17 @@
+{
+  "problem_description": "Can you write a python function that takes some ratings data and a time slot as input and returns the tv ratings for that specific time slot? The ratings data is kinda nested and i don't know how to access the necessary info.The signature of the function is: def calculate_tv_ratings(ratings_data, time_slot)",
+  "ground_truth": "def calculate_tv_ratings(ratings_data, time_slot):\n  # ratings_data is a dictionary with keys as time slots and values as dictionaries with keys as channels and values as ratings\n  # time_slot is a string indicating the time slot to extract the ratings for\n  result = {}\n  for channel, ratings in ratings_data.get(time_slot, {}).items():\n    result[channel] = ratings\n  return result",
+  "test_cases": {
+    "test1": "calculate_tv_ratings({'8 p.m.': {'CBS': 4.3, 'ABC': 2.8, 'NBC': 2.7, 'FOX': 2.3, 'The CW': 1.0}, '9 p.m.': {'CBS': 4.3, 'FOX': 3.5, 'NBC': 2.5, 'ABC': 2.4, 'The CW': 1.4}}, '9 p.m.')",
+    "test2": "calculate_tv_ratings({'10 p.m.': {'CBS': 3.5, 'NBC': 2.5, 'ABC': 2.3}, '9 p.m.': {'CBS': 4.3, 'FOX': 3.5, 'NBC': 2.5, 'ABC': 2.4, 'The CW': 1.4}}, '10 p.m.')",
+    "test3": "calculate_tv_ratings({'8 p.m.': {'CBS': 4.3, 'ABC': 2.8, 'NBC': 2.7, 'FOX': 2.3, 'The CW': 1.0}, '9 p.m.': {'CBS': 4.3, 'FOX': 3.5, 'NBC': 2.5, 'ABC': 2.4, 'The CW': 1.4}}, '8 p.m.')",
+    "test4": "calculate_tv_ratings({'10 p.m.': {'CBS': 3.5, 'NBC': 2.5, 'ABC': 2.3}, '9 p.m.': {'CBS': 4.3, 'FOX': 3.5, 'NBC': 2.5, 'ABC': 2.4, 'The CW': 1.4}}, '9 p.m.')",
+    "test5": "calculate_tv_ratings({'8 p.m.': {'CBS': 4.3, 'ABC': 2.8, 'NBC': 2.7, 'FOX': 2.3, 'The CW': 1.0}, '9 p.m.': {'CBS': 4.3, 'FOX': 3.5, 'NBC': 2.5, 'ABC': 2.4, 'The CW': 1.4}}, '10 p.m.')",
+    "test6": "calculate_tv_ratings({}, '8 p.m.')",
+    "test7": "calculate_tv_ratings({'8 p.m.': {'CBS': 4.3, 'ABC': 2.8, 'NBC': 2.7, 'FOX': 2.3, 'The CW': 1.0}}, '10 p.m.')",
+    "test8": "calculate_tv_ratings({'10 p.m.': {'CBS': 3.5, 'NBC': 2.5, 'ABC': 2.3}, '9 p.m.': {'CBS': 4.3, 'FOX': 3.5, 'NBC': 3.5, 'ABC': 2.4, 'The CW': 1.4}}, '9 p.m.')",
+    "test9": "calculate_tv_ratings({'10 p.m.': {'CBS': 3.5, 'NBC': 2.5}, '9 p.m.': {'CBS': 4.3, 'FOX': 3.5, 'NBC': 3.5, 'ABC': 2.4, 'The CW': 1.4}}, '9 p.m.')",
+    "test10": "calculate_tv_ratings({'10 p.m.': {'CBS': 3.5, 'NBC': 2.5, 'ABC': 2.3}, '9 p.m.': {'CBS': 4.3, 'FOX': 3.5, 'NBC': 3.5}}, '10 p.m.')"
+  },
+  "hidden_information": "def calculate_tv_ratings(ratings_data, time_slot):\n  # ratings_data is a dictionary with keys as time slots and values as dictionaries with keys as channels and values as ratings\n  # time_slot is a string indicating the time slot to extract the ratings for\n  result = {}\n  for channel, ratings in ratings_data.get(time_slot, {}).items():\n    result[channel] = ratings\n  return result"
+}

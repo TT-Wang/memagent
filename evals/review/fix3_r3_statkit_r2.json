@@ -1,0 +1,51 @@
+{
+  "target": "r3_statkit",
+  "model": "kimi-k2.7-code",
+  "reviews": {
+    "sliceagent": {
+      "agent": "sliceagent",
+      "review": "I'll read all the modules to review them for correctness issues.\n\nHere are the genuine issues I found across the `statkit` package:\n\n- `statkit/aggregate.py:mean` \u2014 returns a floor-divided integer (`//`) instead of a true mean (`/`), e.g. `mean([1,2])` returns `1` not `1.5`.\n- `statkit/aggregate.py:running_total` \u2014 uses a mutable default argument `acc=[]`, so repeated calls share and append to the same list.\n- `statkit/dedup.py:unique` \u2014 the module docstring says \"callers rely on first-seen order\", but `unique` returns `list(set(items))` which is unordered.\n- `statkit/window.py:sliding_mean` \u2014 the loop bound `range(len(xs) - size)` drops the last valid window, producing one fewer output than expected (off-by-one).\n\nNo tool call needed \u2014 this is a review/reporting task only. If you'd like me to fix any of these, just say so.",
+      "wall_s": 15.9,
+      "steps": 2,
+      "error": ""
+    }
+  },
+  "scores": {
+    "sliceagent": {
+      "recall": 0.8,
+      "found": 4,
+      "total": 5,
+      "false_pos": 0,
+      "plausible_extra": 0,
+      "precision": 1.0,
+      "per_issue": [
+        {
+          "id": "B1",
+          "found": true,
+          "evidence": "- `statkit/aggregate.py:mean` \u2014 returns a floor-divided integer (`//`) instead of a true mean (`/`), e.g. `mean([1,2])` returns `1` not `1.5`."
+        },
+        {
+          "id": "B2",
+          "found": true,
+          "evidence": "- `statkit/aggregate.py:running_total` \u2014 uses a mutable default argument `acc=[]`, so repeated calls share and append to the same list."
+        },
+        {
+          "id": "B3",
+          "found": true,
+          "evidence": "- `statkit/window.py:sliding_mean` \u2014 the loop bound `range(len(xs) - size)` drops the last valid window, producing one fewer output than expected (off-by-one)."
+        },
+        {
+          "id": "B4",
+          "found": true,
+          "evidence": "- `statkit/dedup.py:unique` \u2014 the module docstring says \"callers rely on first-seen order\", but `unique` returns `list(set(items))` which is unordered."
+        },
+        {
+          "id": "B5",
+          "found": false,
+          "evidence": ""
+        }
+      ],
+      "extra_claims": []
+    }
+  }
+}

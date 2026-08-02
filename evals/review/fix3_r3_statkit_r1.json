@@ -1,0 +1,51 @@
+{
+  "target": "r3_statkit",
+  "model": "kimi-k2.7-code",
+  "reviews": {
+    "sliceagent": {
+      "agent": "sliceagent",
+      "review": "Here are the genuine issues found across the `statkit` package:\n\n- `statkit/aggregate.py`: `mean` uses floor division `//`, so it discards fractional parts and returns an integer rather than the true average.\n- `statkit/aggregate.py`: `running_total` uses a mutable default argument `acc=[]`, so accumulated values persist across unrelated calls.\n- `statkit/dedup.py`: `unique` returns `list(set(items))`, which loses first-seen order and contradicts the module's documented order contract.\n- `statkit/window.py`: `sliding_mean` loops with `range(len(xs) - size)`, omitting the final window; it should use `len(xs) - size + 1`.",
+      "wall_s": 14.0,
+      "steps": 2,
+      "error": ""
+    }
+  },
+  "scores": {
+    "sliceagent": {
+      "recall": 0.8,
+      "found": 4,
+      "total": 5,
+      "false_pos": 0,
+      "plausible_extra": 0,
+      "precision": 1.0,
+      "per_issue": [
+        {
+          "id": "B1",
+          "found": true,
+          "evidence": "`statkit/aggregate.py`: `mean` uses floor division `//`, so it discards fractional parts and returns an integer rather than the true average."
+        },
+        {
+          "id": "B2",
+          "found": true,
+          "evidence": "`statkit/aggregate.py`: `running_total` uses a mutable default argument `acc=[]`, so accumulated values persist across unrelated calls."
+        },
+        {
+          "id": "B3",
+          "found": true,
+          "evidence": "`statkit/window.py`: `sliding_mean` loops with `range(len(xs) - size)`, omitting the final window; it should use `len(xs) - size + 1`."
+        },
+        {
+          "id": "B4",
+          "found": true,
+          "evidence": "`statkit/dedup.py`: `unique` returns `list(set(items))`, which loses first-seen order and contradicts the module's documented order contract."
+        },
+        {
+          "id": "B5",
+          "found": false,
+          "evidence": "The review does not mention `parse_ints` crashing on empty/trailing fields."
+        }
+      ],
+      "extra_claims": []
+    }
+  }
+}

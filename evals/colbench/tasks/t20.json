@@ -1,0 +1,17 @@
+{
+  "problem_description": "Write a python function to calculate the financial impact on the beef industry in Brazil due to the temporary import ban by Russia, given the overall beef export values and the states affected by the ban.The signature of the function is: def russian_ban_impact(brazil_states, total_export_value, affected_states)",
+  "ground_truth": "def russian_ban_impact(brazil_states, total_export_value, affected_states):\n    affected_states_set = set(affected_states)\n    impacted_value = sum(value for state, value in zip(brazil_states, total_export_value) if state in affected_states_set)\n    return impacted_value\n",
+  "test_cases": {
+    "test1": "russian_ban_impact(['Mato Grosso', 'Paran\u00e1', 'Rio Grande do Sul', 'Other'], [10.0, 20.0, 30.0, 40.0], ['Mato Grosso', 'Paran\u00e1'])",
+    "test2": "russian_ban_impact(['Mato Grosso do Sul', 'Paran\u00e1', 'Rio Grande do Sul', 'Other'], [15.0, 25.0, 35.0, 45.0], ['Mato Grosso do Sul'])",
+    "test3": "russian_ban_impact(['Mato Grosso', 'Paran\u00e1', 'Rio Grande do Sul'], [10.0, 20.0, 30.0], ['Paran\u00e1', 'Rio Grande do Sul'])",
+    "test4": "russian_ban_impact(['Minas Gerais', 'Paran\u00e1', 'Rio Grande do Sul', 'Other'], [15.0, 25.0, 35.0, 45.0], [])",
+    "test5": "russian_ban_impact(['Mato Grosso', 'Paran\u00e1', 'Rio Grande do Sul'], [10.0, 20.0, 30.0], ['Mato Grosso', 'Paran\u00e1', 'Rio Grande do Sul'])",
+    "test6": "russian_ban_impact(['Mato Grosso', 'Paran\u00e1', 'Other'], [10.0, 20.0, 40.0], ['Paran\u00e1'])",
+    "test7": "russian_ban_impact(['Mato Grosso do Sul', 'Paran\u00e1', 'Other'], [15.0, 25.0, 45.0], [])",
+    "test8": "russian_ban_impact(['Rio Grande do Sul', 'Other'], [35.0, 45.0], ['Other'])",
+    "test9": "russian_ban_impact(['Mato Grosso', 'Other'], [10.0, 40.0], ['Mato Grosso'])",
+    "test10": "russian_ban_impact(['Paran\u00e1', 'Other'], [20.0, 40.0], ['Paran\u00e1', 'Other'])"
+  },
+  "hidden_information": "def russian_ban_impact(brazil_states, total_export_value, affected_states):\n    affected_states_set = set(affected_states)\n    impacted_value = sum(value for state, value in zip(brazil_states, total_export_value) if state in affected_states_set)\n    return impacted_value\n"
+}

@@ -1,0 +1,17 @@
+{
+  "problem_description": "I need a Python function that can determine the compatibility mode of Internet Explorer based on the user agent string. It should be able to identify the compatibility mode for IE versions 7, 8, 9, and 10. The function should return a string indicating the compatibility mode, such as 'IE7', 'IE8', etc. Can you write this function for me?The signature of the function is: def get_compatibility_mode(user_agent)",
+  "ground_truth": "def get_compatibility_mode(user_agent):\n  ie_compat_modes = {\n    'MSIE 7.0': 'IE7',\n    'MSIE 8.0': 'IE8',\n    'MSIE 9.0': 'IE9',\n    'MSIE 10.0': 'IE10',\n  }\n  for ua in ie_compat_modes.keys():\n    if ua in user_agent:\n      return ie_compat_modes[ua]\n  return 'Not IE or Compatibility Mode'",
+  "test_cases": {
+    "test1": "get_compatibility_mode('Mozilla/4.0 (compatible; MSIE 7.0; Windows NT 6.1; Trident/4.0)')",
+    "test2": "get_compatibility_mode('Mozilla/4.0 (compatible; MSIE 8.0; Windows NT 6.1; Trident/4.0)')",
+    "test3": "get_compatibility_mode('Mozilla/4.0 (compatible; MSIE 9.0; Windows NT 6.1; Trident/5.0)')",
+    "test4": "get_compatibility_mode('Mozilla/4.0 (compatible; MSIE 10.0; Windows NT 6.1; Trident/6.0)')",
+    "test5": "get_compatibility_mode('Mozilla/5.0 (Windows NT 6.1; rv:24.0) Gecko/20100101 Firefox/24.0')",
+    "test6": "get_compatibility_mode('Mozilla/4.0 (compatible; MSIE 7.0; Windows NT 6.1; Trident/4.0; .NET CLR 2.0.50727)')",
+    "test7": "get_compatibility_mode('Mozilla/4.0 (compatible; MSIE 8.0; Windows NT 6.1; Trident/4.0; .NET CLR 2.0.50727)')",
+    "test8": "get_compatibility_mode('Mozilla/4.0 (compatible; MSIE 9.0; Windows NT 6.1; Trident/5.0; .NET CLR 2.0.50727)')",
+    "test9": "get_compatibility_mode('Mozilla/4.0 (compatible; MSIE 10.0; Windows NT 6.1; Trident/6.0; .NET CLR 2.0.50727)')",
+    "test10": "get_compatibility_mode('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_9_2) AppleWebKit/537.73.11 (KHTML, like Gecko) Version/7.0.2 Safari/537.73.11')"
+  },
+  "hidden_information": "def get_compatibility_mode(user_agent):\n  ie_compat_modes = {\n    'MSIE 7.0': 'IE7',\n    'MSIE 8.0': 'IE8',\n    'MSIE 9.0': 'IE9',\n    'MSIE 10.0': 'IE10',\n  }\n  for ua in ie_compat_modes.keys():\n    if ua in user_agent:\n      return ie_compat_modes[ua]\n  return 'Not IE or Compatibility Mode'"
+}

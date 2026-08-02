@@ -1,0 +1,56 @@
+{
+  "target": "r1_taskq",
+  "model": "kimi-k2.7-code",
+  "reviews": {
+    "sliceagent": {
+      "agent": "sliceagent",
+      "review": "Issues found in the `taskq` package:\n\n- `taskq/queue.py`: `__init__` uses a mutable default argument (`items=[]`), so separate `TaskQueue` instances can share the same underlying list.\n- `taskq/queue.py`: `is_full` uses `>` instead of `>=`, so the queue accepts one item beyond `capacity`.\n- `taskq/worker.py`: `run_once` opens the log file but never closes it, leaking the file descriptor.\n- `taskq/worker.py`: `run_once` silently catches and discards all exceptions, returning `None` without logging the failure.\n- `taskq/scheduler.py`: `run_with_retry` never increments `attempts`, causing an infinite loop when a task keeps failing.\n- `taskq/store.py`: `find_by_name` builds SQL with string formatting (`'%s' % name`), making it vulnerable to SQL injection.",
+      "wall_s": 20.2,
+      "steps": 2,
+      "error": ""
+    }
+  },
+  "scores": {
+    "sliceagent": {
+      "recall": 1.0,
+      "found": 6,
+      "total": 6,
+      "false_pos": 0,
+      "plausible_extra": 0,
+      "precision": 1.0,
+      "per_issue": [
+        {
+          "id": "B1",
+          "found": true,
+          "evidence": "`taskq/queue.py`: `__init__` uses a mutable default argument (`items=[]`), so separate `TaskQueue` instances can share the same underlying list."
+        },
+        {
+          "id": "B2",
+          "found": true,
+          "evidence": "`taskq/queue.py`: `is_full` uses `>` instead of `>=`, so the queue accepts one item beyond `capacity`."
+        },
+        {
+          "id": "B3",
+          "found": true,
+          "evidence": "`taskq/worker.py`: `run_once` opens the log file but never closes it, leaking the file descriptor."
+        },
+        {
+          "id": "B4",
+          "found": true,
+          "evidence": "`taskq/worker.py`: `run_once` silently catches and discards all exceptions, returning `None` without logging the failure."
+        },
+        {
+          "id": "B5",
+          "found": true,
+          "evidence": "`taskq/scheduler.py`: `run_with_retry` never increments `attempts`, causing an infinite loop when a task keeps failing."
+        },
+        {
+          "id": "B6",
+          "found": true,
+          "evidence": "`taskq/store.py`: `find_by_name` builds SQL with string formatting (`'%s' % name`), making it vulnerable to SQL injection."
+        }
+      ],
+      "extra_claims": []
+    }
+  }
+}

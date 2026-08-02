@@ -1,0 +1,60 @@
+{
+  "target": "r3_statkit",
+  "model": "kimi-k2.7-code",
+  "reviews": {
+    "kimi": {
+      "agent": "kimi",
+      "review": "1\tfrom .aggregate import mean, running_total, total\n2\tfrom .window import sliding_mean, chunk\n3\tfrom .parse import parse_ints, parse_table\n4\tfrom .dedup import unique, unique_stable\n5\t\n6\t__all__ = [\"mean\", \"running_total\", \"total\", \"sliding_mean\", \"chunk\",\n7\t           \"parse_ints\", \"parse_table\", \"unique\", \"unique_stable\"]\n<system>7 lines read from file starting from line 1. Total lines in file: 7. End of file reached.</system>\n1\t\"\"\"Aggregation helpers over numeric sequences.\"\"\"\n2\t\n3\t\n4\tdef mean(xs):\n5\t    if not xs:\n6\t        return 0.0\n7\t    return sum(xs) // len(xs)\n8\t\n9\t\n10\tdef running_total(x, acc=[]):\n11\t    acc.append(x)\n12\t    return sum(acc)\n13\t\n14\t\n15\tdef total(xs):\n16\t    t = 0\n17\t    for x in xs:\n18\t        t += x\n19\t    return t\n<system>19 lines read from file starting from line 1. Total lines in file: 19. End of file reached.</system>\n1\t\"\"\"De-duplication helpers (order is part of the contract: callers rely on first-seen order).\"\"\"\n2\t\n3\t\n4\tdef unique(items):\n5\t    return list(set(items))\n6\t\n7\t\n8\tdef unique_stable(items):\n9\t    seen = set()\n10\t    out = []\n11\t    for it in items:\n12\t        if it not in seen:\n13\t            seen.add(it)\n14\t            out.append(it)\n15\t    return out\n<system>15 lines read from file starting from line 1. Total lines in file: 15. End of file reached.</system>\n1\t\"\"\"Formatting helpers.\"\"\"\n2\t\n3\t\n4\tdef percent(fraction, digits=1):\n5\t    return f\"{round(fraction * 100, digits)}%\"\n6\t\n7\t\n8\tdef pad(label, width):\n9\t    label = str(label)\n10\t    if len(label) >= width:\n11\t        return label\n12\t    return label + \" \" * (width - len(label))\n<system>12 lines read from file starting from line 1. Total lines in file: 12. End of file reached.</system>\n1\t\"\"\"Parse rows of integers from text.\"\"\"\n2\t\n3\t\n4\tdef parse_ints(line):\n5\t    return [int(x) for x in line.split(\",\")]\n6\t\n7\t\n8\tdef parse_table(text):\n9\t    rows = []\n10\t    for line in text.splitlines():\n11\t        if not line:\n12\t            continue\n13\t        rows.append(parse_ints(line))\n14\t    return rows\n<system>14 lines read from file starting from line 1. Total lines in file: 14. End of file reached.</system>\n1\t\"\"\"Sliding-window computations.\"\"\"\n2\t\n3\t\n4\tdef sliding_mean(xs, size):\n5\t    out = []\n6\t    for i in range(len(xs) - size):\n7\t        chunk = xs[i:i + size]\n8\t        out.append(sum(chunk) / size)\n9\t    return out\n10\t\n11\t\n12\tdef chunk(xs, size):\n13\t    return [xs[i:i + size] for i in range(0, len(xs), size)]\n<system>13 lines read from file starting from line 1. Total lines in file: 13. End of file reached.</system>\nmean([1,2]) = 1\nrunning_total sequential = [1, 3, 6]\nsliding_mean([1,2,3,4], 2) = [1.5, 2.5]\nparse_ints('1, 2, 3') = [1, 2, 3]\n\nfirst call running_total(10) = 10\nsecond call running_total(5) = 15\nunique([3,1,2,1]) = [1, 2, 3]\nunique_stable([3,1,2,1]) = [3, 1, 2]\nmean([1.5, 2.5]) = 2.0\n\nmean([1,2]) = 1\nmean([1,2,3]) = 2\nmean([1,2,3,4]) = 2\n\nNo matches found\nNo matches found\ntotal 0\ndrwx------@     3 tongtao  staff      96 Jun 19 00:04 .\ndrwx------@ 10867 tongtao  staff  347744 Jun 19 00:04 ..\ndrwxr-xr-x@     9 tongtao  staff     288 Jun 18 23:03 statkit\n\n'1,2,3' => [1, 2, 3]\n'1, 2, 3' => [1, 2, 3]\n' 1 , 2 , 3 ' => [1, 2, 3]\n'1,\\t2,\\t3' => [1, 2, 3]\nparse_table empty whitespace line:\nTraceback (most recent call last):\n  File \"<stdin>\", line 16, in <module>\n  File \"/private/var/folders/ln/zfd8s4v510529zt2t3wnshsr0000gn/T/review-r3_statkit-yh6kpbmh/statkit/parse.py\", line 13, in parse_table\n    rows.append(parse_ints(line))\n  File \"/private/var/folders/ln/zfd8s4v510529zt2t3wnshsr0000gn/T/review-r3_statkit-yh6kpbmh/statkit/parse.py\", line 5, in parse_ints\n    return [int(x) for x in line.split(\",\")]\n  File \"/private/var/folders/ln/zfd8s4v510529zt2t3wnshsr0000gn/T/review-r3_statkit-yh6kpbmh/statkit/parse.py\", line 5, in <listcomp>\n    return [int(x) for x in line.split(\",\")]\nValueError: invalid literal for int() with base 10: '   '\nCommand failed with exit code: 1.\nTraceback (most recent call last):\n  File \"<stdin>\", line 3, in <module>\n  File \"/private/var/folders/ln/zfd8s4v510529zt2t3wnshsr0000gn/T/review-r3_statkit-yh6kpbmh/statkit/parse.py\", line 5, in parse_ints\n    return [int(x) for x in line.split(\",\")]\n  File \"/private/var/folders/ln/zfd8s4v510529zt2t3wnshsr0000gn/T/review-r3_statkit-yh6kpbmh/statkit/parse.py\", line 5, in <listcomp>\n    return [int(x) for x in line.split(\",\")]\nValueError: invalid literal for int() with base 10: ''\nCommand failed with exit code: 1.\nPython 3.10.10\n{1, 2, 3}\n[1, 2, 3]\n\n['b', 'a', 'c']\n[(1,), (2,), (3,)]\n\nTraceback (most recent call last):\n  File \"<stdin>\", line 2, in <module>\n  File \"/private/var/folders/ln/zfd8s4v510529zt2t3wnshsr0000gn/T/review-r3_statkit-yh6kpbmh/statkit/window.py\", line 13, in chunk\n    return [xs[i:i + size] for i in range(0, len(xs), size)]\nValueError: range() arg 3 must not be zero\nCommand failed with exit code: 1.\nValueError invalid literal for int() with base 10: ''\n\nGenuine issues found:\n\n- `aggregate.py`: `mean` uses `//` instead of `/`, truncating fractional means.\n- `aggregate.py`: `running_total` uses a mutable default argument `acc=[]`, so accumulated state leaks across calls.\n- `dedup.py`: `unique` builds `list(set(items))`, which does not preserve first-seen order despite the module docstring stating order is part of the contract.\n- `parse.py`: `parse_table` skips empty lines but not whitespace-only lines, causing a `ValueError`.\n- `window.py`: `sliding_mean` loops `range(len(xs) - size)`, dropping the final window; should be `range(len(xs) - size + 1)`.\n- `__init__.py`: `format.percent` and `format.pad` are not imported or exported in `__all__`.\nTo resume this session: kimi -r session_591026d6-8164-458a-9ef9-4b7a444c574e",
+      "wall_s": 124.2,
+      "rc": 0,
+      "error": ""
+    }
+  },
+  "scores": {
+    "kimi": {
+      "recall": 0.8,
+      "found": 4,
+      "total": 5,
+      "false_pos": 1,
+      "plausible_extra": 1,
+      "precision": 0.833,
+      "per_issue": [
+        {
+          "id": "B1",
+          "found": true,
+          "evidence": "aggregate.py: mean uses // instead of /, truncating fractional means."
+        },
+        {
+          "id": "B2",
+          "found": true,
+          "evidence": "aggregate.py: running_total uses a mutable default argument acc=[], so accumulated state leaks across calls."
+        },
+        {
+          "id": "B3",
+          "found": true,
+          "evidence": "window.py: sliding_mean loops range(len(xs) - size), dropping the final window; should be range(len(xs) - size + 1)."
+        },
+        {
+          "id": "B4",
+          "found": true,
+          "evidence": "dedup.py: unique builds list(set(items)), which does not preserve first-seen order despite the module docstring stating order is part of the contract."
+        },
+        {
+          "id": "B5",
+          "found": false,
+          "evidence": "The review does not identify parse_ints crashing on empty/trailing fields; it instead reports 'parse.py: parse_table skips empty lines but not whitespace-only lines, causing a ValueError.'"
+        }
+      ],
+      "extra_claims": [
+        {
+          "claim": "parse_table skips empty lines but not whitespace-only lines, causing a ValueError",
+          "kind": "plausible_extra"
+        },
+        {
+          "claim": "__init__.py fails to import or export format.percent and format.pad in __all__",
+          "kind": "false_positive"
+        }
+      ]
+    }
+  }
+}

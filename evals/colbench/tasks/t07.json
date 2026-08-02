@@ -1,0 +1,17 @@
+{
+  "problem_description": "I'm planning a birthday party and I need a Python function to calculate the total cost. The party will have around 20 guests, and I'll provide food, gifts, and decorations. I also want to get a cake, but I'm not sure if it's included in the calculation or not. Can you write a function to help me with this?The signature of the function is: def calculate_party_cost(guest_count, food_price, gift_price, decoration_price, is_cake=True, cake_price=50)",
+  "ground_truth": "def calculate_party_cost(guest_count, food_price, gift_price, decoration_price, is_cake=True, cake_price=50):\n    total_cost = guest_count * (food_price + gift_price) + decoration_price\n    if is_cake:\n        total_cost += cake_price\n    return total_cost",
+  "test_cases": {
+    "test1": "calculate_party_cost(20, 10, 5, 50, True, 50)",
+    "test2": "calculate_party_cost(15, 8, 3, 30, False)",
+    "test3": "calculate_party_cost(25, 12, 6, 60, is_cake=False)",
+    "test4": "calculate_party_cost(10, 5, 2, 20, True)",
+    "test5": "calculate_party_cost(30, 15, 7, 70, True, 60)",
+    "test6": "calculate_party_cost(20, 10, 5, 50, is_cake=True, cake_price=40)",
+    "test7": "calculate_party_cost(25, 12, 6, 60, True)",
+    "test8": "calculate_party_cost(15, 8, 3, 30, is_cake=False, cake_price=30)",
+    "test9": "calculate_party_cost(10, 5, 2, 20, True, 35)",
+    "test10": "calculate_party_cost(35, 18, 8, 80, True, 55)"
+  },
+  "hidden_information": "def calculate_party_cost(guest_count, food_price, gift_price, decoration_price, is_cake=True, cake_price=50):\n    total_cost = guest_count * (food_price + gift_price) + decoration_price\n    if is_cake:\n        total_cost += cake_price\n    return total_cost"
+}

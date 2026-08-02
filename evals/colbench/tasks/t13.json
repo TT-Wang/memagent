@@ -1,0 +1,17 @@
+{
+  "problem_description": "Write a python function to categorize the effectivness of exercise routines. The function should take into account three parameters: the type of exercise, the person's favorite music genre, and how intense they perform the exercise. Can you write this function?The signature of the function is: def categorize_exercise_effectiveness(exercise_type, music_genre, intensity_level, repititions)",
+  "ground_truth": "def categorize_exercise_effectiveness(exercise_type, music_genre, intensity_level, repititions):\n    exercises = {\n        'running': 5,\n        'stairs': 10,\n        'lifting': 8,\n        'yoga': 2,\n        'cycling': 6\n    }\n    music_boost = {\n        'rock': 3,\n        'pop': 2,\n        'hiphop': 4,\n        'classical': 1\n    }\n    return exercises.get(exercise_type, 0) + music_boost.get(music_genre, 0) + (intensity_level * repititions)",
+  "test_cases": {
+    "test1": "categorize_exercise_effectiveness('running', 'rock', 2, 5)",
+    "test2": "categorize_exercise_effectiveness('stairs', 'pop', 1, 10)",
+    "test3": "categorize_exercise_effectiveness('yoga', 'classical', 3, 15)",
+    "test4": "categorize_exercise_effectiveness('lifting', 'hiphop', 4, 8)",
+    "test5": "categorize_exercise_effectiveness('cycling', 'rock', 5, 20)",
+    "test6": "categorize_exercise_effectiveness('unknown', 'pop', 1, 10)",
+    "test7": "categorize_exercise_effectiveness('running', 'unknown', 2, 5)",
+    "test8": "categorize_exercise_effectiveness('stairs', 'hiphop', 1, 10)",
+    "test9": "categorize_exercise_effectiveness('yoga', 'rock', 3, 15)",
+    "test10": "categorize_exercise_effectiveness('lifting', 'classical', 4, 8)"
+  },
+  "hidden_information": "def categorize_exercise_effectiveness(exercise_type, music_genre, intensity_level, repititions):\n    exercises = {\n        'running': 5,\n        'stairs': 10,\n        'lifting': 8,\n        'yoga': 2,\n        'cycling': 6\n    }\n    music_boost = {\n        'rock': 3,\n        'pop': 2,\n        'hiphop': 4,\n        'classical': 1\n    }\n    return exercises.get(exercise_type, 0) + music_boost.get(music_genre, 0) + (intensity_level * repititions)"
+}

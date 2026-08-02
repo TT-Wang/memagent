@@ -1,0 +1,75 @@
+{
+  "target": "r2_miniweb",
+  "model": "kimi-k2.7-code",
+  "reviews": {
+    "sliceagent": {
+      "agent": "sliceagent",
+      "review": "Review findings for the `miniweb` package:\n\n- `miniweb/auth.py` \u2014 `TokenAuth.authenticate` is not constant-time and logs the bearer token value.\n- `miniweb/auth.py` \u2014 `Bearer ` prefix stripping is case-sensitive and removes only one literal prefix.\n- `miniweb/cache.py` \u2014 Cache key uses only `request.path`, so different methods / query params share the same cache entry.\n- `miniweb/request.py` \u2014 Mutable default argument `params={}` is shared across all `Request` instances.\n- `miniweb/response.py` \u2014 `finalize()` sets `Content-Length` to `len(body)` (character count), which is wrong for non-ASCII byte bodies.\n- `miniweb/router.py` \u2014 `match()` uses substring search (`route in path`), causing `/user` to incorrectly match `/users/1`.\n- `miniweb/validators.py` \u2014 `clamp(n, low, high)` returns `max(high, min(n, low))`, which clamps everything to `high`.\n- `miniweb/validators.py` \u2014 Email regex lacks length limits and allows labels like consecutive dots, `..`, leading/trailing hyphens, etc.\n- `miniweb/utils.py` \u2014 `first_line()` and `merge_headers()` appear correct with no obvious issues.\n\nVerified the bugs in `clamp`, mutable defaults, router substring matching, cache collisions, and `Content-Length` byte miscount with a quick runtime check.",
+      "wall_s": 70.5,
+      "steps": 3,
+      "error": ""
+    }
+  },
+  "scores": {
+    "sliceagent": {
+      "recall": 0.875,
+      "found": 7,
+      "total": 8,
+      "false_pos": 1,
+      "plausible_extra": 1,
+      "precision": 0.889,
+      "per_issue": [
+        {
+          "id": "B1",
+          "found": true,
+          "evidence": "miniweb/router.py \u2014 match() uses substring search (`route in path`), causing `/user` to incorrectly match `/users/1`."
+        },
+        {
+          "id": "B2",
+          "found": true,
+          "evidence": "miniweb/request.py \u2014 Mutable default argument `params={}` is shared across all `Request` instances."
+        },
+        {
+          "id": "B3",
+          "found": false,
+          "evidence": ""
+        },
+        {
+          "id": "B4",
+          "found": true,
+          "evidence": "miniweb/response.py \u2014 `finalize()` sets `Content-Length` to `len(body)` (character count), which is wrong for non-ASCII byte bodies."
+        },
+        {
+          "id": "B5",
+          "found": true,
+          "evidence": "miniweb/auth.py \u2014 `TokenAuth.authenticate` is not constant-time and logs the bearer token value."
+        },
+        {
+          "id": "B6",
+          "found": true,
+          "evidence": "miniweb/auth.py \u2014 `TokenAuth.authenticate` is not constant-time and logs the bearer token value."
+        },
+        {
+          "id": "B7",
+          "found": true,
+          "evidence": "miniweb/cache.py \u2014 Cache key uses only `request.path`, so different methods / query params share the same cache entry."
+        },
+        {
+          "id": "B8",
+          "found": true,
+          "evidence": "miniweb/validators.py \u2014 `clamp(n, low, high)` returns `max(high, min(n, low))`, which clamps everything to `high`."
+        }
+      ],
+      "extra_claims": [
+        {
+          "claim": "Email regex lacks length limits and allows labels like consecutive dots, `..`, leading/trailing hyphens, etc.",
+          "kind": "distractor_false_positive"
+        },
+        {
+          "claim": "`Bearer ` prefix stripping is case-sensitive and removes only one literal prefix.",
+          "kind": "plausible_extra"
+        }
+      ]
+    }
+  }
+}

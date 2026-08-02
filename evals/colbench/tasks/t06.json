@@ -1,0 +1,17 @@
+{
+  "problem_description": "I want you to write a Python function that can classify album covers as good or bad. I own a lot of albums, but I think some of them have really weird designs. Can your function take the genre and themes of the album cover as input and give me a classification?The signature of the function is: def classify_album_cover(genre, theme)",
+  "ground_truth": "def classify_album_cover(genre, theme):\n    genres = {'rock': ['Genesis', 'Rolling Stones'], 'pop': ['Taylor Swift', 'Justin Bieber']}\n    themes = {'people_with_heads': True, 'people_on_floats': False}\n    if (theme in themes and themes[theme]) or (genre in genres and 'Genesis' in genres[genre]):\n        return 'good'\n    else:\n        return 'bad'",
+  "test_cases": {
+    "test1": "classify_album_cover('rock', 'people_with_heads')",
+    "test2": "classify_album_cover('pop', 'people_on_floats')",
+    "test3": "classify_album_cover('rock', 'people_on_floats')",
+    "test4": "classify_album_cover('jazz', 'people_with_heads')",
+    "test5": "classify_album_cover('rock', 'bands')",
+    "test6": "classify_album_cover('pop', 'people_with_heads')",
+    "test7": "classify_album_cover('rock', 'people_on_ice')",
+    "test8": "classify_album_cover('classical', 'people_on_floats')",
+    "test9": "classify_album_cover('rock', 'instruments')",
+    "test10": "classify_album_cover('rock', 'sceneries')"
+  },
+  "hidden_information": "def classify_album_cover(genre, theme):\n    genres = {'rock': ['Genesis', 'Rolling Stones'], 'pop': ['Taylor Swift', 'Justin Bieber']}\n    themes = {'people_with_heads': True, 'people_on_floats': False}\n    if (theme in themes and themes[theme]) or (genre in genres and 'Genesis' in genres[genre]):\n        return 'good'\n    else:\n        return 'bad'"
+}

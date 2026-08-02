@@ -1,0 +1,60 @@
+{
+  "target": "r3_statkit",
+  "model": "kimi-k2.7-code",
+  "reviews": {
+    "sliceagent": {
+      "agent": "sliceagent",
+      "review": "Issues found in the `statkit` package:\n\n- `statkit/aggregate.py`: `mean` uses floor division (`//`), truncating results (e.g. `mean([1,2])` returns `1` instead of `1.5`).\n- `statkit/aggregate.py`: `running_total` uses a mutable default argument `acc=[]`, so state leaks across calls.\n- `statkit/window.py`: `sliding_mean` iterates `range(len(xs) - size)`, dropping the final valid window (e.g. `[1,2,3]` with size `2` returns only `[1.5]`).\n- `statkit/parse.py`: `parse_ints` has no error handling for empty strings or malformed tokens beyond what `int()` provides.\n- `statkit/format.py`: `percent` drops trailing zeros (e.g. `percent(0.125, 2)` returns `\"12.5%\"` instead of `\"12.50%\"`).\n- `statkit/format.py`: `pad` does not truncate labels longer than `width`, which may be intentional but is worth noting.",
+      "wall_s": 49.3,
+      "steps": 4,
+      "error": ""
+    }
+  },
+  "scores": {
+    "sliceagent": {
+      "recall": 0.8,
+      "found": 4,
+      "total": 5,
+      "false_pos": 2,
+      "plausible_extra": 0,
+      "precision": 0.667,
+      "per_issue": [
+        {
+          "id": "B1",
+          "found": true,
+          "evidence": "`mean` uses floor division (`//`), truncating results (e.g. `mean([1,2])` returns `1` instead of `1.5`)."
+        },
+        {
+          "id": "B2",
+          "found": true,
+          "evidence": "`running_total` uses a mutable default argument `acc=[]`, so state leaks across calls."
+        },
+        {
+          "id": "B3",
+          "found": true,
+          "evidence": "`sliding_mean` iterates `range(len(xs) - size)`, dropping the final valid window (e.g. `[1,2,3]` with size `2` returns only `[1.5]`)."
+        },
+        {
+          "id": "B4",
+          "found": false,
+          "evidence": ""
+        },
+        {
+          "id": "B5",
+          "found": true,
+          "evidence": "`parse_ints` has no error handling for empty strings or malformed tokens beyond what `int()` provides."
+        }
+      ],
+      "extra_claims": [
+        {
+          "claim": "`statkit/format.py`: `percent` drops trailing zeros (e.g. `percent(0.125, 2)` returns `\"12.5%\"` instead of `\"12.50%\"`).",
+          "kind": "distractor_false_positive"
+        },
+        {
+          "claim": "`statkit/format.py`: `pad` does not truncate labels longer than `width`, which may be intentional but is worth noting.",
+          "kind": "false_positive"
+        }
+      ]
+    }
+  }
+}

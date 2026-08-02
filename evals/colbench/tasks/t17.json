@@ -1,0 +1,17 @@
+{
+  "problem_description": "Can you write a Python function that determines if someone might have asthma based on their lung function test results?The signature of the function is: def predict_asthma(fev1, fvc, fef25_75)",
+  "ground_truth": "def predict_asthma(fev1, fvc, fef25_75):\n    fev1_ratio = fev1 / fvc\n    fef25_75_ratio = fef25_75 / fvc\n    if fev1_ratio < 0.8 and fef25_75_ratio < 0.6:\n        return True\n    elif fev1_ratio < 0.7 and fef25_75_ratio < 0.7:\n        return True\n    else:\n        return False",
+  "test_cases": {
+    "test1": "predict_asthma(3.5, 4.2, 3.1)",
+    "test2": "predict_asthma(2.8, 4.0, 2.5)",
+    "test3": "predict_asthma(4.2, 5.0, 4.0)",
+    "test4": "predict_asthma(3.1, 4.5, 2.9)",
+    "test5": "predict_asthma(2.5, 3.0, 2.2)",
+    "test6": "predict_asthma(4.0, 4.5, 3.5)",
+    "test7": "predict_asthma(3.8, 4.8, 3.3)",
+    "test8": "predict_asthma(2.2, 3.2, 2.0)",
+    "test9": "predict_asthma(4.5, 5.5, 4.2)",
+    "test10": "predict_asthma(3.0, 4.0, 2.7)"
+  },
+  "hidden_information": "def predict_asthma(fev1, fvc, fef25_75):\n    fev1_ratio = fev1 / fvc\n    fef25_75_ratio = fef25_75 / fvc\n    if fev1_ratio < 0.8 and fef25_75_ratio < 0.6:\n        return True\n    elif fev1_ratio < 0.7 and fef25_75_ratio < 0.7:\n        return True\n    else:\n        return False"
+}

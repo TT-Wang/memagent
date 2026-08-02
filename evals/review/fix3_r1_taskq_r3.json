@@ -1,0 +1,65 @@
+{
+  "target": "r1_taskq",
+  "model": "kimi-k2.7-code",
+  "reviews": {
+    "sliceagent": {
+      "agent": "sliceagent",
+      "review": "Here are the issues I found:\n\n- **taskq/queue.py**: `__init__` uses a mutable default argument (`items=[]`), so separate `TaskQueue` instances share the same underlying list.\n- **taskq/queue.py**: `is_full()` checks `len(self._items) > self.capacity`, which is off-by-one and lets the queue grow one item past its declared capacity.\n- **taskq/worker.py**: `run_once` opens the log file with `open(...)` but never closes it, leaking the file handle on every task.\n- **taskq/worker.py**: `run_once` silently swallows all exceptions and returns `None`, making failures indistinguishable from an empty queue.\n- **taskq/scheduler.py**: `run_with_retry` never increments `attempts`, so if `run_once` returns `None` it loops forever.\n- **taskq/scheduler.py**: `should_retry` is defined but never used; `run_with_retry` also ignores its own backoff policy (fixed sleep).\n- **taskq/store.py**: `find_by_name` constructs SQL via `\"... WHERE name = '%s'\" % name`, which is vulnerable to SQL injection.",
+      "wall_s": 37.9,
+      "steps": 2,
+      "error": ""
+    }
+  },
+  "scores": {
+    "sliceagent": {
+      "recall": 1.0,
+      "found": 6,
+      "total": 6,
+      "false_pos": 2,
+      "plausible_extra": 0,
+      "precision": 0.75,
+      "per_issue": [
+        {
+          "id": "B1",
+          "found": true,
+          "evidence": "__init__ uses a mutable default argument (items=[]), so separate TaskQueue instances share the same underlying list."
+        },
+        {
+          "id": "B2",
+          "found": true,
+          "evidence": "is_full() checks len(self._items) > self.capacity, which is off-by-one and lets the queue grow one item past its declared capacity."
+        },
+        {
+          "id": "B3",
+          "found": true,
+          "evidence": "run_once opens the log file with open(...) but never closes it, leaking the file handle on every task."
+        },
+        {
+          "id": "B4",
+          "found": true,
+          "evidence": "run_once silently swallows all exceptions and returns None, making failures indistinguishable from an empty queue."
+        },
+        {
+          "id": "B5",
+          "found": true,
+          "evidence": "run_with_retry never increments attempts, so if run_once returns None it loops forever."
+        },
+        {
+          "id": "B6",
+          "found": true,
+          "evidence": "find_by_name constructs SQL via \"... WHERE name = '%s'\" % name, which is vulnerable to SQL injection."
+        }
+      ],
+      "extra_claims": [
+        {
+          "claim": "taskq/scheduler.py: should_retry is defined but never used",
+          "kind": "false_positive"
+        },
+        {
+          "claim": "taskq/scheduler.py: run_with_retry ignores its own backoff policy (fixed sleep)",
+          "kind": "false_positive"
+        }
+      ]
+    }
+  }
+}

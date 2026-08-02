@@ -1,0 +1,64 @@
+{
+  "target": "r3_statkit",
+  "model": "kimi-k2.7-code",
+  "reviews": {
+    "kimi": {
+      "agent": "kimi",
+      "review": "1\tfrom .aggregate import mean, running_total, total\n2\tfrom .window import sliding_mean, chunk\n3\tfrom .parse import parse_ints, parse_table\n4\tfrom .dedup import unique, unique_stable\n5\t\n6\t__all__ = [\"mean\", \"running_total\", \"total\", \"sliding_mean\", \"chunk\",\n7\t           \"parse_ints\", \"parse_table\", \"unique\", \"unique_stable\"]\n<system>7 lines read from file starting from line 1. Total lines in file: 7. End of file reached.</system>\n1\t\"\"\"Aggregation helpers over numeric sequences.\"\"\"\n2\t\n3\t\n4\tdef mean(xs):\n5\t    if not xs:\n6\t        return 0.0\n7\t    return sum(xs) // len(xs)\n8\t\n9\t\n10\tdef running_total(x, acc=[]):\n11\t    acc.append(x)\n12\t    return sum(acc)\n13\t\n14\t\n15\tdef total(xs):\n16\t    t = 0\n17\t    for x in xs:\n18\t        t += x\n19\t    return t\n<system>19 lines read from file starting from line 1. Total lines in file: 19. End of file reached.</system>\n1\t\"\"\"De-duplication helpers (order is part of the contract: callers rely on first-seen order).\"\"\"\n2\t\n3\t\n4\tdef unique(items):\n5\t    return list(set(items))\n6\t\n7\t\n8\tdef unique_stable(items):\n9\t    seen = set()\n10\t    out = []\n11\t    for it in items:\n12\t        if it not in seen:\n13\t            seen.add(it)\n14\t            out.append(it)\n15\t    return out\n<system>15 lines read from file starting from line 1. Total lines in file: 15. End of file reached.</system>\n1\t\"\"\"Formatting helpers.\"\"\"\n2\t\n3\t\n4\tdef percent(fraction, digits=1):\n5\t    return f\"{round(fraction * 100, digits)}%\"\n6\t\n7\t\n8\tdef pad(label, width):\n9\t    label = str(label)\n10\t    if len(label) >= width:\n11\t        return label\n12\t    return label + \" \" * (width - len(label))\n<system>12 lines read from file starting from line 1. Total lines in file: 12. End of file reached.</system>\n1\t\"\"\"Parse rows of integers from text.\"\"\"\n2\t\n3\t\n4\tdef parse_ints(line):\n5\t    return [int(x) for x in line.split(\",\")]\n6\t\n7\t\n8\tdef parse_table(text):\n9\t    rows = []\n10\t    for line in text.splitlines():\n11\t        if not line:\n12\t            continue\n13\t        rows.append(parse_ints(line))\n14\t    return rows\n<system>14 lines read from file starting from line 1. Total lines in file: 14. End of file reached.</system>\n1\t\"\"\"Sliding-window computations.\"\"\"\n2\t\n3\t\n4\tdef sliding_mean(xs, size):\n5\t    out = []\n6\t    for i in range(len(xs) - size):\n7\t        chunk = xs[i:i + size]\n8\t        out.append(sum(chunk) / size)\n9\t    return out\n10\t\n11\t\n12\tdef chunk(xs, size):\n13\t    return [xs[i:i + size] for i in range(0, len(xs), size)]\n<system>13 lines read from file starting from line 1. Total lines in file: 13. End of file reached.</system>\nTraceback (most recent call last):\n  File \"<stdin>\", line 1, in <module>\nImportError: cannot import name 'percent' from 'statkit' (/private/var/folders/ln/zfd8s4v510529zt2t3wnshsr0000gn/T/review-r3_statkit-ws32_4yx/statkit/__init__.py)\nCommand failed with exit code: 1.\nmean([1,2]): 1 <class 'int'>\nrunning_total(1): 1\nrunning_total(2): 3\nsliding_mean([1,2,3],2): [1.5]\npercent(.123,0): 12.0%\nparse_table whitespace line raised: ValueError invalid literal for int() with base 10: '   '\nunique([3,1,2,1]): [1, 2, 3]\n\nstatkit/__init__.py\nstatkit/format.py\nstatkit/dedup.py\nstatkit/parse.py\nstatkit/window.py\nstatkit/aggregate.py\nNo matches found\nNo matches found\n- `statkit/__init__.py`: The `format` module is not imported or listed in `__all__`, so `percent` and `pad` are missing from the package\u2019s public API.\n- `statkit/aggregate.py`: `mean` uses floor division (`//`) instead of true division, truncating fractional means and returning an `int`.\n- `statkit/aggregate.py`: `running_total` uses a mutable default argument `acc=[]`, causing the accumulator to be shared and state to leak between calls.\n- `statkit/dedup.py`: `unique` builds `list(set(items))`, which does not preserve first-seen order despite the module docstring stating order is part of the contract.\n- `statkit/parse.py`: `parse_table` only skips lines that are exactly `\"\"`, so whitespace-only lines are passed to `parse_ints` and raise `ValueError`.\n- `statkit/window.py`: `sliding_mean` uses `range(len(xs) - size)`, missing the final window (off-by-one).\n- `statkit/format.py`: `percent` formats the float returned by `round`, so `digits=0` produces output like `\"12.0%\"` instead of `\"12%\"`.\nTo resume this session: kimi -r session_f6bc28a6-f227-4b77-9eaa-7fea886795a6",
+      "wall_s": 107.6,
+      "rc": 0,
+      "error": ""
+    }
+  },
+  "scores": {
+    "kimi": {
+      "recall": 0.8,
+      "found": 4,
+      "total": 5,
+      "false_pos": 1,
+      "plausible_extra": 2,
+      "precision": 0.857,
+      "per_issue": [
+        {
+          "id": "B1",
+          "found": true,
+          "evidence": "`statkit/aggregate.py`: `mean` uses floor division (`//`) instead of true division, truncating fractional means and returning an `int`."
+        },
+        {
+          "id": "B2",
+          "found": true,
+          "evidence": "`statkit/aggregate.py`: `running_total` uses a mutable default argument `acc=[]`, causing the accumulator to be shared and state to leak between calls."
+        },
+        {
+          "id": "B3",
+          "found": true,
+          "evidence": "`statkit/window.py`: `sliding_mean` uses `range(len(xs) - size)`, missing the final window (off-by-one)."
+        },
+        {
+          "id": "B4",
+          "found": true,
+          "evidence": "`statkit/dedup.py`: `unique` builds `list(set(items))`, which does not preserve first-seen order despite the module docstring stating order is part of the contract."
+        },
+        {
+          "id": "B5",
+          "found": false,
+          "evidence": ""
+        }
+      ],
+      "extra_claims": [
+        {
+          "claim": "`statkit/__init__.py`: The `format` module is not imported or listed in `__all__`, so `percent` and `pad` are missing from the package\u2019s public API.",
+          "kind": "plausible_extra"
+        },
+        {
+          "claim": "`statkit/parse.py`: `parse_table` only skips lines that are exactly `\"\"`, so whitespace-only lines are passed to `parse_ints` and raise `ValueError`.",
+          "kind": "plausible_extra"
+        },
+        {
+          "claim": "`statkit/format.py`: `percent` formats the float returned by `round`, so `digits=0` produces output like `\"12.0%\"` instead of `\"12%\"`.",
+          "kind": "distractor_false_positive"
+        }
+      ]
+    }
+  }
+}

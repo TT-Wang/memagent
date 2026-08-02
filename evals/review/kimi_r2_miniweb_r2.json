@@ -1,0 +1,91 @@
+{
+  "target": "r2_miniweb",
+  "model": "kimi-k2.7-code",
+  "reviews": {
+    "kimi": {
+      "agent": "kimi",
+      "review": "1\tfrom .router import Router\n2\tfrom .request import Request\n3\tfrom .response import Response\n4\tfrom .auth import TokenAuth\n5\tfrom .cache import ResponseCache\n6\t\n7\t__all__ = [\"Router\", \"Request\", \"Response\", \"TokenAuth\", \"ResponseCache\"]\n<system>7 lines read from file starting from line 1. Total lines in file: 7. End of file reached.</system>\n1\t\"\"\"Token authentication.\"\"\"\n2\timport logging\n3\t\n4\tlog = logging.getLogger(\"miniweb.auth\")\n5\t\n6\t\n7\tclass TokenAuth:\n8\t    def __init__(self, valid_token):\n9\t        self.valid_token = valid_token\n10\t\n11\t    def authenticate(self, request):\n12\t        token = request.header(\"Authorization\") or \"\"\n13\t        token = token.replace(\"Bearer \", \"\")\n14\t        log.info(\"authenticating with token=%s\", token)\n15\t        if token == self.valid_token:\n16\t            return True\n17\t        return False\n<system>17 lines read from file starting from line 1. Total lines in file: 17. End of file reached.</system>\n1\t\"\"\"Tiny response cache.\"\"\"\n2\t\n3\t\n4\tclass ResponseCache:\n5\t    def __init__(self):\n6\t        self._store = {}\n7\t\n8\t    def key(self, request):\n9\t        return request.path\n10\t\n11\t    def get(self, request):\n12\t        return self._store.get(self.key(request))\n13\t\n14\t    def put(self, request, response):\n15\t        self._store[self.key(request)] = response\n16\t\n17\t    def clear(self):\n18\t        self._store.clear()\n<system>18 lines read from file starting from line 1. Total lines in file: 18. End of file reached.</system>\n1\t\"\"\"HTTP request wrapper.\"\"\"\n2\t\n3\t\n4\tclass Request:\n5\t    def __init__(self, method, path, headers=None, params={}):\n6\t        self.method = method\n7\t        self.path = path\n8\t        self.headers = headers or {}\n9\t        self.params = params\n10\t\n11\t    def header(self, name):\n12\t        return self.headers.get(name)\n13\t\n14\t    def is_json(self):\n15\t        ct = self.header(\"Content-Type\") or \"\"\n16\t        return \"application/json\" in ct\n<system>16 lines read from file starting from line 1. Total lines in file: 16. End of file reached.</system>\n1\t\"\"\"HTTP response builder.\"\"\"\n2\t\n3\t\n4\tclass Response:\n5\t    def __init__(self, body=\"\", status=200):\n6\t        self.body = body\n7\t        self.status = status\n8\t        self.headers = {}\n9\t\n10\t    def finalize(self):\n11\t        self.headers[\"Content-Length\"] = str(len(self.body))\n12\t        return self.headers\n13\t\n14\t    def with_header(self, name, value):\n15\t        self.headers[name] = str(value)\n16\t        return self\n<system>16 lines read from file starting from line 1. Total lines in file: 16. End of file reached.</system>\n1\t\"\"\"URL router: map a request path to a handler.\"\"\"\n2\t\n3\t\n4\tclass Router:\n5\t    def __init__(self):\n6\t        self._routes = {}\n7\t\n8\t    def add(self, path, handler):\n9\t        self._routes[path] = handler\n10\t\n11\t    def match(self, path):\n12\t        for route, handler in self._routes.items():\n13\t            if route in path:\n14\t                return handler\n15\t        return None\n16\t\n17\t    def has(self, path):\n18\t        return path in self._routes\n<system>18 lines read from file starting from line 1. Total lines in file: 18. End of file reached.</system>\n1\t\"\"\"Misc helpers.\"\"\"\n2\t\n3\t\n4\tdef merge_headers(base, extra):\n5\t    out = dict(base)\n6\t    out.update(extra)\n7\t    return out\n8\t\n9\t\n10\tdef first_line(text):\n11\t    lines = text.splitlines()\n12\t    return lines[0] if lines else \"\"\n<system>12 lines read from file starting from line 1. Total lines in file: 12. End of file reached.</system>\n1\t\"\"\"Input validators.\"\"\"\n2\timport re\n3\t\n4\t_EMAIL = re.compile(r\"^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$\")\n5\t\n6\t\n7\tdef is_valid_email(value):\n8\t    if not isinstance(value, str):\n9\t        return False\n10\t    value = value.strip()\n11\t    if not value:\n12\t        return False\n13\t    return bool(_EMAIL.match(value))\n14\t\n15\t\n16\tdef clamp(n, low, high):\n17\t    return max(high, min(n, low))\n<system>17 lines read from file starting from line 1. Total lines in file: 17. End of file reached.</system>\nReviewed all modules. Here are the genuine issues:\n\n**auth.py**\n- Logs raw bearer tokens at INFO, leaking credentials.\n\n**cache.py**\n- Cache key is only `request.path`, ignoring method/query/body, so POST/GET responses collide.\n- Caches responses without distinguishing users/auth, so private authenticated responses can be served to others.\n\n**request.py**\n- Mutable default argument `params={}` causes shared state across Request instances.\n- `header()` does case-sensitive lookup, but HTTP headers are case-insensitive.\n- `is_json()` uses substring match, so `application/json-foo` or `text/html; application/json` falsely pass.\n\n**response.py**\n- `Content-Length` is `len(self.body)`, which counts Unicode characters, not encoded bytes.\n\n**router.py**\n- `match()` uses substring comparison (`route in path`), causing routes like `/user` to falsely match `/api/users`.\n- `match()` and `has()` are inconsistent: one uses substring matching, the other exact matching.\n\n**utils.py**\n- `merge_headers()` treats header names as case-sensitive, allowing duplicate headers differing only by case.\n\n**validators.py**\n- `clamp()` logic is inverted: in-range values return `high` instead of `n`.\nTo resume this session: kimi -r session_6c3dd3b8-2bf8-4030-b460-865da8a6ec7b",
+      "wall_s": 67.2,
+      "rc": 0,
+      "error": ""
+    }
+  },
+  "scores": {
+    "kimi": {
+      "recall": 0.875,
+      "found": 7,
+      "total": 8,
+      "false_pos": 0,
+      "plausible_extra": 6,
+      "precision": 1.0,
+      "per_issue": [
+        {
+          "id": "B1",
+          "found": true,
+          "evidence": "- `match()` uses substring comparison (`route in path`), causing routes like `/user` to falsely match `/api/users`."
+        },
+        {
+          "id": "B2",
+          "found": true,
+          "evidence": "- Mutable default argument `params={}` causes shared state across Request instances."
+        },
+        {
+          "id": "B3",
+          "found": true,
+          "evidence": "- `header()` does case-sensitive lookup, but HTTP headers are case-insensitive."
+        },
+        {
+          "id": "B4",
+          "found": true,
+          "evidence": "- `Content-Length` is `len(self.body)`, which counts Unicode characters, not encoded bytes."
+        },
+        {
+          "id": "B5",
+          "found": true,
+          "evidence": "- Logs raw bearer tokens at INFO, leaking credentials."
+        },
+        {
+          "id": "B6",
+          "found": false,
+          "evidence": ""
+        },
+        {
+          "id": "B7",
+          "found": true,
+          "evidence": "- Cache key is only `request.path`, ignoring method/query/body, so POST/GET responses collide."
+        },
+        {
+          "id": "B8",
+          "found": true,
+          "evidence": "- `clamp()` logic is inverted: in-range values return `high` instead of `n`."
+        }
+      ],
+      "extra_claims": [
+        {
+          "claim": "Cache key ignores HTTP method, causing POST and GET responses to collide.",
+          "kind": "plausible_extra"
+        },
+        {
+          "claim": "Cache key ignores request body, causing different request bodies to return the same cached response.",
+          "kind": "plausible_extra"
+        },
+        {
+          "claim": "Cache does not distinguish users/auth, so private authenticated responses can be served to others.",
+          "kind": "plausible_extra"
+        },
+        {
+          "claim": "`match()` and `has()` are inconsistent: one uses substring matching, the other exact matching.",
+          "kind": "plausible_extra"
+        },
+        {
+          "claim": "`is_json()` uses substring match, so `application/json-foo` or `text/html; application/json` falsely pass.",
+          "kind": "plausible_extra"
+        },
+        {
+          "claim": "`merge_headers()` treats header names as case-sensitive, allowing duplicate headers differing only by case.",
+          "kind": "plausible_extra"
+        }
+      ]
+    }
+  }
+}

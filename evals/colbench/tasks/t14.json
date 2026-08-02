@@ -1,0 +1,17 @@
+{
+  "problem_description": "I need a python function to determine the chart success of a music band in relation to the period of their rebellion.The signature of the function is: def evaluate_chart_success(band_name, rebellion_years, chart_success_threshold)",
+  "ground_truth": "def evaluate_chart_success(band_name, rebellion_years, chart_success_threshold):\n    if band_name == 'Chumbawamba' and rebellion_years >= 5 and chart_success_threshold < 10:\n        return 'Flagging career'\n    elif rebellion_years < 5:\n        return 'Rising star'\n    else:\n        return 'Moderate success'",
+  "test_cases": {
+    "test1": "evaluate_chart_success('Chumbawamba', 10, 5)",
+    "test2": "evaluate_chart_success('The Beatles', 2, 20)",
+    "test3": "evaluate_chart_success('Chumbawamba', 3, 5)",
+    "test4": "evaluate_chart_success('SomeBand', 10, 15)",
+    "test5": "evaluate_chart_success('SomeBand', 3, 5)",
+    "test6": "evaluate_chart_success('Chumbawamba', 5, 9)",
+    "test7": "evaluate_chart_success('Chumbawamba', 8, 12)",
+    "test8": "evaluate_chart_success('The Rolling Stones', 12, 8)",
+    "test9": "evaluate_chart_success('Chumbawamba', 4, 5)",
+    "test10": "evaluate_chart_success('Coldplay', 6, 18)"
+  },
+  "hidden_information": "def evaluate_chart_success(band_name, rebellion_years, chart_success_threshold):\n    if band_name == 'Chumbawamba' and rebellion_years >= 5 and chart_success_threshold < 10:\n        return 'Flagging career'\n    elif rebellion_years < 5:\n        return 'Rising star'\n    else:\n        return 'Moderate success'"
+}

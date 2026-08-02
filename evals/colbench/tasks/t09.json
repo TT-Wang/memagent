@@ -1,0 +1,17 @@
+{
+  "problem_description": "I want you to write a Python function to determine whether a person can legally possess a firearm based on their past record. Consider the nuances of domestic abuse cases and the potential for false accusations. Take into account the records of the person, accused abusers, and accused victims. The function should return True if the person is allowed to possess a firearm and False otherwise.The signature of the function is: def is_allowed_to_possess_firearm(person_record, accused_abusers, accused_victims)",
+  "ground_truth": "def is_allowed_to_possess_firearm(person_record, accused_abusers, accused_victims):\n    if person_record['has_criminal_record']:\n        return False\n    elif person_record['is_under_temporary_restraining_order'] and person_record['is_abuser']:\n        return False\n    elif person_record['is_under_temporary_restraining_order'] and person_record['is_victim'] and person_record['accuser'] in accused_abusers:\n        return False\n    else:\n        return True",
+  "test_cases": {
+    "test1": "is_allowed_to_possess_firearm({'has_criminal_record': True, 'is_under_temporary_restraining_order': False, 'is_abuser': False, 'is_victim': False, 'accuser': None}, ['John'], ['Jane'])",
+    "test2": "is_allowed_to_possess_firearm({'has_criminal_record': False, 'is_under_temporary_restraining_order': True, 'is_abuser': True, 'is_victim': False, 'accuser': 'Jane'}, ['John'], ['Jane'])",
+    "test3": "is_allowed_to_possess_firearm({'has_criminal_record': False, 'is_under_temporary_restraining_order': True, 'is_abuser': False, 'is_victim': True, 'accuser': 'John'}, ['John'], ['Jane'])",
+    "test4": "is_allowed_to_possess_firearm({'has_criminal_record': False, 'is_under_temporary_restraining_order': False, 'is_abuser': False, 'is_victim': False, 'accuser': None}, ['John'], ['Jane'])",
+    "test5": "is_allowed_to_possess_firearm({'has_criminal_record': True, 'is_under_temporary_restraining_order': True, 'is_abuser': True, 'is_victim': False, 'accuser': 'Jane'}, ['John'], ['Jane'])",
+    "test6": "is_allowed_to_possess_firearm({'has_criminal_record': False, 'is_under_temporary_restraining_order': True, 'is_abuser': False, 'is_victim': True, 'accuser': 'John'}, [], ['Jane'])",
+    "test7": "is_allowed_to_possess_firearm({'has_criminal_record': False, 'is_under_temporary_restraining_order': False, 'is_abuser': True, 'is_victim': False, 'accuser': 'Jane'}, ['John'], ['Jane'])",
+    "test8": "is_allowed_to_possess_firearm({'has_criminal_record': True, 'is_under_temporary_restraining_order': False, 'is_abuser': False, 'is_victim': False, 'accuser': None}, ['John'], ['Jane'])",
+    "test9": "is_allowed_to_possess_firearm({'has_criminal_record': False, 'is_under_temporary_restraining_order': True, 'is_abuser': True, 'is_victim': False, 'accuser': 'Jane'}, [], [])",
+    "test10": "is_allowed_to_possess_firearm({'has_criminal_record': False, 'is_under_temporary_restraining_order': False, 'is_abuser': False, 'is_victim': False, 'accuser': None}, [], [])"
+  },
+  "hidden_information": "def is_allowed_to_possess_firearm(person_record, accused_abusers, accused_victims):\n    if person_record['has_criminal_record']:\n        return False\n    elif person_record['is_under_temporary_restraining_order'] and person_record['is_abuser']:\n        return False\n    elif person_record['is_under_temporary_restraining_order'] and person_record['is_victim'] and person_record['accuser'] in accused_abusers:\n        return False\n    else:\n        return True"
+}

@@ -61,6 +61,24 @@ evals/*
 !evals/selfnarrative_ab.py
 !evals/slipstream_replay.py
 !evals/usersim.py
+# The component-A/B engine + its metric harnesses are load-bearing deliverable infra (spec P2):
+# code is versioned, captured run data (prompt_ab/runs/, *.json results) stays local.
+!evals/prompt_ab/
+evals/prompt_ab/runs/
+!evals/hardbench/
+evals/hardbench/__pycache__/
+!evals/colbench_trial.py
+!evals/colbench/
+evals/colbench/results/
+!evals/probe_learn.py
+!evals/probe_hard_recall.py
+!evals/validate_recall.py
+!evals/tr_incidental.py
+!evals/convo_h2h.py
+!evals/review/
+evals/review/tok_*.json
+evals/review/*_results*.json
+evals/review/runs/
 !evals/usersim_pty.py
 prototype/
 docs/STEP3-PLAN.md

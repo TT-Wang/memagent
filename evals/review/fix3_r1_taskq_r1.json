@@ -1,0 +1,65 @@
+{
+  "target": "r1_taskq",
+  "model": "kimi-k2.7-code",
+  "reviews": {
+    "sliceagent": {
+      "agent": "sliceagent",
+      "review": "Bugs, correctness, and security issues found:\n\n- `taskq/queue.py`: Mutable default argument `items=[]` is shared across all `TaskQueue` instances.\n- `taskq/queue.py`: `is_full` uses `>` instead of `>=`, so the queue can hold `capacity + 1` items.\n- `taskq/queue.py`: `dequeue` uses `list.pop(0)`, making dequeue O(n).\n- `taskq/worker.py`: The log file is opened in `run_once` but never closed, leaking file descriptors.\n- `taskq/worker.py`: `run_once` silently swallows all exceptions and returns `None`, hiding failures.\n- `taskq/scheduler.py`: `attempts` is never incremented in `run_with_retry`, causing an infinite loop when the queue is empty or the handler keeps returning `None`.\n- `taskq/scheduler.py`: `should_retry` is defined but never used.\n- `taskq/store.py`: `find_by_name` builds SQL via `'%s' % name`, making it vulnerable to SQL injection.",
+      "wall_s": 29.8,
+      "steps": 3,
+      "error": ""
+    }
+  },
+  "scores": {
+    "sliceagent": {
+      "recall": 1.0,
+      "found": 6,
+      "total": 6,
+      "false_pos": 1,
+      "plausible_extra": 1,
+      "precision": 0.875,
+      "per_issue": [
+        {
+          "id": "B1",
+          "found": true,
+          "evidence": "`taskq/queue.py`: Mutable default argument `items=[]` is shared across all `TaskQueue` instances."
+        },
+        {
+          "id": "B2",
+          "found": true,
+          "evidence": "`taskq/queue.py`: `is_full` uses `>` instead of `>=`, so the queue can hold `capacity + 1` items."
+        },
+        {
+          "id": "B3",
+          "found": true,
+          "evidence": "`taskq/worker.py`: The log file is opened in `run_once` but never closed, leaking file descriptors."
+        },
+        {
+          "id": "B4",
+          "found": true,
+          "evidence": "`taskq/worker.py`: `run_once` silently swallows all exceptions and returns `None`, hiding failures."
+        },
+        {
+          "id": "B5",
+          "found": true,
+          "evidence": "`taskq/scheduler.py`: `attempts` is never incremented in `run_with_retry`, causing an infinite loop when the queue is empty or the handler keeps returning `None`."
+        },
+        {
+          "id": "B6",
+          "found": true,
+          "evidence": "`taskq/store.py`: `find_by_name` builds SQL via `'%s' % name`, making it vulnerable to SQL injection."
+        }
+      ],
+      "extra_claims": [
+        {
+          "claim": "`taskq/queue.py`: `dequeue` uses `list.pop(0)`, making dequeue O(n).",
+          "kind": "plausible_extra"
+        },
+        {
+          "claim": "`taskq/scheduler.py`: `should_retry` is defined but never used.",
+          "kind": "false_positive"
+        }
+      ]
+    }
+  }
+}

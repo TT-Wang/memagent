@@ -1,0 +1,42 @@
+{
+  "name": "r2_miniweb",
+  "summary": "A small web-framework package (router/request/response/auth/cache/validators/utils) with 8 verified planted bugs scattered across modules (incl. peripheral cache/validators) plus 3 genuine distractors. Tests review recall under multi-file navigation.",
+  "review_task": "Review the `miniweb` package in this directory for bugs, correctness issues, and security problems. Look across ALL modules. For each issue, give the file and a one-line description. Be precise: only report genuine issues.",
+  "issues": [
+    {"id": "B1", "file": "miniweb/router.py", "type": "correctness", "severity": "high",
+     "desc": "match() uses substring `route in path` instead of exact lookup, so '/user' matches '/users/42' and the wrong handler wins.",
+     "markers": ["substring", "in path", "exact", "prefix", "wrong handler", "route match", "partial match"]},
+    {"id": "B2", "file": "miniweb/request.py", "type": "correctness", "severity": "high",
+     "desc": "Mutable default argument params={} is shared across all Request instances built without params.",
+     "markers": ["mutable default", "default argument", "params={}", "shared"]},
+    {"id": "B3", "file": "miniweb/request.py", "type": "correctness", "severity": "medium",
+     "desc": "header() is case-sensitive; HTTP header names are case-insensitive so lookups miss differently-cased headers.",
+     "markers": ["case-sensitive", "case insensitive", "case-insensitive", "header", "lower", "casefold"]},
+    {"id": "B4", "file": "miniweb/response.py", "type": "correctness", "severity": "medium",
+     "desc": "Content-Length uses len(self.body) (characters) not byte length; non-ASCII bodies get a wrong/short length.",
+     "markers": ["content-length", "byte", "bytes", "encode", "len(", "non-ascii", "utf-8", "character"]},
+    {"id": "B5", "file": "miniweb/auth.py", "type": "security", "severity": "high",
+     "desc": "The auth token is written to the log in plaintext (secret leakage into logs).",
+     "markers": ["log", "logged", "plaintext", "secret", "leak", "token=%s", "sensitive"]},
+    {"id": "B6", "file": "miniweb/auth.py", "type": "security", "severity": "medium",
+     "desc": "Token compared with == (non-constant-time), enabling a timing side-channel; should use hmac.compare_digest.",
+     "markers": ["timing", "constant-time", "constant time", "compare_digest", "side-channel", "side channel", "==", "non-constant"]},
+    {"id": "B7", "file": "miniweb/cache.py", "type": "correctness", "severity": "high",
+     "desc": "Cache key is the path only, ignoring query params, so different queries collide and return each other's cached responses.",
+     "markers": ["cache key", "query", "params", "ignores", "collide", "collision", "path only", "stale"]},
+    {"id": "B8", "file": "miniweb/validators.py", "type": "correctness", "severity": "medium",
+     "desc": "clamp() has wrong bounds: returns max(high, min(n, low)); clamp(5,0,10) yields 10 instead of 5.",
+     "markers": ["clamp", "max(high", "min(n, low", "wrong bound", "bounds", "low", "high", "swapped"]}
+  ],
+  "distractors": [
+    {"id": "D1", "file": "miniweb/validators.py", "ref": "is_valid_email",
+     "desc": "is_valid_email uses an anchored linear-time regex — verbose but correct, NOT a ReDoS or validation bug.",
+     "false_markers": ["email", "regex", "redos", "is_valid_email"]},
+    {"id": "D2", "file": "miniweb/response.py", "ref": "with_header",
+     "desc": "with_header's str(value) coercion is intentional (guards int header values), NOT a bug.",
+     "false_markers": ["with_header", "str(value)", "chaining"]},
+    {"id": "D3", "file": "miniweb/utils.py", "ref": "merge_headers",
+     "desc": "merge_headers builds a new dict so inputs aren't mutated — correct, NOT a bug.",
+     "false_markers": ["merge_headers", "mutate", "copy"]}
+  ]
+}

@@ -1,0 +1,158 @@
+{
+  "target": "r2_miniweb",
+  "model": "kimi-k2.7-code",
+  "reviews": {
+    "sliceagent": {
+      "agent": "sliceagent",
+      "review": "Here are the genuine issues found across the `miniweb` package:\n\n- `miniweb/request.py` \u2014 `Request.__init__` uses mutable default argument `params={}`, so distinct requests that omit `params` share and mutate the same dict.\n- `miniweb/auth.py` \u2014 `TokenAuth` compares tokens with `==`, which is vulnerable to timing attacks; it should use a constant-time comparison.\n- `miniweb/auth.py` \u2014 The raw bearer token is logged at INFO level, leaking a credential into logs.\n- `miniweb/auth.py` \u2014 Token extraction uses case-sensitive `replace(\"Bearer \", \"\")` on the full header value, so mixed-case schemes or extra prefixes are handled insecurely/incorrectly.\n- `miniweb/router.py` \u2014 `Router.match` does substring matching (`route in path`), so `/admin` matches `/foo/admin` and arbitrary suffixes, and returns the first arbitrary route.\n- `miniweb/router.py` \u2014 `has` checks exact path membership while `match` uses substring logic, so the two methods disagree about what routes exist.\n- `miniweb/validators.py` \u2014 `clamp(n, low, high)` returns `max(high, min(n, low))`, which clamps to the wrong end of the range (e.g. `clamp(5, 0, 10)` returns `0` instead of `5`).\n- `miniweb/response.py` \u2014 `finalize` sets `Content-Length` to `len(self.body)`, which is character count, not the byte count that HTTP requires.\n- `miniweb/cache.py` \u2014 Cache key is only `request.path`, so requests with different methods, query params, headers, or auth to the same path collide.\n- `miniweb/cache.py` \u2014 Cached `Response` objects are stored and returned by reference, so mutating a cached response corrupts the cache for future requests.\n- `miniweb/cache.py` \u2014 The cache has no size bound or eviction, allowing unbounded memory growth.",
+      "wall_s": 24.7,
+      "steps": 2,
+      "error": ""
+    },
+    "kimi": {
+      "agent": "kimi",
+      "review": "1\tfrom .router import Router\n2\tfrom .request import Request\n3\tfrom .response import Response\n4\tfrom .auth import TokenAuth\n5\tfrom .cache import ResponseCache\n6\t\n7\t__all__ = [\"Router\", \"Request\", \"Response\", \"TokenAuth\", \"ResponseCache\"]\n<system>7 lines read from file starting from line 1. Total lines in file: 7. End of file reached.</system>\n1\t\"\"\"Token authentication.\"\"\"\n2\timport logging\n3\t\n4\tlog = logging.getLogger(\"miniweb.auth\")\n5\t\n6\t\n7\tclass TokenAuth:\n8\t    def __init__(self, valid_token):\n9\t        self.valid_token = valid_token\n10\t\n11\t    def authenticate(self, request):\n12\t        token = request.header(\"Authorization\") or \"\"\n13\t        token = token.replace(\"Bearer \", \"\")\n14\t        log.info(\"authenticating with token=%s\", token)\n15\t        if token == self.valid_token:\n16\t            return True\n17\t        return False\n<system>17 lines read from file starting from line 1. Total lines in file: 17. End of file reached.</system>\n1\t\"\"\"Tiny response cache.\"\"\"\n2\t\n3\t\n4\tclass ResponseCache:\n5\t    def __init__(self):\n6\t        self._store = {}\n7\t\n8\t    def key(self, request):\n9\t        return request.path\n10\t\n11\t    def get(self, request):\n12\t        return self._store.get(self.key(request))\n13\t\n14\t    def put(self, request, response):\n15\t        self._store[self.key(request)] = response\n16\t\n17\t    def clear(self):\n18\t        self._store.clear()\n<system>18 lines read from file starting from line 1. Total lines in file: 18. End of file reached.</system>\n1\t\"\"\"HTTP request wrapper.\"\"\"\n2\t\n3\t\n4\tclass Request:\n5\t    def __init__(self, method, path, headers=None, params={}):\n6\t        self.method = method\n7\t        self.path = path\n8\t        self.headers = headers or {}\n9\t        self.params = params\n10\t\n11\t    def header(self, name):\n12\t        return self.headers.get(name)\n13\t\n14\t    def is_json(self):\n15\t        ct = self.header(\"Content-Type\") or \"\"\n16\t        return \"application/json\" in ct\n<system>16 lines read from file starting from line 1. Total lines in file: 16. End of file reached.</system>\n1\t\"\"\"HTTP response builder.\"\"\"\n2\t\n3\t\n4\tclass Response:\n5\t    def __init__(self, body=\"\", status=200):\n6\t        self.body = body\n7\t        self.status = status\n8\t        self.headers = {}\n9\t\n10\t    def finalize(self):\n11\t        self.headers[\"Content-Length\"] = str(len(self.body))\n12\t        return self.headers\n13\t\n14\t    def with_header(self, name, value):\n15\t        self.headers[name] = str(value)\n16\t        return self\n<system>16 lines read from file starting from line 1. Total lines in file: 16. End of file reached.</system>\n1\t\"\"\"URL router: map a request path to a handler.\"\"\"\n2\t\n3\t\n4\tclass Router:\n5\t    def __init__(self):\n6\t        self._routes = {}\n7\t\n8\t    def add(self, path, handler):\n9\t        self._routes[path] = handler\n10\t\n11\t    def match(self, path):\n12\t        for route, handler in self._routes.items():\n13\t            if route in path:\n14\t                return handler\n15\t        return None\n16\t\n17\t    def has(self, path):\n18\t        return path in self._routes\n<system>18 lines read from file starting from line 1. Total lines in file: 18. End of file reached.</system>\n1\t\"\"\"Misc helpers.\"\"\"\n2\t\n3\t\n4\tdef merge_headers(base, extra):\n5\t    out = dict(base)\n6\t    out.update(extra)\n7\t    return out\n8\t\n9\t\n10\tdef first_line(text):\n11\t    lines = text.splitlines()\n12\t    return lines[0] if lines else \"\"\n<system>12 lines read from file starting from line 1. Total lines in file: 12. End of file reached.</system>\n1\t\"\"\"Input validators.\"\"\"\n2\timport re\n3\t\n4\t_EMAIL = re.compile(r\"^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$\")\n5\t\n6\t\n7\tdef is_valid_email(value):\n8\t    if not isinstance(value, str):\n9\t        return False\n10\t    value = value.strip()\n11\t    if not value:\n12\t        return False\n13\t    return bool(_EMAIL.match(value))\n14\t\n15\t\n16\tdef clamp(n, low, high):\n17\t    return max(high, min(n, low))\n<system>17 lines read from file starting from line 1. Total lines in file: 17. End of file reached.</system>\n10 10 10\n\nTrue\n{'x': 1}\n\n<function <lambda> at 0x7fec300abd90>\n\n1 2\n\nIssues found across the `miniweb` package:\n\n- `miniweb/auth.py`: Logs the raw bearer token, leaking the credential into logs.\n- `miniweb/auth.py`: Compares tokens with `==` instead of a constant-time comparison, opening a timing-attack side channel.\n- `miniweb/auth.py`: Bearer prefix handling is case-sensitive, strips all `\"Bearer \"` occurrences, and does not trim whitespace.\n- `miniweb/cache.py`: Cache key is only `request.path`, ignoring HTTP method, query parameters, and headers, so unrelated requests can share cached responses.\n- `miniweb/cache.py`: No size limit or TTL, allowing unbounded memory growth.\n- `miniweb/request.py`: Uses mutable default argument `params={}`, so `Request` instances without explicit params share the same dict.\n- `miniweb/request.py`: `header()` does a case-sensitive lookup, but HTTP header names are case-insensitive.\n- `miniweb/request.py`: `is_json()` checks for the substring `\"application/json\"`, giving false positives (e.g. `application/json-seq`).\n- `miniweb/response.py`: `finalize()` sets `Content-Length` to `len(self.body)`, which is wrong for non-ASCII strings (counts characters, not encoded bytes).\n- `miniweb/router.py`: `match()` uses substring comparison (`route in path`), so routes match unintended paths (e.g. `/admin` matches `/foo/admin/bar`).\n- `miniweb/validators.py`: `clamp(n, low, high)` is implemented as `max(high, min(n, low))` and returns incorrect values.\n- `miniweb/utils.py`: No issues found.\nTo resume this session: kimi -r session_9bf505c0-5539-4933-aa28-f564a5acb3ed",
+      "wall_s": 78.6,
+      "rc": 0,
+      "error": ""
+    }
+  },
+  "scores": {
+    "sliceagent": {
+      "recall": 0.875,
+      "found": 7,
+      "total": 8,
+      "false_pos": 0,
+      "plausible_extra": 5,
+      "precision": 1.0,
+      "per_issue": [
+        {
+          "id": "B1",
+          "found": true,
+          "evidence": "Router.match does substring matching (`route in path`), so `/admin` matches `/foo/admin` and arbitrary suffixes, and returns the first arbitrary route."
+        },
+        {
+          "id": "B2",
+          "found": true,
+          "evidence": "Request.__init__ uses mutable default argument `params={}`, so distinct requests that omit `params` share and mutate the same dict."
+        },
+        {
+          "id": "B3",
+          "found": false,
+          "evidence": "No matching sentence; the review does not mention Request.header() case-sensitivity."
+        },
+        {
+          "id": "B4",
+          "found": true,
+          "evidence": "finalize sets `Content-Length` to `len(self.body)`, which is character count, not the byte count that HTTP requires."
+        },
+        {
+          "id": "B5",
+          "found": true,
+          "evidence": "The raw bearer token is logged at INFO level, leaking a credential into logs."
+        },
+        {
+          "id": "B6",
+          "found": true,
+          "evidence": "TokenAuth compares tokens with `==`, which is vulnerable to timing attacks; it should use a constant-time comparison."
+        },
+        {
+          "id": "B7",
+          "found": true,
+          "evidence": "Cache key is only `request.path`, so requests with different methods, query params, headers, or auth to the same path collide."
+        },
+        {
+          "id": "B8",
+          "found": true,
+          "evidence": "clamp(n, low, high) returns `max(high, min(n, low))`, which clamps to the wrong end of the range (e.g. `clamp(5, 0, 10)` returns `0` instead of `5`)."
+        }
+      ],
+      "extra_claims": [
+        {
+          "claim": "Token extraction in auth.py is case-sensitive (`replace(\"Bearer \", \"\")`), so mixed-case schemes or extra prefixes are handled incorrectly.",
+          "kind": "plausible_extra"
+        },
+        {
+          "claim": "Router.has checks exact path membership while Router.match uses substring logic, so the two methods disagree about what routes exist.",
+          "kind": "plausible_extra"
+        },
+        {
+          "claim": "Cache key ignores HTTP method, headers, and auth (in addition to query params), causing collisions between requests that differ only in those dimensions.",
+          "kind": "plausible_extra"
+        },
+        {
+          "claim": "Cached Response objects are stored and returned by reference, so mutating a returned response corrupts the cache for future requests.",
+          "kind": "plausible_extra"
+        },
+        {
+          "claim": "The cache has no size bound or eviction, allowing unbounded memory growth.",
+          "kind": "plausible_extra"
+        }
+      ]
+    },
+    "kimi": {
+      "recall": 1.0,
+      "found": 8,
+      "total": 8,
+      "false_pos": 0,
+      "plausible_extra": 3,
+      "precision": 1.0,
+      "per_issue": [
+        {
+          "id": "B1",
+          "found": true,
+          "evidence": "miniweb/router.py: match() uses substring comparison (`route in path`), so routes match unintended paths (e.g. `/admin` matches `/foo/admin/bar`)."
+        },
+        {
+          "id": "B2",
+          "found": true,
+          "evidence": "miniweb/request.py: Uses mutable default argument `params={}`, so `Request` instances without explicit params share the same dict."
+        },
+        {
+          "id": "B3",
+          "found": true,
+          "evidence": "miniweb/request.py: `header()` does a case-sensitive lookup, but HTTP header names are case-insensitive."
+        },
+        {
+          "id": "B4",
+          "found": true,
+          "evidence": "miniweb/response.py: `finalize()` sets `Content-Length` to `len(self.body)`, which is wrong for non-ASCII strings (counts characters, not encoded bytes)."
+        },
+        {
+          "id": "B5",
+          "found": true,
+          "evidence": "miniweb/auth.py: Logs the raw bearer token, leaking the credential into logs."
+        },
+        {
+          "id": "B6",
+          "found": true,
+          "evidence": "miniweb/auth.py: Compares tokens with `==` instead of a constant-time comparison, opening a timing-attack side channel."
+        },
+        {
+          "id": "B7",
+          "found": true,
+          "evidence": "miniweb/cache.py: Cache key is only `request.path`, ignoring HTTP method, query parameters, and headers, so unrelated requests can share cached responses."
+        },
+        {
+          "id": "B8",
+          "found": true,
+          "evidence": "miniweb/validators.py: `clamp(n, low, high)` is implemented as `max(high, min(n, low))` and returns incorrect values."
+        }
+      ],
+      "extra_claims": [
+        {
+          "claim": "Bearer prefix handling is case-sensitive, strips all `Bearer ` occurrences, and does not trim whitespace.",
+          "kind": "plausible_extra"
+        },
+        {
+          "claim": "Cache has no size limit or TTL, allowing unbounded memory growth.",
+          "kind": "plausible_extra"
+        },
+        {
+          "claim": "`is_json()` checks for the substring `application/json`, giving false positives (e.g. `application/json-seq`).",
+          "kind": "plausible_extra"
+        }
+      ]
+    }
+  }
+}

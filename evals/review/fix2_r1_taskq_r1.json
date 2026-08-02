@@ -1,0 +1,73 @@
+{
+  "target": "r1_taskq",
+  "model": "kimi-k2.7-code",
+  "reviews": {
+    "sliceagent": {
+      "agent": "sliceagent",
+      "review": "Issues found in the `taskq` package:\n\n- **taskq/queue.py**: Mutable default argument `items=[]` is shared across all `TaskQueue` instances.\n- **taskq/queue.py**: `is_full` uses `>` instead of `>=`, so the queue accepts one element beyond `capacity`.\n- **taskq/queue.py**: `dequeue` uses `pop(0)` on a list, making dequeue O(n).\n- **taskq/worker.py**: Log file is opened but never closed, leaking the file handle.\n- **taskq/worker.py**: Exceptions in `run_once` silently return `None` and log nothing, hiding failures.\n- **taskq/worker.py**: `drain` calls `run_once` in a loop, but `run_once` returns `None` both for empty queue and for failures, so failures are indistinguishable.\n- **taskq/scheduler.py**: `run_with_retry` does not increment `attempts`, causing an infinite loop when `run_once` returns `None`.\n- **taskq/scheduler.py**: `should_retry` is defined but unused and inconsistent with `run_with_retry` logic.\n- **taskq/store.py**: `find_by_name` uses string formatting into SQL (`'%s' % name`), making it vulnerable to SQL injection.\n- **taskq/store.py**: `save` creates duplicate rows for the same `name` because there is no unique constraint or upsert logic.",
+      "wall_s": 10.8,
+      "steps": 2,
+      "error": ""
+    }
+  },
+  "scores": {
+    "sliceagent": {
+      "recall": 1.0,
+      "found": 6,
+      "total": 6,
+      "false_pos": 2,
+      "plausible_extra": 2,
+      "precision": 0.8,
+      "per_issue": [
+        {
+          "id": "B1",
+          "found": true,
+          "evidence": "Mutable default argument `items=[]` is shared across all `TaskQueue` instances."
+        },
+        {
+          "id": "B2",
+          "found": true,
+          "evidence": "`is_full` uses `>` instead of `>=`, so the queue accepts one element beyond `capacity`."
+        },
+        {
+          "id": "B3",
+          "found": true,
+          "evidence": "Log file is opened but never closed, leaking the file handle."
+        },
+        {
+          "id": "B4",
+          "found": true,
+          "evidence": "Exceptions in `run_once` silently return `None` and log nothing, hiding failures."
+        },
+        {
+          "id": "B5",
+          "found": true,
+          "evidence": "`run_with_retry` does not increment `attempts`, causing an infinite loop when `run_once` returns `None`."
+        },
+        {
+          "id": "B6",
+          "found": true,
+          "evidence": "`find_by_name` uses string formatting into SQL (`'%s' % name`), making it vulnerable to SQL injection."
+        }
+      ],
+      "extra_claims": [
+        {
+          "claim": "dequeue uses pop(0) on a list, making dequeue O(n)",
+          "kind": "plausible_extra"
+        },
+        {
+          "claim": "drain calls run_once in a loop, but run_once returns None both for empty queue and for failures, so failures are indistinguishable",
+          "kind": "plausible_extra"
+        },
+        {
+          "claim": "should_retry is defined but unused and inconsistent with run_with_retry logic",
+          "kind": "false_positive"
+        },
+        {
+          "claim": "save creates duplicate rows for the same name because there is no unique constraint or upsert logic",
+          "kind": "false_positive"
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "target": "r2_miniweb",
+  "model": "kimi-k2.7-code",
+  "reviews": {
+    "sliceagent": {
+      "agent": "sliceagent",
+      "review": "Review of `miniweb/` \u2014 issues found:\n\n- `miniweb/auth.py`: Token compared with `==` (timing side-channel); logs raw token at INFO; header lookup is case-sensitive; `replace(\"Bearer \", \"\")` accepts malformed prefixes.\n- `miniweb/request.py`: Mutable default argument `params={}` is shared across instances.\n- `miniweb/cache.py`: Cache key is only `request.path`, ignoring method/query/headers (e.g. POST/GET or different auth collide).\n- `miniweb/response.py`: `Content-Length` computed as `len(self.body)` (character count), which is wrong for multi-byte bodies or byte strings.\n- `miniweb/router.py`: `match` uses substring check (`route in path`), so `/foo` matches `/bar/foo/baz`.\n- `miniweb/validators.py`: `clamp(n, low, high)` returns `max(high, min(n, low))` \u2014 the bounds are inverted; verified it always returns `high`.\n\n`__init__.py` and `utils.py` look fine.",
+      "wall_s": 34.4,
+      "steps": 3,
+      "error": ""
+    }
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "name": "r1_taskq",
+  "summary": "A small bounded task-queue package (queue/worker/scheduler/store) with 6 verified planted bugs of varying subtlety plus 2 genuine distractors. Ground truth for scoring review quality.",
+  "review_task": "Review the `taskq` package in this directory for bugs, correctness issues, and security problems. For each issue, give the file and a one-line description of the problem. Be precise: only report genuine issues.",
+  "issues": [
+    {"id": "B1", "file": "taskq/queue.py", "type": "correctness", "severity": "high",
+     "desc": "Mutable default argument items=[] is shared across all TaskQueue instances created without an explicit items arg.",
+     "markers": ["mutable default", "default argument", "items=[]", "shared list", "shared state"]},
+    {"id": "B2", "file": "taskq/queue.py", "type": "correctness", "severity": "medium",
+     "desc": "Off-by-one in is_full: uses > capacity so the queue accepts one item beyond capacity (should be >=).",
+     "markers": ["off-by-one", "off by one", "is_full", ">= capacity", "beyond capacity", "one more than"]},
+    {"id": "B3", "file": "taskq/worker.py", "type": "resource", "severity": "medium",
+     "desc": "File handle opened in run_once on every call is never closed (resource/file-descriptor leak).",
+     "markers": ["never closed", "not closed", "resource leak", "file handle", "file descriptor", "leak", "context manager", "with open"]},
+    {"id": "B4", "file": "taskq/worker.py", "type": "correctness", "severity": "high",
+     "desc": "except Exception swallows all handler errors silently (returns None), so failures look like success and are never logged or raised.",
+     "markers": ["swallow", "silently", "bare except", "except Exception", "hides error", "masks", "suppress"]},
+    {"id": "B5", "file": "taskq/scheduler.py", "type": "correctness", "severity": "high",
+     "desc": "attempts is never incremented in run_with_retry, so a persistently failing handler loops forever (infinite loop / hang).",
+     "markers": ["never incremented", "attempts", "infinite loop", "infinite", "loops forever", "hang", "does not increment"]},
+    {"id": "B6", "file": "taskq/store.py", "type": "security", "severity": "high",
+     "desc": "SQL injection in find_by_name: name is string-interpolated into the query instead of bound as a parameter.",
+     "markers": ["sql injection", "injection", "parameterize", "parameterized", "bind", "interpolat", "%s", "unsanitized"]}
+  ],
+  "distractors": [
+    {"id": "D1", "file": "taskq/worker.py", "ref": "log_dir",
+     "desc": "log_dir uses os.path.dirname(...) or '.' — correct, NOT a bug.",
+     "false_markers": ["log_dir", "dirname"]},
+    {"id": "D2", "file": "taskq/queue.py", "ref": "snapshot",
+     "desc": "snapshot returns list(self._items) — an intentional defensive copy, NOT a bug.",
+     "false_markers": ["snapshot", "defensive copy", "redundant copy"]}
+  ]
+}

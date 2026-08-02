@@ -1,0 +1,83 @@
+{
+  "target": "r2_miniweb",
+  "model": "kimi-k2.7-code",
+  "reviews": {
+    "sliceagent": {
+      "agent": "sliceagent",
+      "review": "Issues found in `miniweb/`:\n\n- `miniweb/validators.py`: `clamp` is reversed \u2014 it clamps to the opposite bound (`max(high, min(n, low))`), so values inside the range are forced to `high`.\n- `miniweb/request.py`: Mutable default argument `params={}` causes separate `Request` instances to share the same dict.\n- `miniweb/request.py`: `is_json()` does a substring check, so non-JSON types like `application/json-patch+json` are reported as JSON.\n- `miniweb/router.py`: `match()` uses substring test (`route in path`), so `/foo` incorrectly matches `/foobar`.\n- `miniweb/auth.py`: Token extraction is case-sensitive on `\"Bearer \"` and strips only one occurrence, allowing `\"Bearer Bearer secret\"`; an empty `valid_token` authenticates a missing/empty header.\n- `miniweb/auth.py`: Logs the raw bearer token, leaking credentials.\n- `miniweb/response.py`: `with_header()` allows CRLF injection via header names/values.\n- `miniweb/response.py`: `finalize()` sets `Content-Length` to `len(self.body)` (character count), which is wrong for non-ASCII bodies.\n- `miniweb/cache.py`: Cache key is only `request.path`, ignoring HTTP method, query string, and auth headers \u2014 can serve private responses to the wrong requests.",
+      "wall_s": 62.7,
+      "steps": 6,
+      "error": ""
+    }
+  },
+  "scores": {
+    "sliceagent": {
+      "recall": 0.75,
+      "found": 6,
+      "total": 8,
+      "false_pos": 4,
+      "plausible_extra": 0,
+      "precision": 0.6,
+      "per_issue": [
+        {
+          "id": "B1",
+          "found": true,
+          "evidence": "`match()` uses substring test (`route in path`), so `/foo` incorrectly matches `/foobar`"
+        },
+        {
+          "id": "B2",
+          "found": true,
+          "evidence": "Mutable default argument `params={}` causes separate `Request` instances to share the same dict"
+        },
+        {
+          "id": "B3",
+          "found": false,
+          "evidence": "Review does not mention `header()` being case-sensitive"
+        },
+        {
+          "id": "B4",
+          "found": true,
+          "evidence": "`finalize()` sets `Content-Length` to `len(self.body)` (character count), which is wrong for non-ASCII bodies"
+        },
+        {
+          "id": "B5",
+          "found": true,
+          "evidence": "Logs the raw bearer token, leaking credentials"
+        },
+        {
+          "id": "B6",
+          "found": false,
+          "evidence": "Review discusses token extraction and empty `valid_token` but does not mention `==` or constant-time comparison"
+        },
+        {
+          "id": "B7",
+          "found": true,
+          "evidence": "Cache key is only `request.path`, ignoring HTTP method, query string, and auth headers"
+        },
+        {
+          "id": "B8",
+          "found": true,
+          "evidence": "`clamp` is reversed \u2014 it clamps to the opposite bound (`max(high, min(n, low))`), so values inside the range are forced to `high`"
+        }
+      ],
+      "extra_claims": [
+        {
+          "claim": "`is_json()` does a substring check, so non-JSON types like `application/json-patch+json` are reported as JSON",
+          "kind": "false_positive"
+        },
+        {
+          "claim": "Token extraction is case-sensitive on \"Bearer \" and strips only one occurrence, allowing \"Bearer Bearer secret\"",
+          "kind": "false_positive"
+        },
+        {
+          "claim": "An empty `valid_token` authenticates a missing/empty header",
+          "kind": "false_positive"
+        },
+        {
+          "claim": "`with_header()` allows CRLF injection via header names/values",
+          "kind": "false_positive"
+        }
+      ]
+    }
+  }
+}

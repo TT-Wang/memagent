@@ -1,0 +1,56 @@
+{
+  "target": "r1_taskq",
+  "model": "kimi-k2.7-code",
+  "reviews": {
+    "sliceagent": {
+      "agent": "sliceagent",
+      "review": "Genuine issues found:\n\n- `taskq/queue.py`: Mutable default argument `items=[]` causes all `TaskQueue` instances without an explicit `items` argument to share the same underlying list.\n- `taskq/queue.py`: `is_full()` uses `len(self._items) > self.capacity` instead of `>=`, so the queue accepts one item beyond its stated capacity.\n- `taskq/worker.py`: `run_once()` opens the log file with `open(..., \"a\")` but never closes it, leaking file descriptors.\n- `taskq/scheduler.py`: `run_with_retry()` initializes `attempts = 0` but never increments it, causing an infinite loop whenever a task fails or the queue is empty.\n- `taskq/store.py`: `find_by_name()` builds SQL via `\"... WHERE name = '%s'\" % name`, making it vulnerable to SQL injection.",
+      "wall_s": 49.9,
+      "steps": 2,
+      "error": ""
+    }
+  },
+  "scores": {
+    "sliceagent": {
+      "recall": 0.833,
+      "found": 5,
+      "total": 6,
+      "false_pos": 0,
+      "plausible_extra": 0,
+      "precision": 1.0,
+      "per_issue": [
+        {
+          "id": "B1",
+          "found": true,
+          "evidence": "`taskq/queue.py`: Mutable default argument `items=[]` causes all `TaskQueue` instances without an explicit `items` argument to share the same underlying list."
+        },
+        {
+          "id": "B2",
+          "found": true,
+          "evidence": "`taskq/queue.py`: `is_full()` uses `len(self._items) > self.capacity` instead of `>=`, so the queue accepts one item beyond its stated capacity."
+        },
+        {
+          "id": "B3",
+          "found": true,
+          "evidence": "`taskq/worker.py`: `run_once()` opens the log file with `open(..., \"a\")` but never closes it, leaking file descriptors."
+        },
+        {
+          "id": "B4",
+          "found": false,
+          "evidence": ""
+        },
+        {
+          "id": "B5",
+          "found": true,
+          "evidence": "`taskq/scheduler.py`: `run_with_retry()` initializes `attempts = 0` but never increments it, causing an infinite loop whenever a task fails or the queue is empty."
+        },
+        {
+          "id": "B6",
+          "found": true,
+          "evidence": "`taskq/store.py`: `find_by_name()` builds SQL via `\"... WHERE name = '%s'\" % name`, making it vulnerable to SQL injection."
+        }
+      ],
+      "extra_claims": []
+    }
+  }
+}

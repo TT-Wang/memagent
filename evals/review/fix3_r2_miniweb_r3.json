@@ -1,0 +1,79 @@
+{
+  "target": "r2_miniweb",
+  "model": "kimi-k2.7-code",
+  "reviews": {
+    "sliceagent": {
+      "agent": "sliceagent",
+      "review": "Reviewed all modules in `miniweb/`. Genuine issues found:\n\n- `miniweb/auth.py` \u2014 Logs the raw bearer token, leaking the secret.\n- `miniweb/auth.py` \u2014 Strips only the literal, case-sensitive prefix `\"Bearer \"`, so headers like `\"bearer token\"` or `\"Bearer: token\"` fail.\n- `miniweb/auth.py` \u2014 Uses `==` for token comparison, which is vulnerable to timing attacks.\n- `miniweb/request.py` \u2014 Mutable default argument `params={}` is shared across all `Request` instances.\n- `miniweb/request.py` \u2014 `is_json()` matches the substring `\"application/json\"` anywhere in `Content-Type`, so types like `\"not-application/json\"` return true.\n- `miniweb/cache.py` \u2014 Cache key is only `request.path`, so different HTTP methods, query strings, or headers collide on the same entry.\n- `miniweb/response.py` \u2014 `Content-Length` uses `len(self.body)` (code points), not byte length, so non-ASCII bodies produce an incorrect length.\n- `miniweb/router.py` \u2014 `match()` uses substring matching (`route in path`), so `/foo` incorrectly matches `/bar/foo/baz`.\n- `miniweb/validators.py` \u2014 `clamp()` arguments are ordered incorrectly: it returns `max(high, min(n, low))` instead of `max(low, min(n, high))`, so values inside the range are clamped to the high bound.",
+      "wall_s": 38.1,
+      "steps": 2,
+      "error": ""
+    }
+  },
+  "scores": {
+    "sliceagent": {
+      "recall": 0.875,
+      "found": 7,
+      "total": 8,
+      "false_pos": 0,
+      "plausible_extra": 3,
+      "precision": 1.0,
+      "per_issue": [
+        {
+          "id": "B1",
+          "found": true,
+          "evidence": "`miniweb/router.py` \u2014 `match()` uses substring matching (`route in path`), so `/foo` incorrectly matches `/bar/foo/baz`."
+        },
+        {
+          "id": "B2",
+          "found": true,
+          "evidence": "`miniweb/request.py` \u2014 Mutable default argument `params={}` is shared across all `Request` instances."
+        },
+        {
+          "id": "B3",
+          "found": false,
+          "evidence": null
+        },
+        {
+          "id": "B4",
+          "found": true,
+          "evidence": "`miniweb/response.py` \u2014 `Content-Length` uses `len(self.body)` (code points), not byte length, so non-ASCII bodies produce an incorrect length."
+        },
+        {
+          "id": "B5",
+          "found": true,
+          "evidence": "`miniweb/auth.py` \u2014 Logs the raw bearer token, leaking the secret."
+        },
+        {
+          "id": "B6",
+          "found": true,
+          "evidence": "`miniweb/auth.py` \u2014 Uses `==` for token comparison, which is vulnerable to timing attacks."
+        },
+        {
+          "id": "B7",
+          "found": true,
+          "evidence": "`miniweb/cache.py` \u2014 Cache key is only `request.path`, so different HTTP methods, query strings, or headers collide on the same entry."
+        },
+        {
+          "id": "B8",
+          "found": true,
+          "evidence": "`miniweb/validators.py` \u2014 `clamp()` arguments are ordered incorrectly: it returns `max(high, min(n, low))` instead of `max(low, min(n, high))`, so values inside the range are clamped to the high bound."
+        }
+      ],
+      "extra_claims": [
+        {
+          "claim": "auth.py strips only the literal, case-sensitive prefix \"Bearer \", so headers like \"bearer token\" or \"Bearer: token\" fail.",
+          "kind": "plausible_extra"
+        },
+        {
+          "claim": "request.py `is_json()` matches the substring \"application/json\" anywhere in Content-Type, so types like \"not-application/json\" return true.",
+          "kind": "plausible_extra"
+        },
+        {
+          "claim": "cache.py path-only key also causes different HTTP methods or headers to collide on the same entry.",
+          "kind": "plausible_extra"
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "problem_description": "Can you write a Python function to calculate the salary of a contingent worker based on the hours they worked and their hourly rate? I'm not sure if there are any other factors I need to consider, but I want the function to be flexible.The signature of the function is: def calculate_contingent_worker_salary(hours_worked, hourly_rate, is_casual=False, benefits_deduction=0.0)",
+  "ground_truth": "def calculate_contingent_worker_salary(hours_worked, hourly_rate, is_casual=False, benefits_deduction=0.0):\n    if is_casual:\n        return hours_worked * hourly_rate * (1 - benefits_deduction)\n    else:\n        return hours_worked * hourly_rate",
+  "test_cases": {
+    "test1": "calculate_contingent_worker_salary(40, 20.0, is_casual=True, benefits_deduction=0.05)",
+    "test2": "calculate_contingent_worker_salary(30, 25.0)",
+    "test3": "calculate_contingent_worker_salary(50, 18.0, is_casual=True)",
+    "test4": "calculate_contingent_worker_salary(20, 30.0, benefits_deduction=0.10)",
+    "test5": "calculate_contingent_worker_salary(40, 20.0, is_casual=False)",
+    "test6": "calculate_contingent_worker_salary(45, 22.0, is_casual=True, benefits_deduction=0.03)",
+    "test7": "calculate_contingent_worker_salary(38, 24.0, benefits_deduction=0.02)",
+    "test8": "calculate_contingent_worker_salary(48, 21.0, is_casual=True, benefits_deduction=0.08)",
+    "test9": "calculate_contingent_worker_salary(32, 28.0, is_casual=False)",
+    "test10": "calculate_contingent_worker_salary(50, 18.0, is_casual=False, benefits_deduction=0.01)"
+  },
+  "hidden_information": "def calculate_contingent_worker_salary(hours_worked, hourly_rate, is_casual=False, benefits_deduction=0.0):\n    if is_casual:\n        return hours_worked * hourly_rate * (1 - benefits_deduction)\n    else:\n        return hours_worked * hourly_rate"
+}

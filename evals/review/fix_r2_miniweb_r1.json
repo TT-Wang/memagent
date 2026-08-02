@@ -1,0 +1,79 @@
+{
+  "target": "r2_miniweb",
+  "model": "kimi-k2.7-code",
+  "reviews": {
+    "sliceagent": {
+      "agent": "sliceagent",
+      "review": "Here is the review of the `miniweb` package. I confirmed the bugs by reading each module and reproducing the two key correctness failures.\n\n**Genuine issues found:**\n\n- `miniweb/validators.py` \u2014 `clamp(n, low, high)` returns `max(high, min(n, low))`, which swaps `low` and `high`; for normal inputs it always returns `high` instead of clamping between bounds.\n- `miniweb/request.py` \u2014 `Request.__init__` uses mutable default `params={}`, so separate `Request` instances can share the same params dict.\n- `miniweb/auth.py` \u2014 `authenticate` strips only a leading literal `\"Bearer \"` without case-insensitive handling and logs the raw token at `INFO`, leaking credentials into logs.\n- `miniweb/cache.py` \u2014 `ResponseCache.key` only uses `request.path`, so GET/POST requests with different methods or query strings share the same cache entry.\n- `miniweb/router.py` \u2014 `match` returns the first route that is a substring of `path` rather than an exact match, so `/foo` matches `/foobar` and the order of routes matters unexpectedly.\n- `miniweb/router.py` \u2014 `has` checks exact `path` presence but `match` uses substring semantics, so they can disagree.\n- `miniweb/response.py` \u2014 `finalize` computes `Content-Length` as `len(self.body)` bytes, which is wrong for non-ASCII strings.",
+      "wall_s": 41.6,
+      "steps": 4,
+      "error": ""
+    }
+  },
+  "scores": {
+    "sliceagent": {
+      "recall": 0.75,
+      "found": 6,
+      "total": 8,
+      "false_pos": 0,
+      "plausible_extra": 3,
+      "precision": 1.0,
+      "per_issue": [
+        {
+          "id": "B1",
+          "found": true,
+          "evidence": "router.py \u2014 `match` returns the first route that is a substring of `path` rather than an exact match, so `/foo` matches `/foobar` and the order of routes matters unexpectedly."
+        },
+        {
+          "id": "B2",
+          "found": true,
+          "evidence": "request.py \u2014 `Request.__init__` uses mutable default `params={}`, so separate `Request` instances can share the same params dict."
+        },
+        {
+          "id": "B3",
+          "found": false,
+          "evidence": ""
+        },
+        {
+          "id": "B4",
+          "found": true,
+          "evidence": "response.py \u2014 `finalize` computes `Content-Length` as `len(self.body)` bytes, which is wrong for non-ASCII strings."
+        },
+        {
+          "id": "B5",
+          "found": true,
+          "evidence": "auth.py \u2014 ... logs the raw token at `INFO`, leaking credentials into logs."
+        },
+        {
+          "id": "B6",
+          "found": false,
+          "evidence": ""
+        },
+        {
+          "id": "B7",
+          "found": true,
+          "evidence": "cache.py \u2014 `ResponseCache.key` only uses `request.path`, so GET/POST requests with different methods or query strings share the same cache entry."
+        },
+        {
+          "id": "B8",
+          "found": true,
+          "evidence": "validators.py \u2014 `clamp(n, low, high)` returns `max(high, min(n, low))`, which swaps `low` and `high`; for normal inputs it always returns `high` instead of clamping between bounds."
+        }
+      ],
+      "extra_claims": [
+        {
+          "claim": "auth.py strips only a leading literal 'Bearer ' without case-insensitive handling",
+          "kind": "plausible_extra"
+        },
+        {
+          "claim": "cache key ignores HTTP method, so GET/POST requests with different methods share the same cache entry",
+          "kind": "plausible_extra"
+        },
+        {
+          "claim": "router.has checks exact path presence but match uses substring semantics, so they can disagree",
+          "kind": "plausible_extra"
+        }
+      ]
+    }
+  }
+}

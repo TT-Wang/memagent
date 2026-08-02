@@ -1,0 +1,17 @@
+{
+  "problem_description": "I need a Python function to represent Lance Armstrong's willingness to change his testimony based on some entities and conditions. Please help me write it.The signature of the function is: def get_lance_armstrong_testimony(entity, has_criminal_charges, deadline_met=False)",
+  "ground_truth": "def get_lance_armstrong_testimony(entity, has_criminal_charges, deadline_met=False):\n    if entity == 'USADA' and has_criminal_charges and deadline_met:\n        return True\n    elif entity == 'truth and reconciliation commission' and deadline_met:\n        return True\n    elif entity == 'Oprah Winfrey':\n        return False\n    else:\n        return False",
+  "test_cases": {
+    "test1": "get_lance_armstrong_testimony('USADA', True, deadline_met=True)",
+    "test2": "get_lance_armstrong_testimony('USADA', False, deadline_met=True)",
+    "test3": "get_lance_armstrong_testimony('truth and reconciliation commission', False, deadline_met=True)",
+    "test4": "get_lance_armstrong_testimony('Oprah Winfrey', True, deadline_met=True)",
+    "test5": "get_lance_armstrong_testimony('Oprah Winfrey', False, deadline_met=False)",
+    "test6": "get_lance_armstrong_testimony('USADA', True, deadline_met=False)",
+    "test7": "get_lance_armstrong_testimony('truth and reconciliation commission', True, deadline_met=True)",
+    "test8": "get_lance_armstrong_testimony('ABC News', True, deadline_met=True)",
+    "test9": "get_lance_armstrong_testimony('USADA', False, deadline_met=False)",
+    "test10": "get_lance_armstrong_testimony('truth and reconciliation commission', False, deadline_met=False)"
+  },
+  "hidden_information": "def get_lance_armstrong_testimony(entity, has_criminal_charges, deadline_met=False):\n    if entity == 'USADA' and has_criminal_charges and deadline_met:\n        return True\n    elif entity == 'truth and reconciliation commission' and deadline_met:\n        return True\n    elif entity == 'Oprah Winfrey':\n        return False\n    else:\n        return False"
+}
