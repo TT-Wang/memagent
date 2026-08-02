@@ -10,6 +10,7 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
+from _timescale import T  # noqa: E402
 from sliceagent.execution import ToolStatus  # noqa: E402
 import sliceagent.mcp_client as mcp_client  # noqa: E402
 from sliceagent.mcp_client import (McpRuntime, McpServer, _mcp_handler,  # noqa: E402
@@ -40,7 +41,7 @@ def submit_cancels_coroutine_on_timeout():  # #60
     except (concurrent.futures.TimeoutError, TimeoutError):
         raised = True
     assert raised, "a too-slow submit must surface a timeout"
-    time.sleep(0.4)   # let the cancellation propagate on the loop
+    time.sleep(T(0.4))   # let the cancellation propagate on the loop
     assert state["cancelled"], "a timed-out submit must cancel its coroutine, not leak it (#60)"
     rt.shutdown()
 
@@ -58,9 +59,9 @@ def shutdown_cancels_pending_tasks():  # #61/#62
             raise
 
     rt.spawn(_worker())
-    time.sleep(0.15)   # let the worker actually start
+    time.sleep(T(0.15))   # let the worker actually start
     rt.shutdown()
-    time.sleep(0.3)
+    time.sleep(T(0.3))
     assert state["cancelled"], "shutdown must cancel pending worker tasks so child procs exit (#61/#62)"
 
 
@@ -81,10 +82,10 @@ def connect_timeout_cancels_the_discarded_server_worker():
     raised = False
     try:
         try:
-            server.connect(object(), timeout=0.05)
+            server.connect(object(), timeout=T(0.05))
         except (concurrent.futures.TimeoutError, TimeoutError):
             raised = True
-        time.sleep(0.15)
+        time.sleep(T(0.15))
         assert raised
         assert state["cancelled"], "a timed-out connect must not leave its discarded worker/process alive"
 
@@ -106,19 +107,19 @@ def timed_out_queued_mcp_operation_is_indeterminate_even_if_it_finishes_late():
 
     async def _consumer():
         _tool, _args, future = await server._queue.get()
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(T(0.2))
         state["mutated"] = True
         if not future.done():
             future.set_result(type("Result", (), {"content": [], "isError": False})())
 
     rt.spawn(_consumer())
-    result = server.call("write", {"value": 1}, timeout=0.05)
+    result = server.call("write", {"value": 1}, timeout=T(0.05))
     assert result.status is ToolStatus.INDETERMINATE, result.status
     assert not state["mutated"], "the timed-out call must return before the queued operation settles"
     proxy = type("Proxy", (), {"call": lambda _self, _tool, _args: result})()
     paged = _mcp_handler(proxy, "write", lambda value, **_kwargs: str(value))({"value": 1})
     assert paged.status is ToolStatus.INDETERMINATE, "paging must preserve typed uncertainty"
-    time.sleep(0.3)
+    time.sleep(T(0.3))
     assert state["mutated"], "the late side effect proves FAILED would have been dishonest"
     rt.shutdown()
 

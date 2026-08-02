@@ -30,37 +30,9 @@ from sliceagent.scheduler import ScheduledTool, run_ordered  # noqa: E402
 
 CHECKS = []
 
-# Scheduler pins race a real clock. They assert a PAIR of facts — a bound fires (a hung child is
-# cut) while a sibling that keeps working is NOT cut — so what they actually pin is the RATIO
-# between two budgets, never the absolute milliseconds. Calibrated on an idle laptop those budgets
-# get as tight as 10ms, and on a contended CI runner a 10ms sleep routinely overshoots 50ms: the
-# live child misses its touch window, looks inactive, and the pin goes red for a reason that has
-# nothing to do with the invariant. That is the whole macOS-py3.12 flake class.
-#
-# T() stretches every budget in this file by the SAME factor, so the ratios survive intact while
-# the absolute margins grow past runner jitter. Local runs stay at 1.0 (fast); CI sets the env var.
-# Scaling one budget and not its sibling would be worse than not scaling at all — it would silently
-# retune the invariant instead of the clock, so every budget below goes through T().
-_TIME_SCALE = float(os.environ.get("SLICE_TEST_TIME_SCALE") or 1.0)
-
-
-def T(seconds: float) -> float:
-    """Scale a scheduler timing budget by SLICE_TEST_TIME_SCALE (default 1.0)."""
-    return seconds * _TIME_SCALE
-
-
-# Scaling the test's own numbers is NOT enough: the scheduler holds its own fixed durations, and a
-# pin races those too. Stretch only the test side and you get the partial-scaling failure again one
-# level down — a read gives up after the fixed 0.10s slot wait despite its scaled deadline, and a
-# queued child is admitted on the fixed 0.20s stagger while its predecessor is still running, which
-# is the very ordering the pin exists to observe. So the clock stretches for the whole system under
-# test, not just the caller. Each tests/test_*.py runs in its own process, so this cannot leak.
-if _TIME_SCALE != 1.0:
-    import sliceagent.scheduler as _scheduler_clock  # noqa: E402
-
-    for _const in ("_LIFECYCLE_LAUNCH_STAGGER_SECONDS", "_TIMEOUT_POLL_SECONDS",
-                   "_TIMEOUT_GRACE_SECONDS", "_READER_SLOT_WAIT_SECONDS"):
-        setattr(_scheduler_clock, _const, getattr(_scheduler_clock, _const) * _TIME_SCALE)
+# Every duration in this file goes through T() — see tests/_timescale.py for why partial scaling
+# is worse than none, and why the scheduler's own constants have to stretch with it.
+from _timescale import T  # noqa: E402
 
 
 def check(fn):
