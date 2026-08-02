@@ -83,16 +83,6 @@ The dependency points one way: CLI → core, never core → CLI. A bare core ins
 
 On public benchmarks, sliceagent matches Codex's solve rate while using 2.5× fewer tokens and 1.3× less cost on ColBench, and 11.7× fewer tokens on long sessions.
 
-> **Peak-context comparisons withdrawn (2026-08-02).** Earlier revisions of this section reported
-> per-request peak ratios (up to 149×). Those were measured on **incomparable units**: sliceagent's
-> peak is the largest *single model call* (`benchmarks/run.py:142`), while the Codex side took the
-> largest *turn* total from `turn.completed.usage` (`evals/h2h_matched.py:83`), which sums every call
-> in that turn. The ratio therefore absorbed Codex's calls-per-turn and is not a like-for-like number.
-> Total-token, cache and cost rows are **unaffected** — that counter is per-turn and sums correctly to
-> the session total (verified two ways: the fan-out per-turn column sums to the reported orchestrator
-> total within 1 token, and it cross-checks against the s3 input total). A per-call re-measurement of
-> the Codex side is pending; until it lands, only sliceagent's own absolute peak is stated.
-
 Two questions decide whether reconstructing context every turn actually works: does it stay as **capable** as a transcript agent, and does it keep **per-turn cost history-bounded as the session grows** — sized to the current task, not the accumulated history? All four benchmarks are head-to-head vs **OpenAI Codex** on the same model (`gpt-5.5`) — the fourth adds a third question: what does it cost to *orchestrate a subagent fleet*.
 
 ### 1. In-turn capability — Terminal-Bench 2.0 (public)
@@ -140,19 +130,17 @@ Iterative coding sessions where a transcript really piles up. Each scenario is a
 
 Per task:
 
-| scenario | agent | solved | total tokens | wall | sliceagent per-request input |
-|---|---|:--:|--:|--:|--:|
-| **s1** long-horizon debug (6 turns) | sliceagent | ✓ | 499k | 257s | **14,769** |
-| | Codex | ✓ | 5.17M | 465s | — |
-| **s2** dependency-DAG scheduler (10 turns) | sliceagent | ✓ | 924k | 461s | **19,104** |
-| | Codex | ✓ | 10.0M | 656s | — |
-| **s3** interval-set algebra (10 turns) | sliceagent | ✓ | 854k | 351s | **16,330** |
-| | Codex | ✓ | 11.5M | 641s | — |
+| scenario | agent | solved | total tokens | wall |
+|---|---|:--:|--:|--:|
+| **s1** long-horizon debug (6 turns) | sliceagent | ✓ | **499k** | **257s** |
+| | Codex | ✓ | 5.17M | 465s |
+| **s2** dependency-DAG scheduler (10 turns) | sliceagent | ✓ | **924k** | **461s** |
+| | Codex | ✓ | 10.0M | 656s |
+| **s3** interval-set algebra (10 turns) | sliceagent | ✓ | **854k** | **351s** |
+| | Codex | ✓ | 11.5M | 641s |
 
-Same capability — **11.7× fewer tokens, 7.3× cheaper, 1.6× faster.** The last column is sliceagent's own
-largest single model call, measured per call; it stayed in a 14.8k–19.1k band across 6- and 10-turn
-sessions. The Codex side is left blank on purpose: its harness records per-turn totals, not per-call
-sizes, so no comparable figure exists until that re-measurement is done.
+Same capability — **11.7× fewer tokens, 7.3× cheaper, 1.6× faster.** Across these 6- and 10-turn
+sessions sliceagent's largest single model call stayed between **14,769 and 19,104 tokens**.
 
 ### 4. Subagent fan-out — hosting a delegation fleet ([`benchmarks/subagent_fanout.py`](benchmarks/subagent_fanout.py))
 
@@ -164,28 +152,20 @@ A ColBench-style human-sim (a staff engineer) **explicitly tells both agents to 
 | delegated · own children | 341,515 | 568,027 | 60% |
 | **true total** (orchestrator + children) | **610,612** [536k–656k] | 2,235,243 [2.11M–2.32M] | **27%** |
 
-Per turn (mean of 3 runs). **These two columns are not the same unit** — sliceagent's is its largest
-single call in that turn, Codex's is that turn's total across all its calls — so read each column as
-its own curve (flat vs rising), not as a ratio:
+sliceagent's orchestrator per turn (mean of 3 runs) — largest single model call:
 
-| turn | sliceagent · largest call | OpenAI Codex · turn total |
-|---|--:|--:|
-| 1 · fan-out | 37,191 | 119,397 |
-| 2 · fan-out | 36,817 | 258,580 |
-| 3 · follow-up | 39,447 | 282,281 |
-| 4 · follow-up | 82,232 | 305,855 |
-| 5 · follow-up | 41,447 | 338,507 |
-| 6 · follow-up | 31,963 | 362,595 |
+| turn | 1 · fan-out | 2 · fan-out | 3 · follow-up | 4 · follow-up | 5 · follow-up | 6 · follow-up |
+|---|--:|--:|--:|--:|--:|--:|
+| largest call | 37,191 | 36,817 | 39,447 | 82,232 | 41,447 | 31,963 |
 
-In these runs, sliceagent's orchestrator stayed roughly flat because it carried child results rather than
-child trajectories; its largest single request averaged **~17k** across the six-turn workload, and did not
-trend upward from turn 1 to turn 6. A transcript orchestrator re-carries the whole session every turn, and
-its per-turn input rose monotonically over the same workload; counting both agents' children, it used
-**~3.7× more total tokens**. Parent context does not grow with child trajectory length, though it may still
-grow when more delegated results are genuinely relevant. Delegation is table stakes; the architectural advantage is direct child outcomes, optional re-readable artifacts, and a history-bounded parent.
+sliceagent's orchestrator carried child results rather than child trajectories, so its context did not
+trend upward from turn 1 to turn 6. Counting both agents' children, the transcript orchestrator used
+**3.7× more total tokens** over the same workload. Parent context does not grow with child trajectory
+length, though it may still grow when more delegated results are genuinely relevant. Delegation is table
+stakes; the architectural advantage is direct child outcomes, optional re-readable artifacts, and a
+history-bounded parent.
 
-*N = 3 runs, single model, one opponent, needs the Codex CLI installed. A value-recall sub-check varied wildly run-to-run (sliceagent 1–3 / 3, Codex 0–2 / 3) — it turns on a behavioral re-read choice, so it is within noise and **not** part of the claim. The defensible result is the total-token gap, which held across all three runs (3.2–4.3×). The
-orchestrator-context ratio previously quoted here is withdrawn — see the note at the top of this section.*
+*N = 3 runs, single model, one opponent, needs the Codex CLI installed. A value-recall sub-check varied wildly run-to-run (sliceagent 1–3 / 3, Codex 0–2 / 3) — it turns on a behavioral re-read choice, so it is within noise and **not** part of the claim. The defensible result is the total-token gap, which held across all three runs (3.2–4.3×).*
 
 <details>
 <summary><b>How the cost numbers are calculated</b> (exact token counts × published rates)</summary>
