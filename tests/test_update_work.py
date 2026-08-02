@@ -6,6 +6,15 @@ from sliceagent.pfc import Slice, record_user, slice_sink
 from sliceagent.tools import LocalToolHost
 
 
+def test_active_work_helpers_are_core_owned_with_legacy_tool_aliases():
+    from sliceagent import tools
+    from sliceagent_core import active_work
+
+    assert tools.build_work_delta is active_work.build_work_delta
+    assert tools._plan_progress_payload is active_work._plan_progress_payload
+    assert tools._MODEL_WORK_STATUSES is active_work._MODEL_WORK_STATUSES
+
+
 def prepared():
     state = Slice(); state.reset("compound task")
     record_user(

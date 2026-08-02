@@ -45,6 +45,13 @@ WORK_STATUSES = frozenset({
 })
 WORK_KINDS = frozenset({"request", "task"})
 UNRESOLVED_STATUSES = frozenset({"open", "in_progress", "waiting_user", "waiting_peer", "ready"})
+# ``waiting_peer`` is a host-managed park set only via ``WorkGraph.seal_current``;
+# ``verified`` and ``delivered`` are host-owned too.  Keeping the model-settable
+# subset beside the graph lifecycle table lets core validate transitions without
+# importing the concrete coding tool host.
+_MODEL_WORK_STATUSES = frozenset({
+    "open", "in_progress", "waiting_user", "ready", "cancelled", "superseded",
+})
 _SHA256_LENGTH = 64
 
 
@@ -823,9 +830,8 @@ class WorkGraph:
             # offered delivered/verified/waiting_peer — 4 of 7 suggested moves refused on the very
             # next call. Advertising a move that is then refused is worse than naming none: it is the
             # advice-to-nowhere and retry-bait this message exists to prevent.
-            from sliceagent.tools import _MODEL_WORK_STATUSES as _settable
             legal = tuple(s for s in sorted(_ALLOWED_TRANSITIONS[previous.status])
-                          if s != previous.status and s in _settable)
+                          if s != previous.status and s in _MODEL_WORK_STATUSES)
             hint = (f"; from {previous.status!r} the legal next statuses are: {', '.join(legal)}"
                     if legal else
                     f"; {previous.status!r} is TERMINAL — no status change is possible, "
@@ -1090,6 +1096,228 @@ class WorkGraph:
     def digest(self) -> str:
         encoded = json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def build_work_delta(
+    graph: WorkGraph,
+    args: dict,
+    *,
+    logical_id: str,
+    workspace_epoch: int,
+    verified_ok: frozenset = frozenset(),
+) -> WorkDelta:
+    """Normalize the public ``update_work`` shape into the graph contract.
+
+    ``verified_ok`` is host-only: item ids whose ``verify`` commands the host
+    has just run green.  A change landing such an item on ``ready`` is promoted
+    to ``verified``; the model still cannot supply ``verified`` directly.
+    """
+    if not isinstance(graph, WorkGraph):
+        raise ValueError("ACTIVE WORK is unavailable")
+    expected = args.get("expected_revision", graph.revision)
+    if not isinstance(expected, int) or isinstance(expected, bool):
+        raise ValueError("expected_revision must be an integer")
+    changes = args.get("changes")
+    if not isinstance(changes, list) or not changes or len(changes) > 32:
+        raise ValueError("changes must contain 1..32 work-item objects")
+    roots = [root for root in graph.unresolved_roots if not logical_id or root.logical_id == logical_id]
+    if not roots:
+        raise ValueError("no active request root is available for update_work")
+    root = roots[-1]
+    creates, updates = [], []
+    seen: set[str] = set()
+    for raw in changes:
+        if not isinstance(raw, dict):
+            raise ValueError("each work change must be an object")
+        item_id = str(raw.get("id") or "").strip()
+        if not item_id or len(item_id) > 120 or item_id in seen:
+            raise ValueError("each work change needs a unique ID of at most 120 characters")
+        seen.add(item_id)
+        previous = graph.get(item_id)
+        # Omission means "leave this field alone" for an existing record.
+        status = str(raw.get("status") or (previous.status if previous is not None else "open"))
+        if status not in _MODEL_WORK_STATUSES:
+            host_owned = {
+                "delivered": "the host sets it when the turn delivers a response",
+                "verified": "the host sets it when your verify commands run green",
+                "waiting_peer": "the host sets it when a turn parks on a peer",
+            }
+            if status in host_owned:
+                raise ValueError(
+                    f"work item {item_id!r}: the model cannot set delivered/verified/waiting_peer — "
+                    f"{status!r} is HOST-OWNED, {host_owned[status]}. "
+                    f"Set 'ready' instead and let the host promote it"
+                )
+            raise ValueError(
+                f"work item {item_id!r}: unknown work status {status!r}; you may set "
+                f"{', '.join(sorted(_MODEL_WORK_STATUSES))}"
+            )
+        add_dependencies = raw.get("add_dependencies") or []
+        if not isinstance(add_dependencies, list) or any(
+            not isinstance(value, str) or not value.strip() for value in add_dependencies
+        ):
+            raise ValueError("add_dependencies must be a list of non-empty work-item IDs")
+        resource_rows = raw.get("add_resources") or []
+        if not isinstance(resource_rows, list) or len(resource_rows) > 32:
+            raise ValueError("add_resources must be a list of at most 32 objects")
+        resources = []
+        for resource in resource_rows:
+            if not isinstance(resource, dict):
+                raise ValueError("each resource must be an object")
+            resources.append(ResourceRef(
+                str(resource.get("kind") or ""),
+                str(resource.get("ref") or ""),
+                workspace_epoch=int(workspace_epoch),
+                revision=str(resource.get("revision") or ""),
+            ))
+        superseded_by = str(
+            raw.get("superseded_by")
+            or (previous.superseded_by if previous is not None else "")
+        ).strip()
+        if status == "superseded" and not superseded_by:
+            raise ValueError("superseded work must name superseded_by")
+        verify_rows = raw.get("verify")
+        if verify_rows is not None and (
+            not isinstance(verify_rows, list)
+            or any(not isinstance(cmd, str) for cmd in verify_rows)
+        ):
+            raise ValueError("verify must be a list of shell command strings")
+        done_when = raw.get("done_when")
+        if done_when is not None and not isinstance(done_when, str):
+            raise ValueError("done_when must be a string")
+        if previous is None:
+            description = str(raw.get("description") or "").strip()
+            if not description:
+                raise ValueError("new work items require a non-empty description")
+            host_verify_proof = ()
+            host_output_proof = ()
+            if status == "ready" and item_id in verified_ok:
+                status = "verified"
+                host_verify_proof = (EvidenceRef("verify_receipt", f"host-verify:{item_id}"),)
+                host_output_proof = (OutputRef("verified_checks", f"host-verify:{item_id}"),)
+            creates.append(WorkItem(
+                id=item_id,
+                root_id=root.id,
+                source_refs=root.source_refs,
+                description=description,
+                status=status,
+                logical_id=root.logical_id,
+                workspace_epoch=int(workspace_epoch),
+                dependencies=tuple(dict.fromkeys(add_dependencies)),
+                resource_refs=tuple(dict.fromkeys(resources)),
+                superseded_by=superseded_by,
+                verify=tuple(dict.fromkeys(cmd.strip() for cmd in (verify_rows or []) if cmd.strip())),
+                done_when=str(done_when or "").strip(),
+                evidence_refs=host_verify_proof,
+                output_refs=host_output_proof,
+            ))
+            continue
+        if previous.kind == "request":
+            if previous.id == root.id or status not in {"cancelled", "superseded"}:
+                raise ValueError(
+                    "update_work may only cancel/supersede an older request root; the current root is host-owned"
+                )
+            if status == "superseded" and superseded_by != root.id:
+                raise ValueError("an older request root may be superseded only by the current request root")
+            updates.append(replace(
+                previous,
+                status=status,
+                superseded_by=superseded_by,
+                peer_wait=None,
+            ))
+            updates.extend(
+                replace(
+                    child,
+                    status="cancelled",
+                    superseded_by="",
+                    stop_reason=f"request_{status}",
+                    peer_wait=None,
+                )
+                for child in graph.items
+                if child.id != previous.id
+                and child.root_id == previous.id
+                and child.status in UNRESOLVED_STATUSES
+            )
+            continue
+        if previous.root_id != root.id:
+            raise ValueError(
+                f"work item {item_id!r} belongs to an EARLIER request, and items are owned by the "
+                "request that created them. Nothing is lost — the item is still on record. Two legal "
+                "moves, and the SECOND is usually right: (1) create a fresh item under the current "
+                "request with the same description and re-state its verify/dependencies — a new item "
+                "starts unverified, so evidence already earned does not carry; or (2) in the SAME "
+                "batch, supersede the earlier ROOT (superseded_by = the current root) and re-create "
+                "what still matters — that retires the old request instead of leaving it unfinished "
+                "forever. Do not retry this update — it cannot succeed."
+            )
+        extra_evidence = ()
+        extra_outputs = ()
+        if status == "ready" and item_id in verified_ok:
+            status = "verified"
+            extra_evidence = (EvidenceRef("verify_receipt", f"host-verify:{item_id}"),)
+            extra_outputs = (OutputRef("verified_checks", f"host-verify:{item_id}"),)
+        updates.append(replace(
+            previous,
+            description=str(raw.get("description", previous.description)).strip(),
+            status=status,
+            dependencies=tuple(dict.fromkeys((*previous.dependencies, *add_dependencies))),
+            resource_refs=tuple(dict.fromkeys((*previous.resource_refs, *resources))),
+            evidence_refs=tuple(dict.fromkeys((*previous.evidence_refs, *extra_evidence))),
+            output_refs=tuple(dict.fromkeys((*previous.output_refs, *extra_outputs))),
+            superseded_by=superseded_by,
+            verify=(
+                tuple(dict.fromkeys(cmd.strip() for cmd in verify_rows if cmd.strip()))
+                if verify_rows is not None
+                else previous.verify
+            ),
+            done_when=(str(done_when).strip() if done_when is not None else previous.done_when),
+        ))
+    return WorkDelta(expected_revision=expected, creates=tuple(creates), updates=tuple(updates))
+
+
+def _plan_progress_payload(graph: WorkGraph, logical_id: str) -> dict[str, object]:
+    """Project the current request's Active Work into UI-only plan position."""
+    roots = [
+        root for root in graph.request_roots
+        if not logical_id or root.logical_id == logical_id
+    ]
+    if not roots:
+        return {"total": 0, "done": 0, "current": "", "current_index": 0}
+    root = roots[-1]
+    items = [
+        item for item in graph.items
+        if item.kind != "request"
+        and item.root_id == root.id
+        and item.status not in {"cancelled", "superseded"}
+    ]
+    done = sum(item.status == "verified" for item in items)
+    current = None
+    for wanted in ("in_progress", "waiting_user", "waiting_peer", "open", "ready"):
+        current = next((item for item in items if item.status == wanted), None)
+        if current is not None:
+            break
+    return {
+        "total": len(items),
+        "done": done,
+        "current": current.description if current is not None else "",
+        "current_index": items.index(current) + 1 if current is not None else 0,
+        "items": [
+            {
+                "id": item.id,
+                "status": item.status,
+                "description": item.description,
+                "done_when": item.done_when,
+                "host_verified": (
+                    item.status == "verified"
+                    and any(
+                        ref.kind == "verify_receipt" and ref.ref == f"host-verify:{item.id}"
+                        for ref in item.evidence_refs
+                    )
+                ),
+            }
+            for item in items
+        ],
+    }
 
 
 def request_root_item(event_id: str, utterance: str, *, workspace_epoch: int = 0,
