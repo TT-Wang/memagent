@@ -1,7 +1,15 @@
 name: publish
 
-# Publish to PyPI via trusted publishing (OIDC — no tokens).
-# Trigger: a published GitHub release. The release tag must match the package version.
+# Trusted publishing (OIDC — no tokens) for three independently versioned distributions.
+#
+# Release tags select exactly ONE upload while every release builds and validates all three:
+#   v0.3.2                    -> sliceagent (the product)
+#   sliceagent-core-v0.1.0    -> sliceagent-core
+#   sliceagent-cli-v0.1.0     -> sliceagent-cli
+#
+# Member uploads are deliberately disabled until the owner registers their PyPI projects and
+# trusted-publisher environments. Enable them explicitly with repository variables
+# SLICEAGENT_CORE_PUBLISH_ENABLED / SLICEAGENT_CLI_PUBLISH_ENABLED set to "true".
 on:
   release:
     types: [published]
@@ -9,14 +17,20 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      target: ${{ steps.release.outputs.target }}
+      version: ${{ steps.release.outputs.version }}
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.release.tag_name }}
+
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - name: Verify release tag matches package version
+
+      - name: Verify release tag against its independently versioned package
+        id: release
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
@@ -25,53 +39,160 @@ jobs:
           import os
           from pathlib import Path
 
-          tree = ast.parse(Path("src/sliceagent/__init__.py").read_text(encoding="utf-8"))
-          version = next(
-              ast.literal_eval(node.value)
-              for node in tree.body
-              if isinstance(node, ast.Assign)
-              and any(isinstance(target, ast.Name) and target.id == "__version__" for target in node.targets)
-          )
+          def version_at(path: str) -> str:
+              tree = ast.parse(Path(path).read_text(encoding="utf-8"))
+              return next(
+                  ast.literal_eval(node.value)
+                  for node in tree.body
+                  if isinstance(node, ast.Assign)
+                  and any(
+                      isinstance(target, ast.Name) and target.id == "__version__"
+                      for target in node.targets
+                  )
+              )
+
+          releases = {
+              "product": (
+                  version_at("src/sliceagent/__init__.py"),
+                  lambda version: f"v{version}",
+              ),
+              "core": (
+                  version_at("packages/sliceagent-core/src/sliceagent_core/__init__.py"),
+                  lambda version: f"sliceagent-core-v{version}",
+              ),
+              "cli": (
+                  version_at("packages/sliceagent-cli/src/sliceagent_cli/__init__.py"),
+                  lambda version: f"sliceagent-cli-v{version}",
+              ),
+          }
           tag = os.environ["RELEASE_TAG"]
-          expected_tag = f"v{version}"
+          matches = [
+              (target, version)
+              for target, (version, tag_for) in releases.items()
+              if tag == tag_for(version)
+          ]
+          if len(matches) != 1:
+              expected = ", ".join(tag_for(version) for version, tag_for in releases.values())
+              raise SystemExit(
+                  f"release tag {tag!r} does not select a current package version; expected one of: {expected}"
+              )
           expected_ref = f"refs/tags/{tag}"
-          if tag != expected_tag:
-              raise SystemExit(f"release tag {tag!r} does not match package version {version!r}")
           if os.environ["GITHUB_REF"] != expected_ref:
               raise SystemExit(
                   f"release ref {os.environ['GITHUB_REF']!r} does not match tag ref {expected_ref!r}"
               )
-          print(f"Publishing SliceAgent {version} from {expected_ref}")
+          target, version = matches[0]
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+              output.write(f"target={target}\nversion={version}\n")
+          print(f"Release target: {target} {version} from {expected_ref}")
           PY
-      - name: Build and validate distributions
+
+      - name: Build and validate all three distributions
         run: |
           python -m pip install build twine
-          python -m build
-          python -m twine check dist/*
-      - name: Wheel vendors the member packages (Model A invariant)
+          python -m build --outdir dist/product .
+          python -m build --outdir dist/core packages/sliceagent-core
+          python -m build --outdir dist/cli packages/sliceagent-cli
+          python -m twine check dist/product/* dist/core/* dist/cli/*
+
+      - name: Validate wheel ownership boundaries
         run: |
-          python - <<'PYCHK'
-          import zipfile, glob, sys
-          w = glob.glob('dist/sliceagent-*.whl')[0]
-          names = zipfile.ZipFile(w).namelist()
-          need = ['sliceagent/__init__.py', 'sliceagent_core/loop.py', 'sliceagent_cli/cli.py']
-          missing = [n for n in need if n not in names]
-          sys.exit(f'wheel missing vendored members: {missing}' if missing else 0)
-          PYCHK
+          python - <<'PY'
+          import glob
+          import zipfile
+
+          def wheel(pattern: str) -> set[str]:
+              matches = glob.glob(pattern)
+              if len(matches) != 1:
+                  raise SystemExit(f"expected one wheel for {pattern!r}, found {matches!r}")
+              return set(zipfile.ZipFile(matches[0]).namelist())
+
+          product = wheel("dist/product/sliceagent-*.whl")
+          core = wheel("dist/core/sliceagent_core-*.whl")
+          cli = wheel("dist/cli/sliceagent_cli-*.whl")
+
+          product_required = {
+              "sliceagent/__init__.py",
+              "sliceagent_core/loop.py",
+              "sliceagent_cli/cli.py",
+          }
+          missing = sorted(product_required - product)
+          if missing:
+              raise SystemExit(f"product wheel missing vendored members: {missing}")
+          if "sliceagent_core/__init__.py" not in core:
+              raise SystemExit("core wheel does not own sliceagent_core")
+          if any(name.startswith(("sliceagent/", "sliceagent_cli/")) for name in core):
+              raise SystemExit("core wheel leaked product/CLI packages")
+          if "sliceagent_cli/__init__.py" not in cli:
+              raise SystemExit("CLI wheel does not own sliceagent_cli")
+          if any(name.startswith(("sliceagent/", "sliceagent_core/")) for name in cli):
+              raise SystemExit("CLI wheel leaked product/core packages")
+          print("wheel ownership OK (product vendors members; standalone wheels own one namespace each)")
+          PY
+
       - uses: actions/upload-artifact@v7
         with:
-          name: dist
+          name: distributions
           path: dist/
 
-  publish:
+  member-registration-gate:
     needs: build
+    if: >-
+      (needs.build.outputs.target == 'core' && vars.SLICEAGENT_CORE_PUBLISH_ENABLED != 'true') ||
+      (needs.build.outputs.target == 'cli' && vars.SLICEAGENT_CLI_PUBLISH_ENABLED != 'true')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refuse an unregistered member upload
+        env:
+          RELEASE_TARGET: ${{ needs.build.outputs.target }}
+        run: |
+          echo "::error::${RELEASE_TARGET} upload is disabled. Register its PyPI project and trusted publisher, then set the matching SLICEAGENT_*_PUBLISH_ENABLED repository variable to true."
+          exit 1
+
+  publish-product:
+    needs: build
+    if: needs.build.outputs.target == 'product'
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
-      id-token: write   # OIDC token for PyPI trusted publishing
+      id-token: write
     steps:
       - uses: actions/download-artifact@v8
         with:
-          name: dist
+          name: distributions
           path: dist/
       - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/product/
+
+  publish-core:
+    needs: build
+    if: needs.build.outputs.target == 'core' && vars.SLICEAGENT_CORE_PUBLISH_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    environment: pypi-core
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: distributions
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/core/
+
+  publish-cli:
+    needs: build
+    if: needs.build.outputs.target == 'cli' && vars.SLICEAGENT_CLI_PUBLISH_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    environment: pypi-cli
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: distributions
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/cli/
