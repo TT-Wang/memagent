@@ -49,7 +49,7 @@ UNRESOLVED_STATUSES = frozenset({"open", "in_progress", "waiting_user", "waiting
 # ``verified`` and ``delivered`` are host-owned too.  Keeping the model-settable
 # subset beside the graph lifecycle table lets core validate transitions without
 # importing the concrete coding tool host.
-_MODEL_WORK_STATUSES = frozenset({
+MODEL_WORK_STATUSES = frozenset({
     "open", "in_progress", "waiting_user", "ready", "cancelled", "superseded",
 })
 _SHA256_LENGTH = 64
@@ -1275,7 +1275,7 @@ def build_work_delta(
     return WorkDelta(expected_revision=expected, creates=tuple(creates), updates=tuple(updates))
 
 
-def _plan_progress_payload(graph: WorkGraph, logical_id: str) -> dict[str, object]:
+def plan_progress_payload(graph: WorkGraph, logical_id: str) -> dict[str, object]:
     """Project the current request's Active Work into UI-only plan position."""
     roots = [
         root for root in graph.request_roots
@@ -1483,3 +1483,9 @@ def resume_waiting_peer(
         peer_wait=None,
     )
     return graph.apply_delta(WorkDelta(expected_revision=revision, updates=(resumed,)))
+
+
+# Public since the SDK surface audit (2026-08-02): hosts legitimately need the model-visible
+# status set and the plan-progress projection. Private aliases kept for in-repo callers.
+_MODEL_WORK_STATUSES = MODEL_WORK_STATUSES
+_plan_progress_payload = plan_progress_payload

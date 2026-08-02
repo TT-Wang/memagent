@@ -441,7 +441,7 @@ _IGNORE_NAMES = frozenset({
 _IGNORE_SUFFIX = (".egg-info", ".pyc")
 
 
-def _is_ignored(name: str) -> bool:
+def is_ignored(name: str) -> bool:
     return name in _IGNORE_NAMES or any(name.endswith(s) for s in _IGNORE_SUFFIX)
 
 
@@ -522,3 +522,8 @@ def repo_map(root: str, *, max_entries: int = 300, max_per_dir: int = 25, max_ch
     kept.append(f"… (+{dropped} more director{'y' if dropped == 1 else 'ies'} — over map budget; "
                 "use list_files to drill in)")
     return "\n".join(kept)
+
+
+# Public since the SDK surface audit (2026-08-02): tool hosts need the same ignore rules
+# perception uses. Private alias kept for in-repo callers.
+_is_ignored = is_ignored

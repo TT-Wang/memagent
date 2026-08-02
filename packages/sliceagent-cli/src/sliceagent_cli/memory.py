@@ -4,8 +4,8 @@ Production construction now returns :class:`LocalMemory`: native Hippo/history, 
 and typed SQLite knowledge stay available without Memem.  ``MememMemory`` remains as a compatibility adapter
 for embeddings/tests that instantiate the old class directly; it is no longer the switch that enables L0/L1.
 
-The broad ``Memory`` surface is retained while callers migrate to the narrower EvidenceArchive,
-WorkRepository, and KnowledgeRepository contracts.  Physical state remains private and model-facing access is
+The broad ``Memory`` surface is the compatibility facade (the narrower per-layer split was
+retired from the public contracts in the SDK surface audit, 2026-08-02).  Physical state remains private and model-facing access is
 through ContextFS, never raw vault paths.
 """
 from __future__ import annotations

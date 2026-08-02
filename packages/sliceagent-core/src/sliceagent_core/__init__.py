@@ -23,6 +23,8 @@ scripts/check_import_boundary.py in CI.
 __version__ = "0.1.0"
 
 from .interfaces import (
+    PeerResult,
+    PeerWait,
     LLMClient,
     Memory,
     Oracle,
@@ -52,6 +54,8 @@ __all__ = [
     "Registry",
     "Safeguard",
     "Oracle",
+    "PeerWait",
+    "PeerResult",
     # shipped defaults
     "NullMemory",
     "ORDERED_TOOL_SCHEDULER",

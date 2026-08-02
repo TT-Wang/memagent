@@ -165,33 +165,6 @@ class Retriever(Protocol):
 
 
 @runtime_checkable
-class EvidenceArchive(Protocol):
-    """Mandatory L0 episode/evidence compatibility surface."""
-    is_durable: bool
-    def append_episode(self, session_id: str, task_id: str, turn: int, record: dict) -> None: ...
-    def read_episodes(self, session_id: str, *, limit: int | None = None) -> list[dict]: ...
-    def search_episodes(self, query: str, *, limit: int = 5, exclude_session: str | None = None,
-                        only_session: str | None = None) -> list[dict]: ...
-
-
-@runtime_checkable
-class WorkRepository(Protocol):
-    """Mandatory L1 checkpoint compatibility surface while canonical replay lands."""
-    def checkpoint_task(self, task: TaskState) -> None: ...
-    def load_task(self, task_id: str) -> TaskState | None: ...
-    def list_session_tasks(self, session_id: str) -> list[TaskRef]: ...
-
-
-@runtime_checkable
-class KnowledgeStore(Protocol):
-    """L2 retrieval/ingestion facade; canonical typed records live in KnowledgeRepository."""
-    def recall(self, query: str, k: int = 6, paths: list[str] | None = None) -> list[Snippet]: ...
-    def remember(self, content: str, *, title: str = "", scope: str = "default", tags: str = "",
-                 paths: list[str] | None = None) -> None: ...
-    def mark_used(self, memory_id: str) -> None: ...
-
-
-@runtime_checkable
 class Memory(Protocol):
     """Legacy composite compatibility facade over evidence, work, and knowledge.
 

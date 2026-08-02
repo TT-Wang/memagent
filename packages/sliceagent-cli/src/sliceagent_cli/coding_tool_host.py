@@ -13,7 +13,7 @@ from sliceagent_core.access import AllAccess, FileAccess
 from sliceagent_core.active_work import (
     ActiveWorkError,
     WorkGraph,
-    _plan_progress_payload,
+    plan_progress_payload,
     build_work_delta,
 )
 from sliceagent_core.context import ResourceKind, ResourceRef, reserved_resource_ref
@@ -27,7 +27,7 @@ from sliceagent_core.platform_compat import (
     norm_rel,
     win_path_candidates,
 )
-from sliceagent_core.sensory_cortex import _is_ignored
+from sliceagent_core.sensory_cortex import is_ignored as _is_ignored
 from sliceagent_core.tool_host import with_note
 
 from .binsniff import looks_binary
@@ -227,7 +227,7 @@ class CodingToolHost:
             id=f"work-delta:{invocation.provider_index}:{invocation.id}:0",
             kind="work_delta", payload={
                 "delta": delta.to_dict(),
-                "plan_progress": _plan_progress_payload(next_graph, logical_id),
+                "plan_progress": plan_progress_payload(next_graph, logical_id),
             },
         ),)
 

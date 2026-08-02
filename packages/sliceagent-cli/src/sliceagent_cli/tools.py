@@ -6,9 +6,9 @@ import re
 import shlex
 import shutil
 
-from sliceagent_core.active_work import (
-    _MODEL_WORK_STATUSES as _MODEL_WORK_STATUSES,
-    _plan_progress_payload as _plan_progress_payload,
+from sliceagent_core.active_work import (  # noqa: F401 — legacy compat re-exports
+    MODEL_WORK_STATUSES as _MODEL_WORK_STATUSES,
+    plan_progress_payload as _plan_progress_payload,
     build_work_delta as build_work_delta,
 )
 from sliceagent_core.execution import ToolStatus
