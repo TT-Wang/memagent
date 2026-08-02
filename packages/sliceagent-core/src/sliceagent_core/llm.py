@@ -2157,6 +2157,15 @@ class OpenAILLM:
             )   # effort+tools). No responses API on
         # an old SDK / a provider that only has chat → fall through; the chat 400→drop below degrades it.
         kwargs: dict = dict(model=self.model, messages=messages, tools=tools)
+        # LLM_TEMPERATURE (unset = provider default): eval/replay harnesses pin 0 so decision-
+        # equivalence measurements are not capped by sampling self-consistency (the slipstream A/A
+        # ceiling). Deliberately env-only — never a product default.
+        _temp = os.environ.get("LLM_TEMPERATURE", "").strip()
+        if _temp:
+            try:
+                kwargs["temperature"] = float(_temp)
+            except ValueError:
+                pass
         # DeepSeek V4's OFFICIAL thinking-mode tool wire rejects tool_choice (despite generic OpenAI-compatible
         # schemas often advertising it). Non-thinking V4, retiring deepseek-chat, routers, and every other
         # provider keep the established explicit "auto" behaviour.

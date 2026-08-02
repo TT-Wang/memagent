@@ -214,6 +214,10 @@ def main() -> int:
     ap.add_argument("--semantic", action="store_true", help="LLM tier on exact mismatches")
     ap.add_argument("--model", default=os.environ.get("AGENT_MODEL", "deepseek-v4-flash"))
     ap.add_argument("--list-regions", action="store_true", help="corpus census only, no model calls")
+    ap.add_argument("--aa-control", action="store_true",
+                    help="A/A self-consistency ceiling: re-decide the FULL slice twice per sampled "
+                         "turn; region equivalence rates are read AGAINST this ceiling, never as "
+                         "absolutes (pin LLM_TEMPERATURE=0 for the sharpest reading)")
     args = ap.parse_args()
 
     corpus = load_corpus(args.sample)
@@ -242,13 +246,36 @@ def main() -> int:
     if os.path.exists(RESULTS):
         results = json.load(open(RESULTS, encoding="utf-8"))
 
+    def persist():
+        json.dump(results, open(RESULTS, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+
     from sliceagent_core.llm import OpenAILLM
     llm = OpenAILLM(model=args.model)
     roster = _tool_roster()
-    full_cache: dict[str, dict] = {}   # artifact_id -> {"action":..., "usage":...} baseline this run/prior
 
-    def persist():
-        json.dump(results, open(RESULTS, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+    if args.aa_control:
+        done = agree = 0
+        for row in corpus:
+            if done >= args.sample:
+                break
+            key = f"{row['artifact_id']}:__aa__"
+            if key in results:
+                done += 1
+                agree += 1 if results[key]["exact_equivalent"] else 0
+                continue
+            a1, u1 = decide(llm, roster, row["slice"])
+            a2, u2 = decide(llm, roster, row["slice"])
+            eq = exact_equivalent(a1, a2)
+            results[key] = {"exact_equivalent": eq, "a": a1, "b": a2,
+                            "usage": [u1, u2], "temperature": os.environ.get("LLM_TEMPERATURE", "")}
+            persist()
+            done += 1
+            agree += 1 if eq else 0
+        print(f"A/A self-consistency ceiling: {agree}/{done} "
+              f"({agree / done:.0%}) at LLM_TEMPERATURE={os.environ.get('LLM_TEMPERATURE', '(default)')}"
+              if done else "A/A: no cells")
+        return 0
+    full_cache: dict[str, dict] = {}   # artifact_id -> {"action":..., "usage":...} baseline this run/prior
 
     for region in regions:
         done = spent = 0
