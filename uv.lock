@@ -1294,6 +1294,7 @@ dependencies = [
     { name = "httpx" },
     { name = "mcp" },
     { name = "openai" },
+    { name = "sliceagent-cli" },
     { name = "sliceagent-core" },
 ]
 
@@ -1327,6 +1328,7 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = "==9.1.1" },
     { name = "rich", marker = "extra == 'tui'", specifier = "==15.0.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = "==0.15.21" },
+    { name = "sliceagent-cli", editable = "packages/sliceagent-cli" },
     { name = "sliceagent-core", editable = "packages/sliceagent-core" },
     { name = "tree-sitter", marker = "extra == 'treesitter'", specifier = "==0.26.0" },
     { name = "tree-sitter-python", marker = "extra == 'treesitter'", specifier = "==0.25.0" },

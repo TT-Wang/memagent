@@ -21,6 +21,7 @@ classifiers = [
 # (dependency changes are reviewed code changes, not ambient resolution). Guard: scripts/check_pinned_deps.py.
 dependencies = [
     "sliceagent-core",
+    "sliceagent-cli",
     "openai==2.45.0",
     "httpx==0.28.1",
     "mcp==1.28.1",   # official MCP SDK — connect external MCP servers as tools (Step 3.3)
@@ -105,3 +106,4 @@ members = ["packages/*"]
 
 [tool.uv.sources]
 sliceagent-core = { workspace = true }
+sliceagent-cli = { workspace = true }
