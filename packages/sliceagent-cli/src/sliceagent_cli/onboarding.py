@@ -89,7 +89,7 @@ def _pick(options: list, default: int = 0):
 
 def _version() -> str:
     try:
-        from sliceagent import __version__
+        from . import __version__
         return __version__
     except Exception:  # noqa: BLE001
         return "0.0.0"

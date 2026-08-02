@@ -8,7 +8,7 @@ no provider coupling, no touch to the loop — a sink failure is already contain
 make_dispatcher, so the monitor can never break a run.
 
 Wire it in any host:
-    from sliceagent.monitor import start_monitor
+    from .monitor import start_monitor
     monitor, sink, url = start_monitor(context_fn=lambda: {"goal": s.goal, "topic": s.active_id})
     dispatch = make_dispatcher(..., sink)     # add the sink alongside the others
     print(url)                                # open in a browser

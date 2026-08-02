@@ -45,7 +45,7 @@ from prompt_toolkit.utils import get_cwidth
 from sliceagent_core.events import (AssistantText, ApiRetry, Event, LessonSaved, SteerDelivered, StepBegin, StepEnd,
                      SubagentProgress, ToolResult, ToolStarted, TurnCommitted, TurnEnd,
                      TurnInterrupted, TurnStarted)
-from sliceagent.loop import _split_steer_handback
+from .loop_facade import _split_steer_handback
 from .mentions import completion_path
 from .plan_mode import plan_objective as _plan_objective
 from .plan_mode import plan_switch as _plan_switch

@@ -30,14 +30,14 @@ from sliceagent_core.platform_compat import (
 from sliceagent_core.sensory_cortex import _is_ignored
 from sliceagent_core.tool_host import with_note
 
-from sliceagent.binsniff import looks_binary
-from sliceagent.fuzzy import fuzzy_find_unique
-from sliceagent.procman import ProcManager
-from sliceagent.reach import ReachSet, ReachSteer, SENSITIVE_DIR_NAMES
-from sliceagent.registry import ToolEntry, ToolRegistry, ToolText
-from sliceagent.sandbox import SANDBOX_ADOPTED, SANDBOX_TIMEOUT, LocalSandbox
-from sliceagent.terminal import SessionManager
-from sliceagent.workspace_handoff import WorkspaceScheduleDecision
+from .binsniff import looks_binary
+from .fuzzy import fuzzy_find_unique
+from .procman import ProcManager
+from .reach import ReachSet, ReachSteer, SENSITIVE_DIR_NAMES
+from .registry import ToolEntry, ToolRegistry, ToolText
+from .sandbox import SANDBOX_ADOPTED, SANDBOX_TIMEOUT, LocalSandbox
+from .terminal import SessionManager
+from .workspace_handoff import WorkspaceScheduleDecision
 
 from .tools import (
     BinaryTextError,
@@ -556,7 +556,7 @@ class CodingToolHost:
     def run_preflighted(self, name: str, args: dict, admission) -> str:
         """Execute the exact entry admitted before ``ToolStarted`` without a volatile second check."""
         if getattr(admission, "name", None) != name:
-            from sliceagent.registry import ToolText
+            from .registry import ToolText
             return ToolText("Error: tool admission does not match invocation", ok=False)
         return self.registry.run_admitted(admission, args)
 
@@ -1479,7 +1479,7 @@ class CodingToolHost:
         if callable(runner):
             return runner(command)
         from sliceagent_core.execution import ToolStatus as _TS
-        from sliceagent.oracle import CommandOracle, OracleResult
+        from .oracle import CommandOracle, OracleResult
         # A command whose program is not on PATH answers 127, which is indistinguishable from a real red
         # check — the host would tell the model to fix perfectly good work because `pytest` was never
         # installed. Resolve it first and report the same NO-VERDICT class a deadline overrun reports.

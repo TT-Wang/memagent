@@ -26,7 +26,7 @@ from collections.abc import Iterable, Mapping
 
 from sliceagent_core.events import (AssistantText, ModelCallPrepared, StepBegin, StepEnd, SubagentProgress,
                      ToolStarted)
-from sliceagent.access import AllAccess, ReadAllAccess
+from sliceagent_core.access import AllAccess, ReadAllAccess
 from .background import background_absolute_timeout
 from sliceagent_core.execution import (CHILD_ACTIVITY_ARG, CHILD_CANCEL_SIGNAL_ARG, CHILD_INVOCATION_ID_ARG,
                         CHILD_REQUEST_ORDINAL_ARG, ToolEffect, ToolStatus, Usage)

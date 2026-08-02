@@ -865,7 +865,7 @@ def make_search_history_tool(memory, session_id: str):
     rows not mounted by ``HistoryFS``. Canonical history remains ``@sliceagent/history/``.
     """
     from sliceagent_core.pagetable import PageTable
-    from sliceagent.registry import ToolEntry
+    from .registry import ToolEntry
     # PageTable's episode-xsession backend wraps memory.search_episodes; episode-search-thissession finds
     # this session's turns by content (reachable via read_file once you know the number).
     pages = PageTable(memory=memory, session_id=session_id)

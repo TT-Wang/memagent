@@ -1129,7 +1129,7 @@ def main() -> None:
         print(f"  · config warning: {_w}")
 
     from sliceagent_core.llm import OpenAILLM
-    from sliceagent.loop import run_turn
+    from .loop_facade import run_turn
     from .memory import make_memory
     from .oracle import CommandOracle
     from sliceagent_core.session import MAX_WORKSPACE_TRANSITIONS, route

@@ -28,7 +28,7 @@ from sliceagent_core.context import ResourceKind, ResourceRef, reserved_resource
 from sliceagent_core.events import AssistantText, StepEnd, ToolResult
 from sliceagent_core.execution import NO_ADOPT_ON_TIMEOUT_ARG, ToolStatus
 from sliceagent_core.hooks import Hooks
-from sliceagent.loop import run_turn
+from .loop_facade import run_turn
 from sliceagent_core.pfc import Slice, record_user
 from .registry import ToolText
 from sliceagent_core.safety import redact_text

@@ -21,7 +21,7 @@ try:
 except ModuleNotFoundError:  # Python < 3.11
     import tomli as tomllib
 
-from sliceagent.access import AllAccess
+from sliceagent_core.access import AllAccess
 from .registry import ToolEntry
 
 

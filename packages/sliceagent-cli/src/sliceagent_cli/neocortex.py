@@ -23,11 +23,11 @@ import os
 import re
 from collections import Counter
 
-from sliceagent.code_index import _terms   # reuse the query-term extractor (drops stopwords/short tokens)
+from .code_index import _terms   # reuse the query-term extractor (drops stopwords/short tokens)
 from sliceagent_core.finding_types import badge, classify_finding
 from sliceagent_core.interfaces import Snippet
 from sliceagent_core.safety import redact_text, scan_for_threats   # F1: scan recorded material BEFORE the LLM call + the return
-from sliceagent.skill_provenance import AUTO, frontmatter_line
+from .skill_provenance import AUTO, frontmatter_line
 from sliceagent_core.text_utils import one_line
 from .tools import HOST_ERROR_SENTINELS
 

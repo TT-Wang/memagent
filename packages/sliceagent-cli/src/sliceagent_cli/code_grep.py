@@ -14,7 +14,7 @@ from sliceagent_core.platform_compat import IS_WINDOWS, norm_rel
 import shutil
 import subprocess
 
-from sliceagent.access import FileAccess
+from sliceagent_core.access import FileAccess
 from sliceagent_core.execution import ToolStatus
 from .reach import ReachSteer
 from .registry import ToolEntry, ToolText

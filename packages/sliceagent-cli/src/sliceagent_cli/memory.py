@@ -152,12 +152,12 @@ def make_write_skill_tool():
     The agent supplies name/description/body; WE own the frontmatter (provenance: user — never
     auto-pruned) and the guarded write (validate + threat-scan + redact + atomic), so a model can't forge
     AUTO provenance or smuggle an unscanned skill onto disk."""
-    from sliceagent.registry import ToolEntry
-    from sliceagent.skill_provenance import USER, frontmatter_line
+    from .registry import ToolEntry
+    from .skill_provenance import USER, frontmatter_line
 
     def handler(args: dict) -> str:
         from sliceagent_core.execution import ToolStatus
-        from sliceagent.registry import ToolText
+        from .registry import ToolText
 
         name = re.sub(r"[^a-z0-9._-]+", "-", (args.get("name") or "").strip().lower()).strip("-").strip(".")[:64]  # strip(".") rejects '.'/'..' dir escape
         desc = (args.get("description") or "").strip().replace("\n", " ")[:120]
@@ -425,7 +425,7 @@ def _parse_session_index(path: str) -> list[TaskRef]:
 # --- implementations ----------------------------------------------------------------------
 
 # NullMemory moved to sliceagent_core.memory_null (the contract's deterministic default).
-# Re-exported here so `from sliceagent.memory import NullMemory` keeps working.
+# Re-exported here so `from .memory import NullMemory` keeps working.
 from sliceagent_core.memory_null import NullMemory  # noqa: E402,F401
 
 
@@ -1023,7 +1023,7 @@ class LocalMemory(HippocampusMixin):
         if workspace_revision and self._workspace_root:
             try:
                 from collections.abc import Mapping
-                from sliceagent.workspace_revision import WorkspaceRevision
+                from .workspace_revision import WorkspaceRevision
 
                 def thaw(value):
                     if isinstance(value, Mapping):
@@ -1049,7 +1049,7 @@ class LocalMemory(HippocampusMixin):
         """
         out: list[Snippet] = []
         try:
-            from sliceagent.code_index import _terms
+            from .code_index import _terms
             query_terms = _terms(query)
             # code discovery intentionally extracts ASCII identifiers. Knowledge requests can be multilingual,
             # so retain non-ASCII word runs as additional admission anchors instead of turning those requests
