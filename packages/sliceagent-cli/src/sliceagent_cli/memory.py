@@ -440,6 +440,15 @@ class _MemoryScopeState:
     label: str
 
 
+# READ channels whose events also persist into knowledge runtime_metadata ("read-counter:<name>"):
+# the durable side of the P2 deletion gates (7-day windows outlive any single process). Write-path
+# channels are deliberately absent — they fire every turn and stay in-process.
+_DURABLE_READ_CHANNELS = frozenset({
+    "legacy_fts_read", "history_alias_read", "search_history_tool",
+    "episodic_consolidation_read", "topic_switch_slash",
+})
+
+
 class LocalMemory(HippocampusMixin):
     """Always-on native evidence/work compatibility plus typed L2 knowledge.
 
@@ -637,7 +646,13 @@ class LocalMemory(HippocampusMixin):
     def _record_compatibility_write(
         self, channel: str, *, succeeded: bool, error: BaseException | None = None,
     ) -> None:
-        """Record best-effort mirror health without making it canonical state."""
+        """Record best-effort mirror health without making it canonical state.
+
+        Channels auto-materialize (setdefault), so READ counters reuse this seam with zero new
+        state stores: legacy_fts_read / history_alias_read / search_history_tool /
+        episodic_consolidation_read / topic_switch_slash gate the P2 deletion decisions.
+        Per-channel interpretation only — a structural zero (e.g. a tool that is unregistered by
+        default) is NOT evidence; see the convergence spec R2."""
         # ``MememMemory`` remains a pre-1.0 compatibility adapter and some
         # embedding hosts construct it through ``__new__`` before assigning a
         # legacy vault. Keep those narrow writers functional even when the new
@@ -660,6 +675,23 @@ class LocalMemory(HippocampusMixin):
             item[key] = int(item[key]) + 1
             if error is not None:
                 item["last_error"] = type(error).__name__
+        # READ-channel counters additionally project into durable runtime_metadata: in-process
+        # counters reset every process start, so a "zero reads in N days" deletion gate needs the
+        # durable row. Per-channel, per-event upsert — read events are rare (recall-shaped), write
+        # channels (episodic_mirror/legacy_fts per turn) deliberately stay in-process only.
+        if succeeded and channel in _DURABLE_READ_CHANNELS:
+            knowledge = getattr(self, "_knowledge", None)
+            if knowledge is not None:
+                try:
+                    key_name = f"read-counter:{channel}"
+                    prior = knowledge.get_runtime_metadata(key_name) or {}
+                    knowledge.set_runtime_metadata(
+                        key_name,
+                        {"count": int(prior.get("count", 0) or 0) + 1, "last_read_at": _now_iso()},
+                        updated_at=_now_iso(),
+                    )
+                except Exception:  # noqa: BLE001 — a metrics hiccup never breaks a read
+                    pass
 
     def _put_knowledge(self, record: KnowledgeRecord) -> KnowledgeRecord:
         """Commit canonical meaning, then refresh the optional semantic index."""
@@ -918,6 +950,10 @@ class LocalMemory(HippocampusMixin):
         has no tagged rows at all, retain the pre-refactor behavior so its history
         can still be consolidated once under the caller's explicit scope.
         """
+        # P2 deletion-gate counter, separate channel: opt-in consolidation/background reads
+        # (AGENT_MINE / AGENT_BACKGROUND_REVIEW) must not mask — or be masked by — interactive
+        # reads in the gate.
+        self._record_compatibility_write("episodic_consolidation_read", succeeded=True)
         rows = self.read_episodes(session_id)
 
         def row_project(row: object) -> str:

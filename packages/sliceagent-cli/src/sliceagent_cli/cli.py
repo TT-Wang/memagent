@@ -2041,6 +2041,11 @@ def main() -> None:
                     session.switch_topic(arg)
                     _stats["topic"] = one_line(session.active().goal, 40)
                     _console.print(f"  switched to {arg}", markup=False)
+                    # P2 deletion-gate counter: this direct call bypasses BOTH the admission journal
+                    # (action='resume' rows) and the tool journal — the previously invisible surface.
+                    report = getattr(memory, "_record_compatibility_write", None)
+                    if report is not None:
+                        report("topic_switch_slash", succeeded=True)
                 except Exception as exc:  # noqa: BLE001 - report invalid/unavailable ids without crashing the UI
                     _console.print(f"  could not switch: {exc}", markup=False)
         elif cmd == "/undo":

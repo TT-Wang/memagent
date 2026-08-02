@@ -436,10 +436,17 @@ class HippocampusMixin:
         if idx is None:
             return []
         try:
-            return idx.search(query, limit=limit, exclude_session=exclude_session,
+            hits = idx.search(query, limit=limit, exclude_session=exclude_session,
                               only_session=only_session)
         except Exception:
             return []
+        # P2 deletion-gate counter: the FTS sidecar's ONLY production query path is this method
+        # (via search_history). Recall-shaped — weeks of zero can be normal, so the gate pairs
+        # this with a replay-equivalence check, never frequency alone (convergence spec R2).
+        report = getattr(self, "_record_compatibility_write", None)
+        if report is not None:
+            report("legacy_fts_read", succeeded=True)
+        return hits
 
     def read_episodes(self, session_id: str, *, limit: int | None = None) -> list[dict]:
         """Read one session's episodic JSONL compatibility mirror.
@@ -724,6 +731,13 @@ class HistoryFS:
         self._session_id = session_id
 
     def _lines_for(self, session_id: str) -> list:
+        # P2 deletion-gate counter: single choke point for ALL model-facing history/ alias reads
+        # (read_file / list_files / grep, incl. cross-session history/<sid>/). Deliberately does
+        # NOT count the per-turn episode_manifest — that hot path never routes through here, and
+        # its deletion gate is the repoint-at-artifact-store precondition, not a read count.
+        report = getattr(self._memory, "_record_compatibility_write", None)
+        if report is not None:
+            report("history_alias_read", succeeded=True)
         return self._memory.read_episodes(session_id)
 
     def _lines(self) -> list:
@@ -875,6 +889,9 @@ def make_search_history_tool(memory, session_id: str):
         q = q.strip() if isinstance(q, str) else ""
         if not q:
             return "search_history: pass a free-text query (terms are safely OR-ranked)."
+        report = getattr(memory, "_record_compatibility_write", None)
+        if report is not None:   # P2 deletion-gate counter: one row per tool invocation
+            report("search_history_tool", succeeded=True)
         mine = pages.lookup(q, kind="episode-search-thissession", k=6)
         cross = pages.lookup(q, kind="episode-xsession", k=6)
         if not mine and not cross:
