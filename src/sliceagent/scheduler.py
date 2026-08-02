@@ -12,34 +12,8 @@ import time
 from typing import Callable
 
 from . import cancel_scope
-from .execution import (ToolEffect, ToolInvocation, ToolOutcome, ToolPurity, ToolStatus)
-
-
-DEFAULT_LIFECYCLE_ABSOLUTE = 3600.0
-
-
-@dataclass(frozen=True)
-class ScheduledTool:
-    invocation: ToolInvocation
-    purity: ToolPurity
-    run: Callable[[], ToolOutcome]
-    on_start: Callable[[], None] | None = None
-    timeout_safe: bool = True
-    prepare: Callable[[], ToolOutcome | None] | None = None
-    # Production dispatch uses this lease-aware form. A deadline may expire while a required journal is
-    # blocked; the callback can then stop before emitting the next lifecycle edge, and the handler never runs.
-    on_start_guarded: Callable[[Callable[[], bool]], None] | None = None
-    # Presentation-only admission signal. It never means the handler started and failures are isolated: queue
-    # visibility must not become a new execution/journal gate.
-    on_queued: Callable[[str], None] | None = None
-    # Lifecycle children have a cancellable provider/tool loop behind this scheduler worker. The scheduler
-    # signals only tasks that crossed (or may have partially crossed) the start boundary, then waits the
-    # task-declared bounded close grace before deciding timed-out-vs-indeterminate truth.
-    request_cancel: Callable[[str], None] | None = None
-    cancel_grace: float = 0.0
-    # Per-child monotonic liveness cell. Only lifecycle waves interpret it; ordinary reads retain their
-    # existing fixed deadline semantics.
-    activity: object | None = None
+from .execution import ToolEffect, ToolOutcome, ToolPurity, ToolStatus
+from sliceagent_core.scheduler_types import DEFAULT_LIFECYCLE_ABSOLUTE, ScheduledTool
 
 
 def _announce(task: ScheduledTool, abandoned: Callable[[], bool] | None = None) -> None:
@@ -1159,4 +1133,40 @@ def run_ordered(
     return outcomes
 
 
-__all__ = ["ScheduledTool", "run_ordered"]
+class OrderedToolScheduler:
+    """Concrete provider-ordered implementation of the core scheduler port."""
+
+    def run(
+        self,
+        tasks: list[ScheduledTool],
+        *,
+        max_workers: int = 8,
+        timeout: float | None = None,
+        lifecycle_timeout: float | None = None,
+        lifecycle_absolute: float | None = None,
+        on_outcomes: Callable[[list[ToolOutcome]], None] | None = None,
+        should_cancel: Callable[[], bool] | None = None,
+        steer_probe: Callable[[], bool] | None = None,
+    ) -> list[ToolOutcome]:
+        return run_ordered(
+            tasks,
+            max_workers=max_workers,
+            timeout=timeout,
+            lifecycle_timeout=lifecycle_timeout,
+            lifecycle_absolute=lifecycle_absolute,
+            on_outcomes=on_outcomes,
+            should_cancel=should_cancel,
+            steer_probe=steer_probe,
+        )
+
+
+ORDERED_TOOL_SCHEDULER = OrderedToolScheduler()
+
+
+__all__ = [
+    "DEFAULT_LIFECYCLE_ABSOLUTE",
+    "ORDERED_TOOL_SCHEDULER",
+    "OrderedToolScheduler",
+    "ScheduledTool",
+    "run_ordered",
+]

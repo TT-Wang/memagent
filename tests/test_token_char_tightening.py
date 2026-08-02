@@ -2,7 +2,7 @@
 
 from types import SimpleNamespace
 
-import sliceagent.loop as loop
+import sliceagent_core.loop as loop
 
 
 class _CapacityPlan:

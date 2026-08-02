@@ -517,10 +517,10 @@ def production_loop_forwards_the_absolute_guard_to_the_scheduler():
     import inspect as _inspect
     import os as _os
 
-    from sliceagent import loop as _loop
+    from sliceagent_core import loop as _loop
     src = _inspect.getsource(_loop.run_tool_batch)
     assert "lifecycle_absolute=_delegation_absolute()" in src, \
-        "run_tool_batch no longer forwards the absolute leak guard to run_ordered"
+        "run_tool_batch no longer forwards the absolute leak guard to the scheduler"
     prior = _os.environ.get("AGENT_DELEGATION_ABSOLUTE")
     try:
         for raw, want in (("junk", 3600.0), ("0", 3600.0), ("-5", 3600.0), ("1800", 1800.0)):
@@ -3241,5 +3241,4 @@ def the_toolbar_shows_spend_not_only_savings():
 
 if __name__ == "__main__":
     main()
-
 

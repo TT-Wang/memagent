@@ -8,10 +8,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import unicodedata as _unicodedata
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Callable, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
+    from .execution import ToolOutcome
     from .registry_types import ToolEntry
+    from .scheduler_types import ScheduledTool
 
 
 @dataclass
@@ -130,6 +132,24 @@ class ToolHost(Protocol):
     def run(self, name: str, args: dict) -> str: ...
     def read_text(self, path: str) -> str: ...   # reconstruct the artifacts tier (raises if missing)
     def accesses(self, name: str, args: dict) -> list: ...  # resource accesses for the scheduler
+
+
+@runtime_checkable
+class ToolScheduler(Protocol):
+    """Runs provider-ordered tool waves behind an injected scheduling policy."""
+
+    def run(
+        self,
+        tasks: list[ScheduledTool],
+        *,
+        max_workers: int = 8,
+        timeout: float | None = None,
+        lifecycle_timeout: float | None = None,
+        lifecycle_absolute: float | None = None,
+        on_outcomes: Callable[[list[ToolOutcome]], None] | None = None,
+        should_cancel: Callable[[], bool] | None = None,
+        steer_probe: Callable[[], bool] | None = None,
+    ) -> list[ToolOutcome]: ...
 
 
 @runtime_checkable

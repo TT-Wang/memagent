@@ -49,7 +49,7 @@ from .events import (
     TurnInterrupted,
     TurnPhaseChanged,
 )
-from .interfaces import PeerMessage, PeerParkControl
+from .interfaces import PeerMessage, PeerParkControl, ToolScheduler
 from .tool_identity import DEDUP_SAFE_TOOL_NAMES, canonical_tool_args
 from .guidance import BUDGET_EXHAUSTED
 from .hooks import Hooks, ToolPreflight
@@ -64,7 +64,7 @@ from .registry_types import (
     ToolAdmission, ToolText, finalize_tool_outcome as _finalize_tool_outcome,
     tool_result_text,
 )
-from sliceagent.scheduler import (DEFAULT_LIFECYCLE_ABSOLUTE, ScheduledTool, run_ordered)
+from .scheduler_types import DEFAULT_LIFECYCLE_ABSOLUTE, ScheduledTool
 
 
 def _as_text(out):
@@ -886,9 +886,9 @@ def _audit_outcome(out, body_free_ids):
     )
 
 
-def run_tool_batch(tool_calls, tools, dispatch: Dispatcher, hooks: Hooks, *, step: int = 0,
-                   turn_id: str = "", signal=None, call_namespace: str = "",
-                   steer_probe=None):
+def run_tool_batch(tool_calls, tools, dispatch: Dispatcher, hooks: Hooks, *,
+                   scheduler: ToolScheduler, step: int = 0, turn_id: str = "", signal=None,
+                   call_namespace: str = "", steer_probe=None):
     """Preflight and execute one provider batch through canonical typed outcomes.
 
     The return value retains its legacy ``(0, legacy_dicts)`` shape for callers; pre-handler rejections are
@@ -1306,7 +1306,7 @@ def run_tool_batch(tool_calls, tools, dispatch: Dispatcher, hooks: Hooks, *, ste
             publish_edges(out)
 
     try:
-        run_ordered(
+        scheduler.run(
             scheduled, timeout=_tool_timeout(), lifecycle_timeout=_delegation_timeout(),
             lifecycle_absolute=_delegation_absolute(),
             on_outcomes=publish,
@@ -1530,8 +1530,8 @@ def _classify_steer_item(item):
     return ("malformed", shape)
 
 
-def run_turn(*, build_slice, llm, tools, dispatch: Dispatcher, hooks: Hooks | None = None,
-             max_steps: int = 120, signal=None, checkpoint=None, consolidate=None,
+def run_turn(*, build_slice, llm, tools, scheduler: ToolScheduler, dispatch: Dispatcher,
+             hooks: Hooks | None = None, max_steps: int = 120, signal=None, checkpoint=None, consolidate=None,
              turn_id: str = "", call_namespace: str = "", transport_activity=None,
              allow_park_closeout: bool = True, steer_queue=None, followup_queue=None) -> TurnResult:
     """One per-LOOP working-memory turn. The slice is the SEED, built ONCE; within the while(true) working
@@ -2142,7 +2142,8 @@ def run_turn(*, build_slice, llm, tools, dispatch: Dispatcher, hooks: Hooks | No
                 tool_phase = True
                 _, results = run_tool_batch(
                     resp.tool_calls, tools, dispatch, hooks, step=steps, turn_id=turn_id,
-                    signal=signal, call_namespace=call_namespace, steer_probe=_steer_pending,
+                    scheduler=scheduler, signal=signal, call_namespace=call_namespace,
+                    steer_probe=_steer_pending,
                 )
                 tool_phase = False
                 catastrophic_stop: str | None = None

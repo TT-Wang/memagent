@@ -38,19 +38,20 @@ def test_alias_delegation_keeps_leases_reconciliation_and_receipt_accounting(mon
             captured["args"] = args
             return "child report"
 
-    def run_ordered(tasks, *, on_outcomes, **_kwargs):
-        task = tasks[0]
-        captured["scheduled"] = task
-        on_outcomes([task.run()])
-        return []
+    class Scheduler:
+        def run(self, tasks, *, on_outcomes, **_kwargs):
+            task = tasks[0]
+            captured["scheduled"] = task
+            on_outcomes([task.run()])
+            return []
 
-    monkeypatch.setattr(loop, "run_ordered", run_ordered)
     events = []
     failures, results = loop.run_tool_batch(
         [SimpleNamespace(id="alias-1", name=alias, args={"agent": "explorer"})],
         Host(),
         events.append,
         Hooks(),
+        scheduler=Scheduler(),
         step=1,
     )
 
