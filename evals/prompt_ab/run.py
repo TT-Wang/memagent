@@ -46,7 +46,14 @@ TARGET_METRIC = {
     "v04_precedence_tag": ("review", "false_pos"),
     "ctrl_dedupe": ("review", "false_pos"),
 }
-LOWER_BETTER = {("review", "false_pos"), ("convo", "length_chars")}
+LOWER_BETTER = {("review", "false_pos"), ("convo", "length_chars")} | {
+    # Token/cost columns: lower is better on every lane. `fresh` (total input minus cache-read) is
+    # the ONLY column that may be reported as a token SAVING; in_total moving alone is a cache
+    # composition shift, and peak_in is the flat-per-turn-peak moat claim.
+    (metric, key)
+    for metric in ("review", "convo", "tasks")
+    for key in ("fresh", "in_total", "in_cached", "out_total", "peak_in", "calls")
+}
 
 # COMPONENT flag-arms (convergence spec P2): an arm is an ENV DICT, not a prompt transform. The
 # prompt seam stays UNSET for flag-arms (both arms run the shipped prompt); the component gates on

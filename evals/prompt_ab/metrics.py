@@ -40,8 +40,19 @@ def review_trial(model, judge_model):
         finally:
             shutil.rmtree(wd, ignore_errors=True)
         j = judge_one(truth, r.get("review", ""), judge)
+        # TOKEN COLUMNS (P0-T prerequisite): run_sliceagent already returns these; dropping them is
+        # why no token A/B could be scored. _aggregate picks up ANY numeric item field and gives it a
+        # paired bootstrap CI for free. `fresh` = the only quantity that actually costs money —
+        # total input minus what the provider served from cache.
+        in_total = float(r.get("in_total", 0) or 0)
+        in_cached = float(r.get("in_cached", 0) or 0)
         items.append({"item": t, "recall": float(j["recall"]), "false_pos": float(j["false_pos"]),
-                      "precision": float(j["precision"])})
+                      "precision": float(j["precision"]),
+                      "in_total": in_total, "in_cached": in_cached,
+                      "fresh": max(0.0, in_total - in_cached),
+                      "out_total": float(r.get("out_total", 0) or 0),
+                      "peak_in": float(r.get("peak_in", 0) or 0),
+                      "calls": float(r.get("steps", 0) or 0)})
     return items
 
 
@@ -71,9 +82,16 @@ def convo_trial(model, judge_model):
             shutil.rmtree(wd, ignore_errors=True)
         fl = _intent_flags(kind, expect, r["tools"])
         intent_ok = 0.0 if (fl["fail_edited_a_question"] or fl["fail_overtooled_chat"]) else 1.0
+        in_total = float(r.get("in_total", 0) or 0)
+        in_cached = float(r.get("in_cached", 0) or 0)
         items.append({"item": cid, "intent_ok": intent_ok,
                       "smoothness": _smoothness(judge, prompt, r.get("text", "")),
-                      "length_chars": float(len(r.get("text", "")))})
+                      "length_chars": float(len(r.get("text", ""))),
+                      "in_total": in_total, "in_cached": in_cached,
+                      "fresh": max(0.0, in_total - in_cached),
+                      "out_total": float(r.get("out_total", 0) or 0),
+                      "peak_in": float(r.get("peak_in", 0) or 0),
+                      "calls": float(r.get("calls", 0) or 0)})
     return items
 
 

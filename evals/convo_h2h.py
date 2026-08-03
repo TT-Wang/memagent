@@ -112,14 +112,24 @@ def run_sliceagent(prompt: str, workdir: str, model: str) -> dict:
             toolnames.append(getattr(e, "name", "") or "")
 
     dispatch = make_dispatcher(slice_sink(state), collect)
-    llm = OpenAILLM(model=model, timeout=90.0)
+    # TOKEN COLUMNS (P0-T prerequisite): the convo lane had NO usage capture at all, so token A/B
+    # arms were unscoreable on the one lane that exercises ordinary conversational turns. One row
+    # per model call; per-call peak is max-over-calls, never a per-stage sum.
+    from evals.h2h_run import _UsageTap
+    llm = _UsageTap(OpenAILLM(model=model, timeout=90.0))
     record_user(state, prompt)
     build = make_build_slice(state, tools, retriever, NullMemory(), prompt)
     t0 = time.time()
     res = run_turn(build_slice=build, llm=llm, tools=tools, dispatch=dispatch, max_steps=12)
+    calls = getattr(llm, "calls", []) or []
+    in_total = sum(c["prompt"] for c in calls)
+    in_cached = sum(c["cached"] for c in calls)
     return {"agent": "sliceagent", "text": (texts[-1] if texts else ""), "all_text": texts,
             "tools": toolnames, "steps": res.steps, "stop": res.stop_reason,
-            "wall": round(time.time() - t0, 1)}
+            "wall": round(time.time() - t0, 1),
+            "in_total": in_total, "in_cached": in_cached,
+            "out_total": sum(c["completion"] for c in calls),
+            "peak_in": max((c["prompt"] for c in calls), default=0), "calls": len(calls)}
 
 
 # ----------------------------------------------------------------------------- kimi
