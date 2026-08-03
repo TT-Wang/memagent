@@ -20,6 +20,16 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 REVIEW_TARGETS = ["r1_taskq", "r2_miniweb", "r3_statkit"]
+EFFICIENCY_COLUMNS = (
+    "result_repeat_count", "result_repeat_source_chars",
+    "result_alias_count", "result_alias_source_chars",
+    "result_alias_inline_chars", "result_alias_saved_chars",
+    "verify_receipt_reused", "verify_receipt_output_chars_avoided",
+)
+
+
+def _efficiency_columns(result: dict) -> dict[str, float]:
+    return {key: float(result.get(key, 0) or 0) for key in EFFICIENCY_COLUMNS}
 
 
 def _judge_llm(judge_model):
@@ -52,7 +62,8 @@ def review_trial(model, judge_model):
                       "fresh": max(0.0, in_total - in_cached),
                       "out_total": float(r.get("out_total", 0) or 0),
                       "peak_in": float(r.get("peak_in", 0) or 0),
-                      "calls": float(r.get("steps", 0) or 0)})
+                      "calls": float(r.get("steps", 0) or 0),
+                      **_efficiency_columns(r)})
     return items
 
 
@@ -91,7 +102,8 @@ def convo_trial(model, judge_model):
                       "fresh": max(0.0, in_total - in_cached),
                       "out_total": float(r.get("out_total", 0) or 0),
                       "peak_in": float(r.get("peak_in", 0) or 0),
-                      "calls": float(r.get("calls", 0) or 0)})
+                      "calls": float(r.get("calls", 0) or 0),
+                      **_efficiency_columns(r)})
     return items
 
 
@@ -104,7 +116,17 @@ def tasks_trial(model, judge_model):
     for name, sc in SCENARIOS.items():
         try:
             r = hb_run(name, sc)
-            items.append({"item": name, "passed": 1.0 if r.get("passed") else 0.0})
+            in_total = float(r.get("in_total", 0) or 0)
+            in_cached = float(r.get("in_cached", 0) or 0)
+            items.append({
+                "item": name, "passed": 1.0 if r.get("passed") else 0.0,
+                "in_total": in_total, "in_cached": in_cached,
+                "fresh": max(0.0, in_total - in_cached),
+                "out_total": float(r.get("out_total", 0) or 0),
+                "peak_in": float(r.get("peak_in", 0) or 0),
+                "calls": float(len(r.get("steps", ())) or 0),
+                **_efficiency_columns(r),
+            })
         except Exception as e:  # noqa: BLE001
             items.append({"item": name, "passed": 0.0, "error": f"{type(e).__name__}: {e}"[:160]})
     return items

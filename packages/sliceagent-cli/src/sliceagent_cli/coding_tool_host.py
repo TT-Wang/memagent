@@ -114,6 +114,13 @@ class CodingToolHost:
         self._verify_notify = None      # optional presentation callback: announces each verify command
         self._item_verify_green: dict = {}
         self._verify_attempts: dict = {}
+        self._efficiency_metrics = {
+            "result_repeat_count": 0,
+            "result_repeat_source_chars": 0,
+            "result_alias_count": 0,
+            "result_alias_source_chars": 0,
+            "result_alias_inline_chars": 0,
+        }
         self._edit_journal: list = []   # (rel, full, prev_bytes|None) per write — powers /undo
         self.pending_images: list = []  # images @-attached for the NEXT seed build (vision models only)
         # The registry is the single source of tools; MCP/plugin/skill tools register
@@ -233,6 +240,49 @@ class CodingToolHost:
 
     def root(self) -> str:
         return self._reach.primary
+
+    def preserve_observation_result(self, _name: str, _args: dict, text: str) -> str | None:
+        """Persist one exact T4 observation and return its model-readable locator.
+
+        This is deliberately a host capability rather than core filesystem I/O. A failure returns ``None``;
+        the core arm then keeps the full result inline, so losslessness is the gate rather than an aspiration.
+        """
+        import hashlib
+        content = str(text or "")
+        if not content:
+            return None
+        digest = hashlib.sha256(content.encode("utf-8", "replace")).hexdigest()
+        rel = f".sliceagent/blobs/observation-{digest}.txt"
+        try:
+            full = self._resolve(rel)
+            self._mkparent(full)
+            if os.path.exists(full):
+                with open(full, encoding="utf-8", newline="") as existing:
+                    if existing.read() != content:
+                        return None
+            else:
+                self._atomic_write(full, content)
+            return rel
+        except Exception:
+            return None
+
+    def record_result_alias(self, *, source_chars: int, inline_chars: int) -> None:
+        """Host-private T4 counters used by the paired A/B differential table."""
+        self._efficiency_metrics["result_alias_count"] += 1
+        self._efficiency_metrics["result_alias_source_chars"] += max(0, int(source_chars))
+        self._efficiency_metrics["result_alias_inline_chars"] += max(0, int(inline_chars))
+
+    def record_result_repeat(self, *, source_chars: int) -> None:
+        """Counter-only T4 stratum marker; it changes no provider-visible control-arm bytes."""
+        self._efficiency_metrics["result_repeat_count"] += 1
+        self._efficiency_metrics["result_repeat_source_chars"] += max(0, int(source_chars))
+
+    def efficiency_metrics(self) -> dict[str, int]:
+        out = dict(self._efficiency_metrics)
+        out["result_alias_saved_chars"] = max(
+            0, out["result_alias_source_chars"] - out["result_alias_inline_chars"],
+        )
+        return out
 
     # Compatibility projections for older embedding hosts/tests. ReachSet remains the sole owner.
     @property

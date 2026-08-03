@@ -119,10 +119,12 @@ def run_sliceagent(task: str, wd: str, model: str) -> dict:
     except Exception as e:  # noqa: BLE001
         err, steps = f"{type(e).__name__}: {e}", -1
     c = tap.calls
+    efficiency = tools.efficiency_metrics()
     return {"agent": "sliceagent", "review": "\n\n".join(chunks), "wall_s": round(time.time() - t0, 1),
             "steps": steps, "error": err,
             "in_total": sum(x["prompt"] for x in c), "in_cached": sum(x["cached"] for x in c),
-            "out_total": sum(x["completion"] for x in c), "peak_in": max((x["prompt"] for x in c), default=0)}
+            "out_total": sum(x["completion"] for x in c), "peak_in": max((x["prompt"] for x in c), default=0),
+            **efficiency}
 
 
 def main() -> None:

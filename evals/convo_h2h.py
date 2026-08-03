@@ -124,12 +124,14 @@ def run_sliceagent(prompt: str, workdir: str, model: str) -> dict:
     calls = getattr(llm, "calls", []) or []
     in_total = sum(c["prompt"] for c in calls)
     in_cached = sum(c["cached"] for c in calls)
+    efficiency = tools.efficiency_metrics()
     return {"agent": "sliceagent", "text": (texts[-1] if texts else ""), "all_text": texts,
             "tools": toolnames, "steps": res.steps, "stop": res.stop_reason,
             "wall": round(time.time() - t0, 1),
             "in_total": in_total, "in_cached": in_cached,
             "out_total": sum(c["completion"] for c in calls),
-            "peak_in": max((c["prompt"] for c in calls), default=0), "calls": len(calls)}
+            "peak_in": max((c["prompt"] for c in calls), default=0), "calls": len(calls),
+            **efficiency}
 
 
 # ----------------------------------------------------------------------------- kimi

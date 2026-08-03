@@ -43,7 +43,7 @@ class _env:
 
 @check
 def both_arm_flags_are_registered_and_default_off():
-    for flag_id in ("overflow_simple", "intent_mechanical"):
+    for flag_id in ("overflow_simple", "intent_mechanical", "result_alias"):
         assert flag_id in flags._FLAGS, flag_id
         assert flags.enabled(flag_id) is False, flag_id
     assert flags.enabled("overflow_simpel") is False   # typo → False, never crash (R4 trap)

@@ -62,10 +62,12 @@ LOWER_BETTER = {("review", "false_pos"), ("convo", "length_chars")} | {
 FLAG_ARMS = {
     "intent_mechanical": {"AGENT_EXPERIMENTAL_INTENT_MECHANICAL": "1"},
     "overflow_simple": {"AGENT_EXPERIMENTAL_OVERFLOW_SIMPLE": "1"},
+    "result_alias": {"AGENT_EXPERIMENTAL_RESULT_ALIAS": "1"},
 }
 FLAG_ARM_TARGET = {   # headline metric per component arm (screen promotion + the deletion read)
     "intent_mechanical": ("review", "false_pos"),
     "overflow_simple": ("tasks", "passed"),
+    "result_alias": ("review", "fresh"),
 }
 _FLAG_MODE = False    # set by --flag-arm: control cells run the SHIPPED prompt (no prompt seam)
 
@@ -111,7 +113,15 @@ def _cell_env(variant, provider):
     env["AGENT_MODEL"] = model
     if provider != "gpt5":
         env["AGENT_PROXY"] = "off"
-    env["PYTHONPATH"] = os.path.join(ROOT, "src") + os.pathsep + os.path.join(ROOT, "evals")
+    # Worktree-truthful import order: the product vendors three source roots. Relying on an editable install
+    # for core/CLI silently loaded the *main worktree's* code while a flag arm ran from a task worktree — a
+    # control-vs-control trap the flag preflight could not see because its parent process had a wider path.
+    env["PYTHONPATH"] = os.pathsep.join((
+        os.path.join(ROOT, "packages", "sliceagent-core", "src"),
+        os.path.join(ROOT, "packages", "sliceagent-cli", "src"),
+        os.path.join(ROOT, "src"),
+        os.path.join(ROOT, "evals"),
+    ))
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     return env, model, judge
 
