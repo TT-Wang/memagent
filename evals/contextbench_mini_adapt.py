@@ -112,13 +112,23 @@ def project_predictions(adapted_dir: str, out_path: str) -> int:
                 continue
             steps = ex.get("pred_steps") or []
             union: dict[str, list] = {}
+            seen_files: set[str] = set()
             for st in steps:
                 for path_, spans in (st.get("spans") or {}).items():
                     union.setdefault(path_, []).extend(spans)
+                # A step can list a file with NO span (a whole-file read, or a grep whose output
+                # carried no line numbers). Unioning only `spans` dropped those files from
+                # pred_files entirely, which BOTH understates coverage and flatters precision —
+                # the arm looked more selective than it was. Take the union of both keys and let
+                # the official evaluator decide what resolves: it already discards paths that are
+                # not real repo files, so filtering here would only hide extractor noise that the
+                # scorer is supposed to see.
+                seen_files.update(st.get("files") or [])
+            seen_files.update(union)
             out.write(json.dumps({
                 "instance_id": instance_id,
                 "traj_data": {"pred_steps": steps,
-                              "pred_files": sorted(union),
+                              "pred_files": sorted(seen_files),
                               "pred_spans": {k: v for k, v in sorted(union.items())}},
             }, ensure_ascii=False) + "\n")
             rows += 1
