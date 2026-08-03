@@ -126,16 +126,19 @@ def progress_signal_ring_is_bounded_coalesced_and_task_scoped():
 
 @check
 def reducer_emits_semantic_progress_not_raw_output():
+    # 2026-08-03: the blocked/edit/evidence progress kinds are RETIRED at the writer —
+    # render_progress_signals had filtered them as lossy per-call projections since execution
+    # receipts took ownership of that truth, so writing them was serialization-only waste.
+    # The original pin's intent (raw tool output must never become a progress record) now holds
+    # by construction: a per-call event writes NO progress record at all.
     s = Slice(); s.reset("task")
     slice_sink(s)(ToolResult(
         "edit_file", {"path": "app.py", "note": "root cause confirmed"},
         "very large raw output that must not become a progress record", False,
     ))
-    records = s.task.progress_records()
-    assert {r["kind"] for r in records} == {"edit", "evidence"}
-    assert all("very large raw output" not in r["detail"] for r in records)
+    assert s.task.progress_records() == []
     s.seal()
-    assert s.task.progress_records() == records
+    assert s.task.progress_records() == []
 
 
 @check

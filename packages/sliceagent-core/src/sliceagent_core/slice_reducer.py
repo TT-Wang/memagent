@@ -565,10 +565,10 @@ class SliceReducer:
             event.output,
             failing=bool(event.failing and not frame.neutral_cancel),
         )
-        if event.failing and not frame.neutral_cancel:
-            s.task.add_progress("blocked", f"{event.name} failed")
-        if frame.did_edit:
-            s.task.add_progress("edit", str(args.get("path") or event.name))
+        # (blocked/edit/evidence progress kinds are no longer WRITTEN — render_progress_signals has
+        # filtered them as lossy per-call projections since execution receipts took ownership of that
+        # truth; writing rows the renderer discards was serialization-only waste. Legacy checkpoints
+        # still LOAD them harmlessly via load_progress_records; the renderer keeps filtering.)
         if frame.repair_proven and s.open_report:
             s.runtime.report_repair_observed = True
             s.runtime.report_verification_families.clear()
@@ -586,7 +586,5 @@ class SliceReducer:
             s.runtime.report_repair_observed = False
             s.runtime.report_verification_families.clear()
             s.task.add_progress("verification", "user-reported defect verified after repair")
-        if frame.new_finding:
-            s.task.add_progress("evidence", f"new evidence from {event.name}")
         s.since_edit = 0 if (frame.did_edit or frame.new_finding) else s.since_edit + 1
         s.runtime.applied_effect_ids.update(frame.effect_ids)

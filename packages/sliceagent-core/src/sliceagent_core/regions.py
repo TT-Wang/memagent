@@ -536,6 +536,15 @@ def render_turn_contract(s) -> str:
                 verify_against_open_files=False,
             )
         )
+    # MECHANICAL-ADMISSION SUPPRESSION (Lane-B audit / review #122 era): the production CLI's
+    # mechanical TurnAdmission(request_text=...) reduces every branch above to the single constant
+    # 'grounding: none — no special temporal source selected' line — 243 bytes of boilerplate,
+    # mandatory at priority 100, on every ordinary turn. A contract that says nothing request-
+    # specific is not a contract: suppress it. Any REAL content — an analyzed admission's grounding/
+    # spans/grants/queries, or the task-state deliverable line (keyed on s.task, independent of the
+    # admission) — keeps the region exactly as before.
+    if len(lines) == 1 and grounding == "none" and not audit_mode:
+        return ""
     return "\n".join(lines)
 
 
