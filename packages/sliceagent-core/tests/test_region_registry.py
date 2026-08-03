@@ -129,18 +129,19 @@ def side_registries_dispatch_only_on_registered_names():
 def golden_layout_snapshot():
     # Byte-for-byte render order is a pure function of (tuple order, slot, renderer output).
     # Adding/reordering/re-slotting a region must be a DELIBERATE diff to this literal.
+    # 2026-08-03 Lane-B audit deletion (28 -> 20): closure/convergence (production-unreachable —
+    # gating counters zeroed at every seal, seed built before any tool call), action_header/
+    # action_history (render-dead: constant placeholder), evidence_result/evidence_detail/
+    # quality_evidence_result/quality_evidence_detail (producer-dead: the mechanical admission
+    # carries no evidence queries and make_evidence_snapshot returns None on the product path).
     assert tuple((r.name, r.tier, r.slot) for r in REGIONS) == (
         ("intent", STABLE, 0), ("task_objective", STABLE, 0), ("corrections", STABLE, 0),
         ("task_constraints", STABLE, 0), ("open_files", STABLE, 0), ("related_code", STABLE, 1),
         ("skills", STABLE, 2), ("memory", STABLE, 2), ("conversation", STABLE, 2),
         ("findings", VOLATILE, 3), ("progress", VOLATILE, 3), ("world", VOLATILE, 3),
-        ("threads", VOLATILE, 3), ("cache_manifest", VOLATILE, 3), ("action_header", VOLATILE, 3),
-        ("action_history", VOLATILE, 4), ("evidence_result", VOLATILE, 5),
-        ("evidence_detail", VOLATILE, 5), ("quality_evidence_result", VOLATILE, 5),
-        ("quality_evidence_detail", VOLATILE, 5), ("turn_contract", VOLATILE, 6),
+        ("threads", VOLATILE, 3), ("cache_manifest", VOLATILE, 3), ("turn_contract", VOLATILE, 6),
         ("focus", VOLATILE, 6), ("worktree", VOLATILE, 6), ("user_report", VOLATILE, 6),
-        ("reconciliation", VOLATILE, 6), ("error", VOLATILE, 6), ("closure", VOLATILE, 6),
-        ("convergence", VOLATILE, 6),
+        ("reconciliation", VOLATILE, 6), ("error", VOLATILE, 6),
     )
 
 

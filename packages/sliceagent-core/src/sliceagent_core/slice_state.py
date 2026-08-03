@@ -165,8 +165,6 @@ class WorkingSet:
     edited_files: set = field(default_factory=set)
     ghosts: list[dict] = field(default_factory=list)
     protected_deps: set = field(default_factory=set)
-    pre_defs: dict = field(default_factory=dict)
-    stale_deps: set = field(default_factory=set)
     io: dict = field(default_factory=lambda: {"hit": 0, "miss": 0, "refault": 0, "evict": 0})
     hot: dict = field(default_factory=dict)
     # Compatibility defaults; Slice passes swap.py's canonical values on reset/factory construction.
@@ -180,8 +178,6 @@ class WorkingSet:
         self.edited_files = set()
         self.ghosts = []
         self.protected_deps = set()
-        self.pre_defs = {}
-        self.stale_deps = set()
         self.io = {"hit": 0, "miss": 0, "refault": 0, "evict": 0}
         self.hot = {}
         self.read_budget = read_budget
@@ -193,9 +189,7 @@ class WorkingSet:
         # "edited files only" policy here. Live bytes are still re-read by seed reconstruction.
         self.edited_files = type(self.edited_files)(p for p in self.edited_files if p in self.active_files)
         self.edit_anchor = {p: a for p, a in self.edit_anchor.items() if p in self.active_files}
-        self.pre_defs = {p: value for p, value in self.pre_defs.items() if p in self.active_files}
         self.protected_deps = set()
-        self.stale_deps = set()
 
 
 @dataclass

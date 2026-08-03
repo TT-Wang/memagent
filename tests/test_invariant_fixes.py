@@ -10,7 +10,7 @@ import tempfile
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from sliceagent.pfc import Slice  # noqa: E402
-from sliceagent.regions import MAX_ACTION_LOG, MAX_ACTION_SHOWN, action_sig, record_action, render_action_history  # noqa: E402
+from sliceagent.regions import MAX_ACTION_LOG, action_sig, record_action  # noqa: E402
 from sliceagent.tools import LocalToolHost                                # noqa: E402
 
 CHECKS = []
@@ -73,16 +73,6 @@ def failing_actions_survive_eviction():
         record_action(s, "read_file", {"path": f"g{i}.py"}, "ok")
     assert fsig in s.action_log, "failing entry must survive eviction (anti-loop signal)"
 
-
-@check
-def render_action_history_caps_rendered():
-    s = Slice(); s.reset("t")
-    for i in range(MAX_ACTION_SHOWN + 6):
-        for _ in range(2):                                          # count>=2 so it qualifies to show
-            record_action(s, "list_files", {"path": f"d{i}"}, "x")
-    out = render_action_history(s.action_log)
-    assert "more repeated/failing (omitted)" in out, out
-    assert out.count("\n- ") <= MAX_ACTION_SHOWN, "rendered entries must be capped"
 
 
 if __name__ == "__main__":

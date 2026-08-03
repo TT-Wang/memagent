@@ -26,14 +26,9 @@ from .regions import RESERVE_PRIORITY, reserve_keep
 
 # These are host-owned live control surfaces, not optional topical furniture. Child outcomes are ordinary
 # current-turn tool results; they deliberately do not become a second cross-turn context region.
-_ALWAYS = frozenset({"focus", "reconciliation", "convergence"})
+_ALWAYS = frozenset({"focus", "reconciliation"})
 _INTENT_FALLBACK = frozenset({"intent", "task_objective", "corrections", "task_constraints"})
 _FILE_KINDS = frozenset({"file", "workspace_file", "path", "workspace", "git"})
-_EVIDENCE_REGIONS = frozenset({
-    "evidence_result", "evidence_detail", "quality_evidence_result", "quality_evidence_detail",
-})
-
-
 def _region_name(block: ContextBlock) -> str:
     prefix = "region:"
     item = block.item_id
@@ -346,7 +341,6 @@ def compile_active_context(
     if resource_kinds & {"memory", "history"}:
         selected.update(("memory", "cache_manifest"))
     if has_evidence:
-        selected.update(_EVIDENCE_REGIONS)
         selected.add("findings")
     if missing_prior_source:
         # Recovery fallback only.  A healthy ledger uses Active Work as the sole semantic owner.

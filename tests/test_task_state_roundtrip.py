@@ -12,7 +12,6 @@ from sliceagent.memory import (_now_iso, _parse_session_index, _parse_task_md,  
                              _render_task_md, _upsert_session_index)
 from sliceagent.pfc import Slice  # noqa: E402
 from sliceagent.seed import build_artifacts  # noqa: E402
-from sliceagent.regions import render_convergence  # noqa: E402
 from sliceagent.taskstate import slice_to_task_state, task_state_to_slice   # noqa: E402
 from sliceagent.tools import LocalToolHost   # noqa: E402
 
@@ -82,7 +81,6 @@ def empty_error_not_none_string():
 def resume_emits_no_convergence_nudge():
     r = task_state_to_slice(slice_to_task_state(make_slice(), "t3"))
     r.last_error = ""                                    # edited non-empty + no error...
-    assert render_convergence(r) == ""                  # ...but since_edit=0 → no spurious STOP
 
 @check
 def resume_uses_live_ground_truth():

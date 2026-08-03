@@ -83,9 +83,7 @@ def test_dependency_compiler_removes_global_furniture_before_elasticity():
     names = (
         "intent", "task_objective", "corrections", "task_constraints", "open_files",
         "related_code", "skills", "memory", "conversation", "findings", "plan", "world",
-        "threads", "cache_manifest", "roster", "action_header", "action_history",
-        "evidence_result", "evidence_detail", "focus", "worktree", "reconciliation", "error",
-        "convergence",
+        "threads", "cache_manifest", "roster", "focus", "worktree", "reconciliation", "error",
     )
     compiled = compile_active_context(
         s, [block(name) for name in names], source_texts=sources, current_logical_id="current",
@@ -93,9 +91,9 @@ def test_dependency_compiler_removes_global_furniture_before_elasticity():
     kept = {item.item_id for item in compiled}
     assert {"active-work", "active-adjacency", "active-receipt", "region:memory"} <= kept
     assert {"region:open_files", "region:related_code", "region:worktree"} <= kept
-    assert {"region:evidence_result", "region:evidence_detail", "region:findings"} <= kept
+    assert "region:findings" in kept   # evidence regions deleted 2026-08-03 (producer-dead)
     assert not ({"region:plan", "region:world", "region:threads", "region:roster",
-                 "region:conversation", "region:action_history"} & kept)
+                 "region:conversation"} & kept)
     adjacency = "\n".join(
         item.content for item in compiled
         if item.item_id == "active-adjacency" and item.fidelity is Fidelity.FULL

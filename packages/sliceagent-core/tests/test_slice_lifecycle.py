@@ -85,9 +85,8 @@ def seal_preserves_semantic_state_and_resets_runtime():
     s.active_files = ["read.py", "edit.py"]
     s.edited_files = {"edit.py"}; s.edit_anchor = {"edit.py": "anchor", "read.py": "x"}
     s.active_skills = [{"name": "skill", "body": "body"}]
-    s.pre_defs = {"edit.py": {"old"}, "read.py": {"other"}}
     s.ghosts = [{"kind": "file", "ref": "old.py"}]; s.hot = {"read.py": 2}
-    s.protected_deps = {"dep.py"}; s.stale_deps = {"dep.py"}
+    s.protected_deps = {"dep.py"}
     s.io["refault"] = 3; s.read_budget = 9
     s.conversation = [{"user": "u", "assistant": "a"}]; s.turns = 1
     s.runtime.step = 5; s.runtime.usage = {"prompt_tokens": 10}
@@ -104,9 +103,7 @@ def seal_preserves_semantic_state_and_resets_runtime():
     assert s.last_error == "still failing" and s.open_report == "user says broken"
     assert s.active_files == ["read.py", "edit.py"] and s.edited_files == {"edit.py"}
     assert s.edit_anchor == {"edit.py": "anchor", "read.py": "x"}
-    assert s.pre_defs == {"edit.py": {"old"}, "read.py": {"other"}}
     assert s.active_skills and s.ghosts and s.hot == {"read.py": 2}
-    assert s.protected_deps == set() and s.stale_deps == set()
     assert s.io["refault"] == 3 and s.read_budget == 9
     assert s.conversation and s.turns == 1
     assert s.runtime == TurnRuntime(), "detailed turn state must not cross the seal"

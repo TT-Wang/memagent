@@ -193,8 +193,6 @@ def continue_topic_preserves_context():
 
 @check
 def literal_continue_preserves_the_unresolved_failure_it_resumes():
-    from sliceagent.regions import render_action_history
-
     sess = fresh(); sess.new_topic("repair parser")
     state = sess.active()
     state.last_error = "Traceback: parser still rejects escaped input"
@@ -206,7 +204,9 @@ def literal_continue_preserves_the_unresolved_failure_it_resumes():
     sess.continue_topic("continue")
     assert state.last_error == "Traceback: parser still rejects escaped input"
     assert state.action_log["run_command `python -m tests`"]["failing"] is True
-    assert "parser still rejects escaped input" in render_action_history(state.action_log)
+    # (render_action_history deleted 2026-08-03 — render-dead; the anti-loop STATE itself is the invariant)
+    assert any("parser still rejects escaped input" in str(a.get("last", ""))
+               for a in state.action_log.values())
 
 
 @check

@@ -760,7 +760,6 @@ def limits_target_profile_holds():
     import json as _json
     import os
 
-    from sliceagent import regions
     from sliceagent.config import Config
     from sliceagent.execution import _byte_upper_bound
     from sliceagent.model_catalog import capability
@@ -804,9 +803,7 @@ def limits_target_profile_holds():
     assert est < raw * 0.5, "estimate must not treat every byte as a token (quarter-sized windows, #33)"
     assert est > raw * 0.2, "estimate must stay conservative — margin over ~4 bytes/token reality"
 
-    # convergence is a soft checkpoint at evidence-plausible counts, not an early guillotine
-    assert regions.STOP_NUDGE_AFTER == 4 and regions.READONLY_NUDGE_AFTER == 8
-    assert regions.EXPLORE_NUDGE_AFTER == 10
+    # (convergence nudge constants deleted 2026-08-03 with render_convergence — production-unreachable)
 
     # units are algebraically consistent: tokens_to_chars is the exact inverse of the estimator ratio,
     # so a token deficit converts to the character tightening that closes it in one projection pass
@@ -1288,16 +1285,8 @@ def code_prelude_writes_are_byte_exact():
 
 
 # ── R27 HIGH: seal() keeps the pre-edit def snapshot for EDITED files (change-set-closure works cross-turn) ─
-@check
-def seal_keeps_pre_defs_for_edited_files():
-    from sliceagent.pfc import Slice
-    s = Slice(); s.reset("t")
-    s.active_files = ["e.py"]
-    s.edited_files = type(s.edited_files)(["e.py"])
-    s.pre_defs = {"e.py": {"foo", "bar"}, "readonly.py": {"baz"}}
-    s.seal()
-    assert s.pre_defs.get("e.py") == {"foo", "bar"}, "pre-edit baseline for an edited file must survive seal"
-    assert "readonly.py" not in s.pre_defs, "exploratory (non-edited) pre_defs are still dropped at seal"
+# (seal_keeps_pre_defs_for_edited_files removed 2026-08-03: the pre_defs baseline existed
+# solely to feed the CHANGE-SET CLOSURE stale-dependent flagging, deleted with render_closure.)
 
 
 # ── convo-audit fixes (2026-07-01): read-only command allowlist + repo-content gate + map bound ──

@@ -92,34 +92,9 @@ class SwapManager:
         protection is temporary, never an accumulating tier. No graph → deps no-op; the hot decay still runs."""
         if getattr(s, "hot", None):
             s.hot = {p: t - 1 for p, t in s.hot.items() if t - 1 > 0}
-        r = self.retriever
-        # Snapshot pre-edit def-names of files READ but not yet edited, so we can later see what an edit
-        # REMOVED/MOVED (pre-edit defs - current defs). Cheap: reads the already-computed code graph
-        # (SENSORY CORTEX — a derived view, not a persisted store).
-        if hasattr(r, "def_names") and hasattr(s, "pre_defs"):
-            for p in s.active_files:
-                if p not in s.edited_files and p not in s.pre_defs:
-                    s.pre_defs[p] = r.def_names(p)
-        if hasattr(r, "deps") and s.edited_files:
-            edited = list(s.edited_files)   # the WHOLE change set (relevance, not a count) — materialize ONCE
-            deps: set = set()
-            for e in edited:
-                deps.update(r.deps(e, limit=DEP_CEILING))   # all direct callers that break on the change
-            s.protected_deps = deps - s.edited_files
-            # CHANGE-SET CLOSURE (symbol-aware): names the edits removed/moved, then the dependents whose
-            # CURRENT tokens still reference one — precise dangling call-sites. SILENT on feature-adds
-            # (nothing removed) so it never inflates non-refactor tasks; render_closure further filters to
-            # the UNOPENED ones (self-extinguishing once the model opens the site to fix/confirm).
-            if hasattr(r, "def_names") and hasattr(r, "ref_tokens") and hasattr(s, "stale_deps"):
-                removed: set = set()
-                for e in edited:
-                    removed |= (s.pre_defs.get(e, set()) - r.def_names(e))
-                s.stale_deps = ({d for d in s.protected_deps if r.ref_tokens(d) & removed}
-                                if removed else set())
-        elif not s.edited_files:
-            s.protected_deps = set()
-            if hasattr(s, "stale_deps"):
-                s.stale_deps = set()
+        # (CHANGE-SET CLOSURE machinery removed 2026-08-03: the pre-edit def snapshot and the
+        # stale-dependent flagging existed solely to feed render_closure, whose region the Lane-B
+        # audit found production-unreachable. protected_deps/hot retention above is unaffected.)
 
     def load_skill(self, s, name: str, body: str) -> None:  # fold a SKILL into the active tier; evict overflow
         if not name or not body:

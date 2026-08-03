@@ -192,10 +192,9 @@ def probe_c1_waiting_peer() -> None:
     state = pfc.Slice()
     state.active_work = parked
     state.edited_files = {"implementation.py"}
-    state.since_edit = regions.STOP_NUDGE_AFTER + 2
     state.last_error = ""
-    assert regions.render_convergence(state) == "", \
-        "convergence pressure must be silent while the current request waits on a peer"
+    # (render_convergence deleted 2026-08-03: the convergence nudge was production-unreachable;
+    # the peer-wait exemption it asserted is moot with the region gone.)
 
     resume = _require("sliceagent.active_work", "resume_waiting_peer")
     PeerResult = _require("sliceagent.interfaces", "PeerResult")
