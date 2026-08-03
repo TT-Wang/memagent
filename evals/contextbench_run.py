@@ -118,7 +118,8 @@ def _spans_from_slice(rendered: str, root: str) -> dict[str, list[list[int]]]:
     return out
 
 
-def _run_one(task: dict, workspace: str, model: str, max_steps: int) -> dict:
+def _run_one(task: dict, workspace: str, model: str, max_steps: int,
+             prompt_style: str = "baseline") -> dict:
     """One read-only retrieval turn. Returns both ledgers plus accounting."""
     from sliceagent_cli.code_index import make_code_index
     from sliceagent_cli.code_grep import make_grep_tool
@@ -129,12 +130,27 @@ def _run_one(task: dict, workspace: str, model: str, max_steps: int) -> dict:
     from sliceagent_core.pfc import Slice, record_user, slice_sink
     from sliceagent_core.seed import make_build_slice
 
-    prompt = (
-        "Locate the code that must be understood to fix this issue. Read the files and regions you "
-        "need; do NOT edit anything. When you have found them, answer with the file paths and line "
-        "ranges that a correct fix depends on.\n\n=== ISSUE ===\n"
-        + str(task.get("problem_statement") or "")[:12000]
-    )
+    # CONVERGENCE ARM (--prompt exhaustive): the baseline wording ("locate the code that must be
+    # understood") produced 2.76x gold's line volume yet hit only 64% of gold FILES and an EditLoc
+    # recall of 0.136 with 0.949 precision — a profile that is directionally right and badly
+    # under-converged. This arm tests whether that is a WORDING artifact or a retrieval-ranking
+    # property: same agent, same repo, same model, only the ask changes.
+    if prompt_style == "exhaustive":
+        prompt = (
+            "Find EVERY location a correct fix for this issue must change or depend on — do not stop "
+            "at the first plausible file. Work until you can name each one: read the definition AND "
+            "its call sites, follow imports and subclasses, and check tests that pin the behaviour. "
+            "Do NOT edit anything. Answer with a COMPLETE list of file paths and line ranges, one per "
+            "line; include every location you would need to touch, not just the most likely."
+            "\n\n=== ISSUE ===\n" + str(task.get("problem_statement") or "")[:12000]
+        )
+    else:
+        prompt = (
+            "Locate the code that must be understood to fix this issue. Read the files and regions you "
+            "need; do NOT edit anything. When you have found them, answer with the file paths and line "
+            "ranges that a correct fix depends on.\n\n=== ISSUE ===\n"
+            + str(task.get("problem_statement") or "")[:12000]
+        )
     state = Slice(); state.reset(prompt)
     tools = LocalToolHost(workspace)
     tools.registry.register(make_grep_tool(tools))
@@ -143,6 +159,13 @@ def _run_one(task: dict, workspace: str, model: str, max_steps: int) -> dict:
     pulled: dict[str, list[list[int]]] = {}
     steps: list[dict] = []
     slices: list[str] = []
+    # INDEPENDENT LEDGER (extraction self-audit): `pulled` is derived by REGEX over the rendered
+    # tool output; this one reads the host's TYPED resource_observed ToolEffect payload
+    # (coding_tool_host._read_resource_effects — resource_kind/handle/sha256, no text parsing).
+    # Two derivations that share no code path. Agreement on the file set is the evidence that the
+    # self-authored extractor neither over- nor under-counts; spans exist only on the text path, so
+    # the audit covers FILES, not line ranges — stated, not glossed.
+    typed: set = set()
 
     def _cap(e):
         if isinstance(e, ToolResult):
@@ -160,6 +183,12 @@ def _run_one(task: dict, workspace: str, model: str, max_steps: int) -> dict:
                 nums = [int(n) for n in _NUMBERED.findall(out)]
                 if path and nums:   # the rendered numbered range IS the span the model saw
                     spans[path] = [[min(nums), max(nums)]]
+            for eff in (getattr(getattr(e, "outcome", None), "effects", ()) or ()):
+                if getattr(eff, "kind", "") == "resource_observed":
+                    handle = str((getattr(eff, "payload", {}) or {}).get("handle") or "")
+                    kind = str((getattr(eff, "payload", {}) or {}).get("resource_kind") or "")
+                    if handle and kind == "workspace_file":
+                        typed.add(_rel(handle, workspace))
             if not spans:
                 return
             for path, sp in spans.items():
@@ -181,6 +210,7 @@ def _run_one(task: dict, workspace: str, model: str, max_steps: int) -> dict:
             resident.setdefault(path, []).extend(spans)
     return {
         "pulled": pulled, "resident": resident, "steps": steps,
+        "typed_files": sorted(typed),
         # TurnOutcome fields (execution.py): status / steps / usage / message — NOT `reason`.
         # The smoke run's silent zero-capture was this attribute name: the AttributeError was
         # swallowed by the per-task guard and read as "task failed".
@@ -216,6 +246,8 @@ def main() -> int:
     ap.add_argument("--language", default="python", help="'' for all languages")
     ap.add_argument("--model", default=os.environ.get("AGENT_MODEL", "deepseek-v4-flash"))
     ap.add_argument("--max-steps", type=int, default=40)
+    ap.add_argument("--prompt", choices=("baseline", "exhaustive"), default="baseline",
+                    help="convergence arm: 'exhaustive' asks for a COMPLETE location list")
     ap.add_argument("--work", default=os.path.expanduser("~/.cache/contextbench-repos"))
     ap.add_argument("--out", default=os.path.join(_REPO, "evals", "contextbench", "run1"))
     a = ap.parse_args()
@@ -241,7 +273,7 @@ def main() -> int:
         if workspace is None:
             continue
         try:
-            run = _run_one(task, workspace, a.model, a.max_steps)
+            run = _run_one(task, workspace, a.model, a.max_steps, a.prompt)
         except Exception as exc:  # noqa: BLE001 — one bad task never kills the sweep
             import traceback
             print(f"  run failed: {type(exc).__name__}: {str(exc)[:160]}", file=sys.stderr)
