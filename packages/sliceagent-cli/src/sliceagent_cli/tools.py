@@ -514,14 +514,36 @@ def run_item_verification(candidates, runner, attempts: dict) -> tuple[frozenset
             # escalated a build that simply needed more than the deadline. Indeterminate is kept out of
             # the failure history for the same reason: no verdict is not a failure signature.
             if getattr(result, "status", None) is ToolStatus.INDETERMINATE:
+                # BLOCKER DOWNGRADE (loom-app incident, 2026-08-03): a stateless NO-VERDICT said
+                # "fix the CHECK itself" every time, so an environmentally-unrunnable gate (hung
+                # typed-lint, missing program) looped the model for the turn's budget while the
+                # deliverable waited. Second NO-VERDICT of the same command shape => the clause is
+                # WAIVED: an unrunnable check becomes report CONTENT (a named limitation), never a
+                # delivery blocker. Prose in a description ("report honestly if unverified") does
+                # not bind — only this typed transition does.
+                shape = " ".join(str(command or "").split()[:2])[:80]
+                waived = attempts.setdefault(("no-verdict", item_id), [])
+                if shape in waived:
+                    return frozenset(), (
+                        f"verification WAIVED for {item_id!r}: `{command}` is UNRUNNABLE in this "
+                        f"environment (NO VERDICT again — hang or missing program). Do NOT run it "
+                        "again this session and do NOT re-edit the work because of it. Treat this "
+                        "verify clause as waived: deliver the item's work product now, and record "
+                        f"the limitation verbatim in the deliverable — '`{shape}`: unrunnable, "
+                        "findings unverified by this gate'. An unrunnable check is reportable "
+                        "content, never a reason to withhold the deliverable."
+                    )
+                waived.append(shape)
+                del waived[:-8]
                 return frozenset(), (
                     f"verify for {item_id!r} produced NO VERDICT: `{command}` -> "
                     f"{tail or '(no output)'}. Nothing was checked, so this says nothing about the work "
                     "— do NOT re-edit on the strength of it. Fix the CHECK itself: install what it "
                     "needs, or give the item a check that completes inside the deadline (split it, or "
-                    "point it at a smaller target). If only the operator can change the budget, say so "
-                    "and stop — AGENT_VERIFY_TIMEOUT is read by the host process, so exporting it from "
-                    "a tool does nothing."
+                    "point it at a smaller target). If the check cannot be made runnable in ONE "
+                    "attempt, its next NO VERDICT waives the clause automatically. If only the "
+                    "operator can change the budget, say so and stop — AGENT_VERIFY_TIMEOUT is read "
+                    "by the host process, so exporting it from a tool does nothing."
                 )
             history = attempts.setdefault(item_id, [])
             signature = _verify_failure_signature(command, output)

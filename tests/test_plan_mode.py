@@ -217,8 +217,13 @@ def verification_no_verdict_is_not_reported_as_a_failed_check():
     assert "NO VERDICT" in message and "do NOT re-edit" in message, message
     assert "verify failed" not in message, f"a timeout is not a failed check: {message}"
     assert "AGENT_VERIFY_TIMEOUT" in message, "must name the knob that fixes it"
-    # …and it must not poison the oscillation history: no verdict is not a failure signature.
-    assert attempts == {}, f"indeterminate leaked into the failure history: {attempts}"
+    # …and it must not poison the OSCILLATION history: no verdict is not a failure signature.
+    # (The ("no-verdict", item) tuple key is the WAIVER ledger — the blocker-downgrade mechanism
+    # counting unrunnable shapes so the second occurrence waives the clause; it never feeds
+    # oscillation detection, which reads only the string-keyed per-item failure signatures.)
+    assert not any(isinstance(k, str) for k in attempts), \
+        f"indeterminate leaked into the failure history: {attempts}"
+    assert attempts.get(("no-verdict", "s1")) == ["npm run"], "the waiver ledger must count the shape"
 
 
 @check

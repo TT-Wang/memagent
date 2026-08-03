@@ -1819,8 +1819,10 @@ def run_turn(*, build_slice, llm, tools, scheduler: ToolScheduler | None = None,
             try:
                 cmsgs = messages + [{"role": "user", "content": "# TURN IS ENDING — " + msg
                     + " Give your best answer/summary NOW (what you did, what you verified, what remains) from "
-                    "what you already have; make NO edit/run tool call. If the request was ambiguous or you are "
-                    "blocked, call ask_user with ONE concise question instead."}]
+                    "what you already have; make NO edit/run tool call. If any check was unrunnable this turn "
+                    "(hang, timeout, missing tool), state it as a named limitation IN this summary — an "
+                    "unrunnable check is reportable content, never a reason to withhold the deliverable. If the "
+                    "request was ambiguous or you are blocked, call ask_user with ONE concise question instead."}]
                 close_usage = _final_answer(
                     llm, cmsgs, tools, dispatch, msg, seed_plan=seed_plan, seed_len=seed_len,
                     prepare=lambda candidate: _prepared(hooks, candidate),

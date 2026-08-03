@@ -485,7 +485,8 @@ def closeout_reprojects_seed_for_its_own_trajectory():
     )
 
     class LLM:
-        context_window = 400   # sized so the fixed closeout guidance (~324 tok) fits with room for
+        context_window = 470   # sized so the fixed closeout guidance (~390 tok incl. the 2026-08-03
+        # unrunnable-check delivery-invariant line) fits with room for
         #                        the LOCATOR alternative but not the FULL block (#33 units fix)
         max_tokens = 20
 
