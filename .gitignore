@@ -60,6 +60,8 @@ evals/*
 !evals/self_inspection_tool_eval.py
 !evals/selfnarrative_ab.py
 !evals/slipstream_replay.py
+!evals/contextbench_run.py
+!evals/seed_baseline.py
 !evals/usersim.py
 # The component-A/B engine + its metric harnesses are load-bearing deliverable infra (spec P2):
 # code is versioned, captured run data (prompt_ab/runs/, *.json results) stays local.
