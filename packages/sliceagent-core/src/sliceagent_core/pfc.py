@@ -319,7 +319,7 @@ class Slice:
         "active_files": ("work", "active_files"), "active_skills": ("work", "active_skills"),
         "edit_anchor": ("work", "edit_anchor"), "edited_files": ("work", "edited_files"),
         "ghosts": ("work", "ghosts"), "protected_deps": ("work", "protected_deps"),
-        
+
         "io": ("work", "io"), "hot": ("work", "hot"),
         "read_budget": ("work", "read_budget"), "read_ceiling": ("work", "read_ceiling"),
         "conversation": ("continuity", "conversation"), "turns": ("continuity", "turns"),

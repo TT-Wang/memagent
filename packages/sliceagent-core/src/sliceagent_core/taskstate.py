@@ -5,7 +5,7 @@ anchors), never file contents; resume re-reads files live (ground truth = disk).
 (recent, action_log, active_skills) are intentionally NOT serialized — they're per-turn residue
 re-derived from ground truth. NOTE on resume: active_skills is dropped (skill bodies live on disk
 and re-load via the `skill` tool); since_edit is zeroed (a fresh action epoch — otherwise the
-restored counter could fire render_convergence's STOP nudge on turn 1). The `conversation` ring +
+restored counter looked like a full action epoch on turn 1). The `conversation` ring +
 `turns` counter are also intentionally NOT carried CROSS-session (they survive within a session via
 seal()): the durable distilled state (goal, findings, world, requirements, edited set) is what a
 resume rebuilds on, and short-range chat is re-grounded from the goal — carrying it would persist
@@ -97,5 +97,5 @@ def task_state_to_slice(ts: TaskState, s: Slice | None = None) -> Slice:
     s.edited_files = set(ts.edited_files)
     s.edit_anchor = dict(ts.edit_anchor)
     s.last_error = ts.last_error
-    s.since_edit = 0                 # resume = fresh action epoch (don't fire render_convergence)
+    s.since_edit = 0                 # resume = fresh action epoch
     return s

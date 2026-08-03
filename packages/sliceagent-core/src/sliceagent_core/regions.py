@@ -516,8 +516,9 @@ def render_turn_contract(s) -> str:
             )
             continue
         if isinstance(ref, dict) and str(ref.get("kind") or "").startswith("execution_receipt"):
-            # Execution evidence has its own epistemic region below; keeping it out of this mandatory control
-            # block prevents large detail sets from making the entire slice physically unfit.
+            # Execution-evidence detail sets stay out of this mandatory control block so they can
+            # never make the entire slice physically unfit. (The dedicated evidence regions were
+            # deleted 2026-08-03 — producer-dead; canonical detail lives behind artifact locators.)
             continue
         anchor = getattr(ref, "anchor", None)
         if anchor is None:
@@ -953,8 +954,10 @@ REGIONS: tuple[RegionSpec, ...] = (
     # (same "it's paged out, here's the one call to get it"
     # idiom) so the model has a SEEN target to read; an unseen cache is the dead channel. Locators only.
     RegionSpec("cache_manifest", VOLATILE, lambda c: (f"\n# PAGED-OUT HISTORY (canonical exact evidence from earlier turns, not current-world truth; read a turn with the shown @sliceagent/history/ locator, read_file(\"@sliceagent/history/index.md\") for the full list, or search_history(\"keywords\") across sessions)\n{c['cache_manifest']}\n" if c.get("cache_manifest") else ""), 3, 30, InstructionClass.DATA, FreshnessClass.HISTORICAL, False, EpistemicRole.LOCATOR),
-    # ──────────── TIER 5 · STEERING & LIVE STATE — what's wrong / where things stand (VOLATILE, high-authority tail). ────────────
-    # # REPEATED/FAILING ACTIONS header (always present; body says "(nothing…)" when empty) closes slot 3.
+    # ──────────── TIER 5 · LIVE STATE — what's wrong / where things stand (VOLATILE, high-authority tail). ────────────
+    # (The REPEATED/FAILING ACTIONS header + tally regions were deleted 2026-08-03 — render-dead at
+    # seed time; the anti-loop advisory rides the message channel, and the surviving action-log FOLD
+    # below serves failure identity/supersession, which that advisory does NOT consume.)
     # (CURRENT REQUEST renders OUTSIDE the fence in build() — see render_current_request above — not here.)
     RegionSpec("turn_contract",  VOLATILE, lambda c: (
         f"# TURN CONTRACT (host-derived grounding and evidence plan for the exact CURRENT REQUEST; this "
@@ -990,9 +993,8 @@ _REGION_ROLES = {r.name: r.role for r in REGIONS}
 
 def render_regions(ctx: dict) -> str:
     """Iterate REGION_ORDER, render each typed region into its framed fragment, and assemble the ONE
-    user string (the moat). Each region suppresses itself when empty; the slot grouping + the blank-line
-    separator between the action tally (slot 4) and the high-authority tail (slot 6) keeps the stable bulk
-    leading for prompt-cache locality and the volatile salient tail trailing. `ctx` carries the Slice + the
+    user string (the moat). Each region suppresses itself when empty; the slot grouping keeps the
+    stable bulk leading for prompt-cache locality and the volatile salient tail (slot 6) trailing. `ctx` carries the Slice + the
     pre-rendered passthroughs (artifacts / discovery / memory / threads) + the max_findings cap."""
     blocks = build_context_blocks(ctx)
     selection = ElasticityController().select(blocks)

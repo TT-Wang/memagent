@@ -1387,8 +1387,8 @@ def expire_peer_waits(
 
     Without this, a park is a permanent trap: ``PeerWait.deadline_s`` was validated and
     serialized but never compared against anything, so an unanswered peer wait would wait
-    forever and ``render_convergence``'s peer-wait exemption would stay silent past any
-    deadline. A park is only as good as the thing that reaps it.
+    forever with nothing surfacing the overdue deadline. A park is only as good as the
+    thing that reaps it.
 
     The kernel deliberately does NOT read a clock. ``deadline_s`` is a DURATION, and the
     elapsed time per correlation is supplied by the host — the same discipline as

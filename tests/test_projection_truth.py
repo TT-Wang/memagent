@@ -317,7 +317,7 @@ def source_needs_gating_survives_on_the_live_admission_producer():
     assert "region:cache_manifest" in names and "region:turn_contract" in names, names
     assert not {
         "region:open_files", "region:related_code", "region:memory",
-        "region:world", "region:worktree", "region:action_header",
+        "region:world", "region:worktree",
     }.intersection(names), names
 
 

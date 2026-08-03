@@ -92,9 +92,20 @@ class SwapManager:
         protection is temporary, never an accumulating tier. No graph → deps no-op; the hot decay still runs."""
         if getattr(s, "hot", None):
             s.hot = {p: t - 1 for p, t in s.hot.items() if t - 1 > 0}
-        # (CHANGE-SET CLOSURE machinery removed 2026-08-03: the pre-edit def snapshot and the
-        # stale-dependent flagging existed solely to feed render_closure, whose region the Lane-B
-        # audit found production-unreachable. protected_deps/hot retention above is unaffected.)
+        # LIVE dependency protection: every direct caller that breaks on the change set stays resident
+        # (excluded from evict(), rendered in full past the read budget — seed.py build_artifacts).
+        # Review #122 restored this after the 40888ee closure-feeder cut over-reached: the pre_defs/
+        # stale_deps CLOSURE-NUDGE machinery (deleted, sole reader render_closure) shared this block
+        # with the protection PRODUCER, which the rest of the runtime still consumes.
+        r = self.retriever
+        if hasattr(r, "deps") and s.edited_files:
+            edited = list(s.edited_files)   # the WHOLE change set (relevance, not a count) — materialize ONCE
+            deps: set = set()
+            for e in edited:
+                deps.update(r.deps(e, limit=DEP_CEILING))   # all direct callers that break on the change
+            s.protected_deps = deps - s.edited_files
+        elif not s.edited_files:
+            s.protected_deps = set()   # no live change set → no stale protection carried forward
 
     def load_skill(self, s, name: str, body: str) -> None:  # fold a SKILL into the active tier; evict overflow
         if not name or not body:
