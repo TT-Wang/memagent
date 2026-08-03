@@ -18,10 +18,25 @@ Integrity rules this module keeps:
 from __future__ import annotations
 
 import collections
+import os
 import threading
 
 # Detached children bypass the scheduler's worker slots, so the manager enforces its own ceiling.
-_MAX_BACKGROUND_CHILDREN = 4
+# Default raised 4 -> 8 (2026-08-03): the loom-app hour-long review spent ~20 min draining 10
+# explorers through a width-4 queue — per-child completions staggered 1-2 min apart instead of
+# clustering, the fingerprint of queueing, while the 12-concurrent-children stress go/no-go had
+# already passed at width 12. Env-tunable for slower providers or constrained hosts.
+
+
+def _max_background_children() -> int:
+    raw = os.environ.get("AGENT_MAX_BACKGROUND_CHILDREN", "").strip()
+    try:
+        return max(1, int(raw)) if raw else 8
+    except ValueError:
+        return 8
+
+
+_MAX_BACKGROUND_CHILDREN = _max_background_children()
 
 
 def background_absolute_timeout() -> float:
