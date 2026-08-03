@@ -1219,12 +1219,50 @@ class CodingToolHost:
         adoption path must never name tools the model cannot call."""
         return self.registry.has("proc_start") and self.registry.has("proc_wait")
 
-    def _timeout_escalation(self, t: float, ceiling_hit: bool, *, proc_tools: bool | None = None) -> str:
+    @staticmethod
+    def _timeout_shape(command: str) -> str:
+        """Canonical identity of a timed-out command for hang detection: strip leading env
+        assignments and one `cd X &&` hop, then keep the first two tokens (`npx eslint`,
+        `npm test`, …). File-argument variants of the same tool must share a shape — laddering
+        `eslint .` into per-file `eslint src/App.tsx` is the SAME hang, not a new experiment."""
+        text = str(command or "").strip()
+        text = re.sub(r"^(?:[A-Za-z_][A-Za-z0-9_]*=\S+\s+)*", "", text)
+        text = re.sub(r"^cd\s+\S+\s*&&\s*", "", text)
+        text = re.sub(r"^\(+", "", text)
+        return " ".join(text.split()[:2])[:80]
+
+    def _timeout_escalation(self, t: float, ceiling_hit: bool, *, proc_tools: bool | None = None,
+                            command: str = "") -> str:
         """The remediation the model needs AT the failure. Without it a timeout reads as a dead end and the
         next step is a blind retry at the same limit — the deadline is a TOOL CHOICE, not a verdict.
         Composed from the tools the CALLER can actually use: naming proc_start to a build — or a
         scoped child — that cannot call it would send the agent to a tool it does not have
-        (Family J — advice to nowhere; the review's U1 at the message level)."""
+        (Family J — advice to nowhere; the review's U1 at the message level).
+
+        REPEAT-AWARE (the loom-app eslint spiral, 2026-08-03): the first-timeout text says
+        're-run with a larger timeout' — and a model will OBEY it up the whole ladder
+        (240→600→120→90) against a genuinely hung target, burning the turn. The second timeout
+        of the SAME command shape this session flips the advisory to hang mode: stop laddering,
+        record the check as unrunnable, move on."""
+        shape = self._timeout_shape(command) if command else ""
+        seen = getattr(self, "_timeout_shapes", None)
+        if seen is None:
+            seen = self._timeout_shapes = {}
+        repeats = seen.get(shape, 0)
+        if shape:
+            seen[shape] = repeats + 1
+            if len(seen) > 64:   # bounded like every host-side tally
+                seen.pop(next(iter(seen)))
+        if shape and repeats >= 1:
+            return (
+                f"Exit code 124 — the {t:g}s deadline again: `{shape}` has now timed out "
+                f"{repeats + 1}x this session. Treat it as a HANG, not a slow command.\n"
+                "Next: do NOT re-run this with a longer timeout or per-file splits — record the "
+                "check as unrunnable (a finding: name the command and the hang), and continue "
+                "with the remaining verification. Notes: this tool's timeout argument IS the "
+                "watchdog (macOS has no `timeout`(1)); and never pipe a gate "
+                "(`… | tail; echo $?` reports the PIPE's exit, masking the real one — run gates bare)."
+            )
         if proc_tools is None:
             proc_tools = self._proc_tools_available()
         if proc_tools:
@@ -1318,7 +1356,7 @@ class CodingToolHost:
             # unreachable; FAILED lets the model re-run with a larger timeout or proc_start, exactly
             # as the message says. The partial-write warning stays because it is true.
             return ToolText(
-                f"{self._timeout_escalation(t, t >= 600.0, proc_tools=(self._proc_tools_available() and not no_adopt))}\n"
+                f"{self._timeout_escalation(t, t >= 600.0, proc_tools=(self._proc_tools_available() and not no_adopt), command=args.get('command', ''))}\n"
                 f"{self._page_out(out, label='command output') or '(no output)'}",
                 ok=False,
             )
@@ -1587,7 +1625,7 @@ class CodingToolHost:
                 return ToolText(
                     # A script is a BATCH of edits: the deadline can land between them, so say so — the
                     # partial-write warning is the difference between re-running and re-running blind.
-                    f"{self._timeout_escalation(t, t >= 600.0)}\n"
+                    f"{self._timeout_escalation(t, t >= 600.0, command='execute_code script')}\n"
                     "Edits this script had already applied are on disk; re-read before re-running it.\n"
                     f"{self._page_out(out, label='execute_code output') or '(no output)'}",
                     ok=False,
