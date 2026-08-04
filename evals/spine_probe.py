@@ -153,6 +153,25 @@ def main(argv=None):
         for (start, name), (nxt, _n2) in zip(marks, marks[1:]):
             composition[name] = composition.get(name, 0) + (nxt - start)
 
+    # ---- per-turn tool-call counts (Option B liveness: read_file must be >0 on turns that edit;
+    # parsed from the LAST request's trajectory, never string-matched — locator lines themselves
+    # contain 'read_file(' and would false-positive a substring count)
+    tool_counts = []
+    last_of_turn = {}
+    for i in range(len(turn_of)):
+        last_of_turn[turn_of[i]] = i
+    for turn, idx in sorted(last_of_turn.items()):
+        counts = {}
+        try:
+            for msg in json.loads(calls[idx]["messages_ser"]):
+                for tc in (msg.get("tool_calls") or []) if isinstance(msg, dict) else []:
+                    name = str(((tc.get("function") or {}) if isinstance(tc, dict) else {}).get("name", ""))
+                    if name:
+                        counts[name] = counts.get(name, 0) + 1
+        except Exception:  # noqa: BLE001 — a torn capture must not kill the whole report
+            counts = {"_parse_error": 1}
+        tool_counts.append({"turn": turn, **counts})
+
     # ---- liveness (mandatory; a dead arm is HARNESS INVALID, not a low score)
     spine_seen = sum(1 for c in calls if "# SESSION SPINE" in c["messages_ser"])
     late_calls = sum(t["calls"] for t in res["per_turn"][1:])   # calls after turn 1
@@ -184,6 +203,7 @@ def main(argv=None):
                                           "peak_in", "cost_usd", "calls")},
         "liveness": liveness, "invalid": invalid,
         "composition_last_turn_first_call": composition,
+        "tool_counts_per_turn": tool_counts,
         "rows": rows,
     }
     os.makedirs(args.out, exist_ok=True)

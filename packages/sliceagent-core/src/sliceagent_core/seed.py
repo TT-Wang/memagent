@@ -189,6 +189,48 @@ def build_artifacts(s: Slice, tools, *, full_file_lines: int = FULL_FILE_LINES,
     return "\n\n".join(parts)
 
 
+def render_file_locators(s: Slice, tools, *, selected_paths=None) -> str:
+    """OPTION B (docs/OPENFILES-SUBSUMPTION-DESIGN.md, AGENT_OPENFILES_LOCATORS=1): render the
+    open_files region as ONE locator line per resident file — path, line count, turn-start content
+    hash, exact copy-paste read call — instead of file bodies. File contents move to
+    read-on-demand tool results in the within-turn trajectory (append-only, cache-friendly);
+    untouched files leave the bill entirely. The visible-manifest recipe (locator + exact call
+    syntax + freshness signal) is deliberate: bare paths reproduced the dead recall channel.
+
+    Selection mirrors build_artifacts minus the render-time read_budget cap (a locator line is
+    ~100 chars, so the FULL resident set is listed; SwapManager eviction still bounds the durable
+    set). Order is the same byte-stable rule: edited files sorted first, then reads sorted."""
+    import hashlib as _hashlib
+    candidates = list(s.active_files if selected_paths is None else selected_paths)
+    if not candidates:
+        return "(no files opened yet)"
+    physical_files = physical_active_files(s, tools, candidates)
+    if not physical_files:
+        return "(no workspace files opened yet)"
+    shown = sorted([p for p in physical_files if p in s.edited_files]) + \
+        sorted([p for p in physical_files if p not in s.edited_files])
+    parts = []
+    for p in shown:
+        edited = " · (edited this session)" if p in s.edited_files else ""
+        try:
+            _rd = getattr(tools, "resolve_read", None) or getattr(tools, "locate", None)
+            body = tools.read_text(_rd(p) if _rd else p)
+        except FileNotFoundError:
+            parts.append(f"### {p} (not created yet)")
+            continue
+        except PermissionError:
+            parts.append(f"### {p} (exists on disk; outside file-tool reach — "
+                         "inspect via run_command/execute_code)")
+            continue
+        except Exception as ex:
+            parts.append(f"### {p} (exists but not shown: {one_line(ex, 120)})")
+            continue
+        digest = _hashlib.sha256(body.encode("utf-8", "replace")).hexdigest()[:12]
+        parts.append(f'### {p} — {len(body.splitlines())} lines · sha256:{digest} · '
+                     f'read_file("{p}") to view{edited}')
+    return "\n".join(parts)
+
+
 def discovery_query(s: Slice, task: str) -> str:
     """The code-discovery query tracks the agent's CURRENT FOCUS, not just the static task — so on
     a large repo RELATED CODE keeps surfacing what's relevant to the NEXT decision (Markov), not the
@@ -454,9 +496,31 @@ def make_build_slice(state, tools, retriever, memory, task: str, session_id: str
     # plan mode carries an overlay too, and telling it that it is "a named subagent" is simply false.
     agent_block = ("\n\n# HOST OVERLAY FOR THIS TURN (binding, from the host — not the user)\n"
                    + system_extra) if system_extra else ""
+    # OPTION B Half A (docs/OPENFILES-SUBSUMPTION-DESIGN.md §3a): the standing read-before-edit
+    # discipline lives in the byte-stable system prefix; the locator region (Half B) is the visible
+    # target. The two halves ship together or not at all — either alone reproduces a measured
+    # dead-affordance failure (recalls=0 / the 38% manifest).
+    locators_block = (
+        "\n\n# WORKSPACE FILES ARE LOCATORS\n"
+        "WORKSPACE FILES appear as LOCATORS, not contents. Each OPEN FILES line shows a file's "
+        "path, line count, content hash, and the exact call to view it. A file's contents are NOT "
+        "in your context until you read_file() it.\n"
+        "Non-negotiable discipline:\n"
+        "1. Before ANY edit (str_replace / write / insert), call read_file(\"path\") for that file "
+        "in THIS turn — unless you already read it this turn, or your own successful edit this "
+        "turn already showed you the resulting content.\n"
+        "2. The sha256 in a locator is the file's on-disk fingerprint AT THE START OF THIS TURN. "
+        "If it differs from the hash you saw last turn, the file changed between turns — your "
+        "memory of it is STALE; re-read before acting.\n"
+        "3. \"(edited this session)\" marks files you changed in earlier turns. On-disk truth is "
+        "the locator's hash, never your memory of the edit.\n"
+        "4. Never reconstruct file contents from the path, your notes, or earlier turns. A read is "
+        "one cheap call; an edit aimed at remembered text wastes a whole step."
+    ) if os.environ.get("AGENT_OPENFILES_LOCATORS", "").strip() == "1" else ""
     system_prefix = (
         SYSTEM_PROMPT.replace("{{MEMORY_MODEL}}", mem_block) + delegation_block
-        + env_line + environment_block + workspace_block + conventions_block + repo_map_block + agent_block
+        + env_line + environment_block + workspace_block + conventions_block + repo_map_block
+        + locators_block + agent_block
     )
 
     def _system() -> str:
@@ -533,7 +597,20 @@ def make_build_slice(state, tools, retriever, memory, task: str, session_id: str
         # transcript agent survives without any live-file view, so the turn-START snapshot plus the
         # trajectory is complete information. Cache key = object identity + turn ordinal: a new turn
         # (seal/reset increments s.turns) naturally invalidates; nothing persists across turns.
-        if os.environ.get("AGENT_FREEZE_OPEN_FILES", "").strip() == "1":
+        if os.environ.get("AGENT_OPENFILES_LOCATORS", "").strip() == "1":
+            # OPTION B: locator lines replace file bodies, snapshotted at turn START (the freeze
+            # experiment's proven semantics, subsumed — AGENT_FREEZE_OPEN_FILES is redundant here;
+            # locators win when both are set). Same one-turn cache shape as the freeze block.
+            _key = (id(s), int(getattr(s, "turns", 0) or 0))
+            _frozen = getattr(make_build_slice, "_frozen_locators", None)
+            if _frozen is None:
+                _frozen = {}
+                make_build_slice._frozen_locators = _frozen
+            if _key not in _frozen:
+                _frozen.clear()            # keep exactly one turn's snapshot — no growth
+                _frozen[_key] = render_file_locators(s, tools, selected_paths=graph_paths)
+            artifacts = _frozen[_key]
+        elif os.environ.get("AGENT_FREEZE_OPEN_FILES", "").strip() == "1":
             _key = (id(s), int(getattr(s, "turns", 0) or 0))
             _frozen = getattr(make_build_slice, "_frozen_artifacts", None)
             if _frozen is None:

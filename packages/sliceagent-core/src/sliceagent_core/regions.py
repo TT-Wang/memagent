@@ -955,7 +955,12 @@ REGIONS: tuple[RegionSpec, ...] = (
     # Raw prior user messages are intentionally NOT a region. Exact still-binding clauses are represented
     # above; the last few exchanges live in RECENT CONVERSATION; older raw messages page from ContextFS history.
     # ──────────── TIER 2 · GROUND TRUTH — the world, re-derived from durable stores each turn. ────────────
-    RegionSpec("open_files",     STABLE,   lambda c: "# OPEN FILES (live — your ground truth; edit based on this. Lines are numbered for citation/reference; the leading number is NOT part of the file — never include it in a str_replace old_string)\n" + c["artifacts"], 0, 95, InstructionClass.DATA, FreshnessClass.LIVE, False, EpistemicRole.OBSERVATION),
+    RegionSpec("open_files",     STABLE,   lambda c: (
+        "# OPEN FILES (locators — contents NOT in context; disk is ground truth; read_file "
+        "before editing; a changed hash means your last read is stale)\n"
+        if os.environ.get("AGENT_OPENFILES_LOCATORS", "").strip() == "1" else
+        "# OPEN FILES (live — your ground truth; edit based on this. Lines are numbered for citation/reference; the leading number is NOT part of the file — never include it in a str_replace old_string)\n"
+    ) + c["artifacts"], 0, 95, InstructionClass.DATA, FreshnessClass.LIVE, False, EpistemicRole.OBSERVATION),
     RegionSpec("related_code",   STABLE,   lambda c: (f"\n# RELATED CODE (repo map — relevant files & their definitions; read/grep for the actual code)\n{c['discovery']}\n" if c["discovery"] else ""), 1, 45, InstructionClass.DATA, FreshnessClass.DERIVED, False, EpistemicRole.CLAIM),
     # REPO MAP moved to the BYTE-STABLE system prefix (make_build_slice) so it's a prompt-cache PREFIX
     # shared across every turn + subagent, instead of full-price in the volatile user slice. (Region removed.)
