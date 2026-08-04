@@ -191,7 +191,8 @@ def main(argv=None):
               f"tokens={r['in_total'] + r['out_total']:,} (cached {r['in_cached']:,}) wall={r['wall_s']}s"
               f"{'' if r['passed'] else '  · ' + r['detail']}")
         for t in r["per_turn"]:
-            print(f"    turn {t['turn']}: peak_in={t['peak_in']:,} in={t['in']:,} out={t['out']:,} wall={t['wall']}s")
+            print(f"    turn {t['turn']}: peak_in={t['peak_in']:,} in={t['in_total']:,} "
+                  f"fresh={t['in_fresh']:,} out={t['out_total']:,} wall={t['wall']}s")
     return 1 if failed else 0
 
 
