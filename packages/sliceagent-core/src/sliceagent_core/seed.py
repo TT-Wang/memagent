@@ -409,7 +409,8 @@ def make_build_slice(state, tools, retriever, memory, task: str, session_id: str
     # Flag values: "1" = full spine layout; "p3" = HEAD-STABILITY ONLY (this site + the lessons_memo
     # keying below, no spine region) — the P5 attribution baseline, so a head-freeze-alone win can
     # never be booked to the spine (roadmap P5 baseline policy).
-    if gbs and os.environ.get("AGENT_SESSION_SPINE", "").strip() not in ("1", "p3"):
+    if gbs and os.environ.get("AGENT_SESSION_SPINE", "").strip() not in ("1", "p3") \
+            and os.environ.get("AGENT_SESSION_TAPE", "").strip() != "1":
         # R6a: under the spine, the system prefix must be byte-stable across turns — a live
         # branch/dirty/HEAD line here re-bills every downstream byte on each commit or edit. The
         # worktree region already carries live git state in the volatile tail; this line is the
@@ -500,7 +501,25 @@ def make_build_slice(state, tools, retriever, memory, task: str, session_id: str
     # discipline lives in the byte-stable system prefix; the locator region (Half B) is the visible
     # target. The two halves ship together or not at all — either alone reproduces a measured
     # dead-affordance failure (recalls=0 / the 38% manifest).
-    locators_block = (
+    if os.environ.get("AGENT_SESSION_TAPE", "").strip() == "1":
+        # SESSION TAPE composition contract (SESSION-TAPE-DESIGN §2) — supersedes the Option B
+        # read-first discipline: reads become the exception (hash mismatch / untracked), not the rule.
+        locators_block = (
+            "\n\n# WORKSPACE FILES VIA THE SESSION TAPE\n"
+            "File contents live in the SESSION TAPE as [base] versions plus the [patch]es you "
+            "already applied — the host recorded each patch exactly as it executed, so composing "
+            "base+patches mentally gives you the current file. Every patch shows the resulting "
+            "sha256; the OPEN FILES index shows each file's CURRENT on-disk sha256.\n"
+            "Rules:\n"
+            "1. Hashes match -> your composition IS the file: edit directly, no read needed.\n"
+            "2. File absent from the tape, marked [external], or hash mismatch -> read_file "
+            "before editing.\n"
+            "3. Never guess content that is in neither the tape nor a fresh read.\n"
+            "4. A failed str_replace means your composition drifted: re-read that file once and "
+            "continue from the fresh text."
+        )
+    else:
+        locators_block = (
         "\n\n# WORKSPACE FILES ARE LOCATORS\n"
         "WORKSPACE FILES appear as LOCATORS, not contents. Each OPEN FILES line shows a file's "
         "path, line count, content hash, and the exact call to view it. A file's contents are NOT "
@@ -566,7 +585,8 @@ def make_build_slice(state, tools, retriever, memory, task: str, session_id: str
         # slice. This matters on resume: the parked topic keeps its goal, but the new resume message is what
         # the user is asking for RIGHT NOW.
         goal = getattr(getattr(s, "intent", None), "current_request", "") or task
-        if os.environ.get("AGENT_SESSION_SPINE", "").strip() in ("1", "p3"):
+        if os.environ.get("AGENT_SESSION_SPINE", "").strip() in ("1", "p3") \
+                or os.environ.get("AGENT_SESSION_TAPE", "").strip() == "1":
             # R6b: keyed by the per-turn request, the KNOWLEDGE region's bytes change every turn
             # while sitting in the head — the memory lookup re-runs and re-renders even when the
             # task is unchanged. Under the spine the memo keys by the STABLE task, so the region's
@@ -597,8 +617,9 @@ def make_build_slice(state, tools, retriever, memory, task: str, session_id: str
         # transcript agent survives without any live-file view, so the turn-START snapshot plus the
         # trajectory is complete information. Cache key = object identity + turn ordinal: a new turn
         # (seal/reset increments s.turns) naturally invalidates; nothing persists across turns.
-        if os.environ.get("AGENT_OPENFILES_LOCATORS", "").strip() == "1":
-            # OPTION B: locator lines replace file bodies, snapshotted at turn START (the freeze
+        if os.environ.get("AGENT_OPENFILES_LOCATORS", "").strip() == "1" \
+                or os.environ.get("AGENT_SESSION_TAPE", "").strip() == "1":
+            # OPTION B / SESSION TAPE: locator lines replace file bodies, snapshotted at turn START (the freeze
             # experiment's proven semantics, subsumed — AGENT_FREEZE_OPEN_FILES is redundant here;
             # locators win when both are set). Same one-turn cache shape as the freeze block.
             _key = (id(s), int(getattr(s, "turns", 0) or 0))

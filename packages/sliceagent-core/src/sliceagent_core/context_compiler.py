@@ -30,7 +30,7 @@ from .regions import RESERVE_PRIORITY, reserve_keep
 # session_spine: frozen sealed-turn bytes are the session's durable record and must reach BOTH lanes
 # through this one seam (SESSION-SPINE-ROADMAP P4); the region self-suppresses when the flag is off
 # or the spine is empty, so unconditional selection costs nothing outside the spine layout.
-_ALWAYS = frozenset({"focus", "reconciliation", "session_spine"})
+_ALWAYS = frozenset({"focus", "reconciliation", "session_spine", "session_tape"})
 _INTENT_FALLBACK = frozenset({"intent", "task_objective", "corrections", "task_constraints"})
 _FILE_KINDS = frozenset({"file", "workspace_file", "path", "workspace", "git"})
 def _region_name(block: ContextBlock) -> str:

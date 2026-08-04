@@ -154,10 +154,18 @@ def run(scn, memory_mode="real"):
         tools.registry.register(make_search_history_tool(memory, session_id))
     else:
         memory = NullMemory()
+    # SESSION TAPE recorder (AGENT_SESSION_TAPE=1): collects the turn's successful file-tool rows
+    # so the seal can append host-authored bases/patches (SESSION-TAPE-DESIGN §2). Inert otherwise.
+    from sliceagent.tape import TapeRecorder, tape_seal_update
+    tape_on = os.environ.get("AGENT_SESSION_TAPE", "").strip() == "1"
+    recorder = TapeRecorder()
+    if tape_on:
+        sinks.append(recorder.sink)
     # State reduction is authoritative, not a best-effort observer. A reducer failure must fail the eval.
     dispatch = make_dispatcher(*sinks, required=(slice_sink(state),))
 
     per_turn = []; t0 = time.time(); err = ""
+    tape_drift = 0; tape_rebased = 0
     try:
         for i, p in enumerate(prompts):
             record_user(state, p)
@@ -177,16 +185,28 @@ def run(scn, memory_mode="real"):
                                        os.environ.get("AGENT_MODEL", "deepseek-v4-flash"))})
             # Match the real host lifecycle: semantic state carries; detailed calls/trajectory counters do not.
             state.seal()
-            # SESSION SPINE parity with the host: the CLI appends each committed turn's digest
-            # (rendered once, at seal) to the session cache. The bench has no artifact store, so it
-            # feeds the SAME renderer (R3: one renderer serves every producer) with bench-local turn
-            # ids; the region renders it only under AGENT_SESSION_SPINE=1.
-            from sliceagent.spine import render_turn_digest as _digest
-            state.continuity.session_spine.append(_digest(
-                artifact_id=f"turn-{i + 1:03d}", session_id=session_id, task_id=scn["name"],
-                status="completed" if result.stop_reason == "end_turn" else str(result.stop_reason),
-                user_request=p,
-            ))
+            if tape_on:
+                # SESSION TAPE seal update (digest + bases + patches + honesty net), ONE renderer
+                # family for every producer; the recorder resets per turn.
+                info = tape_seal_update(
+                    state, tools, recorder.rows, session_id=session_id,
+                    artifact_id=f"turn-{i + 1:03d}", task_id=scn["name"],
+                    status="completed" if result.stop_reason == "end_turn" else str(result.stop_reason),
+                    user_request=p,
+                )
+                recorder.reset()
+                tape_drift += info["drift"]; tape_rebased += len(info["rebased"])
+            else:
+                # SESSION SPINE parity with the host: the CLI appends each committed turn's digest
+                # (rendered once, at seal) to the session cache. The bench has no artifact store, so
+                # it feeds the SAME renderer (R3: one renderer serves every producer) with bench-local
+                # turn ids; the region renders it only under AGENT_SESSION_SPINE=1.
+                from sliceagent.spine import render_turn_digest as _digest
+                state.continuity.session_spine.append(_digest(
+                    artifact_id=f"turn-{i + 1:03d}", session_id=session_id, task_id=scn["name"],
+                    status="completed" if result.stop_reason == "end_turn" else str(result.stop_reason),
+                    user_request=p,
+                ))
             if result.stop_reason != "end_turn":
                 err = f"turn {i + 1} stopped abnormally: {result.stop_reason}"
                 break
@@ -207,6 +227,9 @@ def run(scn, memory_mode="real"):
     # result — the exact defect this gate exists to make impossible to miss again.
     liveness = {"memory_mode": memory_mode, "episodes_written": None,
                 "recalls": None, "re_reads": None}
+    if tape_on:
+        liveness.update(tape_entries=len(state.continuity.session_tape),
+                        tape_drift=tape_drift, tape_rebased=tape_rebased)
     if memory_mode == "real":
         eps = ()
         try:

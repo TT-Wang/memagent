@@ -117,6 +117,7 @@ def test_work_delta_effect_carries_complete_plan_progress_projection():
 def test_update_work_rejects_terminal_forgery_root_mutation_and_stale_revision():
     state, host = prepared()
     terminal = invoke(host, {
+        "expected_revision": state.active_work.revision,
         "changes": [{"id": "fake", "description": "fake", "status": "verified"}],
     }, "terminal")
     assert terminal.status is ToolStatus.FAILED
@@ -124,6 +125,7 @@ def test_update_work_rejects_terminal_forgery_root_mutation_and_stale_revision()
 
     root_id = state.active_work.request_roots[0].id
     mutate_root = invoke(host, {
+        "expected_revision": state.active_work.revision,
         "changes": [{"id": root_id, "description": "rewrite user root", "status": "cancelled"}],
     }, "root")
     assert mutate_root.status is ToolStatus.FAILED
@@ -147,6 +149,7 @@ def test_current_correction_can_explicitly_supersede_an_older_open_request_root(
     current = state.active_work.request_roots[-1]
     host.bind_active_work(lambda: (state.active_work, "logical-2", 2))
     outcome = invoke(host, {
+        "expected_revision": state.active_work.revision,
         "changes": [{
             "id": older.id, "status": "superseded", "superseded_by": current.id,
         }],
@@ -160,6 +163,7 @@ def test_current_correction_can_explicitly_supersede_an_older_open_request_root(
 def test_update_work_ready_is_a_nonterminal_claim_until_host_seal():
     state, host = prepared()
     created = invoke(host, {
+        "expected_revision": state.active_work.revision,
         "changes": [{"id": "report", "description": "Prepare report", "status": "ready"}],
     })
     assert created.status is ToolStatus.SUCCEEDED
@@ -170,7 +174,7 @@ def test_update_work_ready_is_a_nonterminal_claim_until_host_seal():
 
 def test_update_work_is_unavailable_without_an_application_graph_binding():
     host = LocalToolHost()
-    outcome = invoke(host, {"changes": [{"id": "x", "description": "x"}]})
+    outcome = invoke(host, {"expected_revision": 1, "changes": [{"id": "x", "description": "x"}]})
     assert outcome.status is ToolStatus.FAILED
     assert "ACTIVE WORK is unavailable" in outcome.text
 
@@ -187,12 +191,14 @@ def test_active_work_mode_exposes_one_semantic_state_api_without_generic_note_no
 def test_partial_existing_update_preserves_status_and_adds_only_requested_resource():
     state, host = prepared()
     created = invoke(host, {
+        "expected_revision": state.active_work.revision,
         "changes": [{"id": "inspect", "description": "Inspect", "status": "in_progress"}],
     }, "create")
     assert created.status is ToolStatus.SUCCEEDED
     reduce(state, created)
 
     partial = invoke(host, {
+        "expected_revision": state.active_work.revision,
         "changes": [{
             "id": "inspect",
             "add_resources": [{"kind": "workspace_file", "ref": "src/inspect.py"}],
@@ -208,6 +214,7 @@ def test_partial_existing_update_preserves_status_and_adds_only_requested_resour
 def test_retiring_older_request_atomically_cancels_its_unresolved_children():
     state, host = prepared()
     child_outcome = invoke(host, {
+        "expected_revision": state.active_work.revision,
         "changes": [{
             "id": "old-child", "description": "Work owned by the older request",
             "status": "in_progress",
@@ -224,6 +231,7 @@ def test_retiring_older_request_atomically_cancels_its_unresolved_children():
     current = state.active_work.request_roots[-1]
     host.bind_active_work(lambda: (state.active_work, "logical-2", 2))
     retired = invoke(host, {
+        "expected_revision": state.active_work.revision,
         "changes": [{
             "id": older.id, "status": "superseded", "superseded_by": current.id,
         }],
@@ -239,7 +247,8 @@ def test_retiring_older_request_atomically_cancels_its_unresolved_children():
     assert state.active_work.get("old-child").stop_reason == "request_superseded"
 
     # Repeating the terminal update with omitted fields preserves both lifecycle and replacement identity.
-    repeated = invoke(host, {"changes": [{"id": older.id}]}, "repeat-retire")
+    repeated = invoke(host, {"expected_revision": state.active_work.revision,
+                             "changes": [{"id": older.id}]}, "repeat-retire")
     assert repeated.status is ToolStatus.SUCCEEDED
     reduce(state, repeated)
     assert state.active_work.get(older.id).status == "superseded"
@@ -285,6 +294,64 @@ def test_cross_root_update_names_a_legal_forward_move_that_actually_works():
     assert carried.get("f1").status == "in_progress", "the earlier item stays on record, untouched"
 
 
+def test_update_work_cas_token_is_mandatory_and_a_moved_graph_rejects_the_stale_one():
+    """task144 schema-shape audit: expected_revision was declared but optional, and an omitted token
+    defaulted to the LIVE revision — so the conflict check could never fire exactly when it was
+    needed. The token is now REQUIRED (schema and host agree), a token from a graph that has since
+    moved conflicts instead of silently applying, and the accepted result names the fresh token so
+    a same-turn follow-up can chain without waiting for the next ACTIVE WORK render."""
+    from sliceagent.tools import TOOL_SCHEMAS
+
+    schema = next(row for row in TOOL_SCHEMAS if row["function"]["name"] == "update_work")
+    assert "expected_revision" in schema["function"]["parameters"]["required"]
+
+    state, host = prepared()
+    # tool path: the registry's required-argument admission gate rejects the omission
+    omitted = invoke(host, {"changes": [{"id": "child", "description": "child"}]}, "omitted")
+    assert omitted.status is ToolStatus.FAILED
+    assert "missing required argument(s): expected_revision" in omitted.text
+    assert state.active_work.get("child") is None
+
+    # core backstop for direct delta construction (effect factory, plan surfaces): same contract,
+    # and its reject carries the escape — the revision the retry must echo
+    from sliceagent.tools import build_work_delta
+    try:
+        build_work_delta(state.active_work, {"changes": [{"id": "child", "description": "child"}]},
+                         logical_id="logical-1", workspace_epoch=2)
+        raise AssertionError("an omitted expected_revision must be rejected at the core layer too")
+    except ValueError as exc:
+        assert "expected_revision is required" in str(exc)
+        assert f"revision {state.active_work.revision}" in str(exc)
+
+    shown = state.active_work.revision   # what the turn-start ACTIVE WORK render showed
+    first = invoke(host, {
+        "expected_revision": shown,
+        "changes": [{"id": "a", "description": "first writer", "status": "in_progress"}],
+    }, "first")
+    assert first.status is ToolStatus.SUCCEEDED
+    assert f"graph revision is now {shown + 1}" in first.text
+    reduce(state, first)
+    assert state.active_work.revision == shown + 1
+
+    # a writer still holding the pre-move token must conflict, not apply against the moved graph
+    stale = invoke(host, {
+        "expected_revision": shown,
+        "changes": [{"id": "b", "description": "stale writer"}],
+    }, "stale")
+    assert stale.status is ToolStatus.FAILED
+    assert f"expected revision {shown}, current revision is {shown + 1}" in stale.text
+    assert state.active_work.get("b") is None
+
+    # echoing the fresh token from the accepted result chains cleanly
+    chained = invoke(host, {
+        "expected_revision": shown + 1,
+        "changes": [{"id": "b", "description": "second writer"}],
+    }, "chained")
+    assert chained.status is ToolStatus.SUCCEEDED
+    reduce(state, chained)
+    assert state.active_work.get("b") is not None
+
+
 def test_update_work_rejects_multiline_model_metadata():
     state, host = prepared()
     for index, change in enumerate((
@@ -295,6 +362,7 @@ def test_update_work_rejects_multiline_model_metadata():
             "add_resources": [{"kind": "workspace_file", "ref": "src/app.py\rforged"}],
         },
     )):
-        outcome = invoke(host, {"changes": [change]}, f"bad-{index}")
+        outcome = invoke(host, {"expected_revision": state.active_work.revision,
+                                "changes": [change]}, f"bad-{index}")
         assert outcome.status is ToolStatus.FAILED
         assert "CR or LF" in outcome.text

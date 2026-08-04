@@ -222,6 +222,13 @@ class ContinuityState:
     # rest of continuity, and on resume is rebuilt from the artifact scan (load_session_spine) —
     # the artifacts are the durable truth, this is only the warm copy the seed renders from.
     session_spine: list[str] = field(default_factory=list)
+    # Session Tape (docs/SESSION-TAPE-DESIGN.md): the single append-only stream — frozen entry
+    # strings (digests + file bases + host-authored patches + external notices), appended at seal
+    # by tape.tape_seal_update. tape_files is the host-side composition registry (path -> hash/
+    # content/chain accounting) that backs the per-seal honesty net; both survive ordinary seals
+    # like the rest of continuity. Durable persistence of entries is the production follow-up.
+    session_tape: list[str] = field(default_factory=list)
+    tape_files: dict = field(default_factory=dict)
     recovery_child_report_count: int = 0
 
     def reset(self) -> None:

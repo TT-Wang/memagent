@@ -186,11 +186,18 @@ def main(argv=None):
         "calls_after_turn1": late_calls,
         "episodes_written": res.get("episodes_written"),
     }
+    tape_seen = sum(1 for c in calls if "# SESSION TAPE" in c["messages_ser"])
+    liveness["tape_blocks_seen"] = tape_seen
+    for k in ("tape_entries", "tape_drift", "tape_rebased"):
+        if k in res:
+            liveness[k] = res[k]
     invalid = ""
     if args.label == "spine" and late_calls and spine_seen == 0:
         invalid = "HARNESS INVALID: spine arm but no SESSION SPINE block in any request"
     if args.label in ("off", "p3") and spine_seen:
         invalid = f"HARNESS INVALID: {args.label} arm but SESSION SPINE rendered {spine_seen}x"
+    if args.label == "tape" and late_calls and tape_seen == 0:
+        invalid = "HARNESS INVALID: tape arm but no SESSION TAPE block in any request"
 
     def stats(kind):
         sel = sorted(r["frac"] for r in rows if r["same_turn"] == kind)

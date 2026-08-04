@@ -1114,7 +1114,15 @@ def build_work_delta(
     """
     if not isinstance(graph, WorkGraph):
         raise ValueError("ACTIVE WORK is unavailable")
-    expected = args.get("expected_revision", graph.revision)
+    expected = args.get("expected_revision")
+    if expected is None:
+        # Defaulting an omitted token to the LIVE revision made the conflict check below vacuous:
+        # a delta authored against a graph that has since moved applied silently. The token must
+        # state the revision the AUTHOR saw, so omission is a hard reject, with the escape named.
+        raise ValueError(
+            "expected_revision is required: echo the 'graph revision' shown in ACTIVE WORK, or the "
+            f"one your latest accepted update_work returned (the graph is at revision {graph.revision})"
+        )
     if not isinstance(expected, int) or isinstance(expected, bool):
         raise ValueError("expected_revision must be an integer")
     changes = args.get("changes")

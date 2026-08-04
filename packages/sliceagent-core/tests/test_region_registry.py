@@ -140,7 +140,10 @@ def golden_layout_snapshot():
         ("skills", STABLE, 2), ("memory", STABLE, 2),
         # 2026-08-04 Session Spine (docs/SESSION-SPINE-ROADMAP.md P4): frozen sealed-turn digests,
         # flag-gated (AGENT_SESSION_SPINE=1), renders "" otherwise.
-        ("session_spine", STABLE, 2), ("conversation", STABLE, 2),
+        ("session_spine", STABLE, 2),
+        # 2026-08-05 Session Tape (docs/SESSION-TAPE-DESIGN.md): the single append-only stream,
+        # flag-gated (AGENT_SESSION_TAPE=1), renders "" otherwise; absorbs the spine when active.
+        ("session_tape", STABLE, 2), ("conversation", STABLE, 2),
         ("findings", VOLATILE, 3), ("progress", VOLATILE, 3), ("world", VOLATILE, 3),
         ("threads", VOLATILE, 3), ("cache_manifest", VOLATILE, 3), ("turn_contract", VOLATILE, 6),
         ("focus", VOLATILE, 6), ("worktree", VOLATILE, 6), ("user_report", VOLATILE, 6),

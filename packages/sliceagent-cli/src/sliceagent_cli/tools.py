@@ -375,7 +375,10 @@ TOOL_SCHEMAS = [
         "must survive another turn, workspace switch, or subagent; skip it for a simple one-step answer. For a "
         "declared staged or multi-wave plan, create the complete promised frontier before execution, including "
         "later partitions as open items—never record only the current batch while future coverage lives in prose.",
-        {"expected_revision": {"type": "integer", "description": "ACTIVE WORK graph revision currently shown"},
+        {"expected_revision": {"type": "integer", "description": (
+             "conflict token: the 'graph revision' shown in ACTIVE WORK (or returned by your latest "
+             "accepted update_work); a stale value rejects the whole batch"
+         )},
          "changes": {"type": "array", "items": {"type": "object", "properties": {
              "id": {"type": "string", "description": (
                  "stable short CHILD work-item ID; never use the host-owned current request-root ID"
@@ -392,7 +395,7 @@ TOOL_SCHEMAS = [
                  "kind": {"type": "string"}, "ref": {"type": "string"},
                  "revision": {"type": "string"}}, "required": ["kind", "ref"]}},
              "superseded_by": {"type": "string"}}, "required": ["id"]}},
-        }, ["changes"]),
+        }, ["expected_revision", "changes"]),
 ]
 
 _VERIFY_OSCILLATION_WINDOW = 4     # identical failure signatures within this window => stop retrying

@@ -1627,9 +1627,12 @@ class CodingToolHost:
                 if item.id != root.id and item.root_id == root.id
                 and item.status in {"open", "in_progress", "waiting_user", "waiting_peer"}
             ]
+        # The ACTIVE WORK section re-renders only next turn, so a same-turn follow-up call has no
+        # other source for the fresh conflict token than this result.
         result = (
             f"ACTIVE WORK update accepted: {len(delta.creates)} created, "
-            f"{len(delta.updates)} updated (base revision {delta.expected_revision})."
+            f"{len(delta.updates)} updated (base revision {delta.expected_revision}; "
+            f"graph revision is now {proposed.revision})."
         )
         if self._item_verify_green:
             result += ("\nHost-verified (checks ran green, promoted ready->verified): "
