@@ -188,7 +188,7 @@ def main(argv=None):
     }
     tape_seen = sum(1 for c in calls if "# SESSION TAPE" in c["messages_ser"])
     liveness["tape_blocks_seen"] = tape_seen
-    for k in ("tape_entries", "tape_drift", "tape_rebased"):
+    for k in ("tape_entries", "tape_drift", "tape_rebased", "tape_compactions", "tape_chars"):
         if k in res:
             liveness[k] = res[k]
     invalid = ""

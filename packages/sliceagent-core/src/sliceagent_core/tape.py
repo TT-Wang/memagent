@@ -71,7 +71,10 @@ def render_tape_reply(artifact_id: str, text: str) -> str:
 # first; if still over, the oldest span folds into one epoch marker with a locator. Each
 # compaction mutates frozen bytes and therefore breaks the provider prefix ONCE — deliberately,
 # rarely, and counted (liveness reports it; the byte probe attributes it).
-TAPE_BUDGET_CHARS = 48_000
+TAPE_BUDGET_CHARS = int(__import__("os").environ.get("AGENT_TAPE_BUDGET", "") or 120_000)
+_FOLD_TARGET = 0.7   # fold DOWN TO this fraction of budget — hysteresis so back-to-back turns
+#                      cannot re-trigger (measured thrash: folds at turns 9 AND 10 of s2 r3,
+#                      each costing a ~55k-char full re-bill of everything below the tape head)
 
 
 def compact_tape(tape: list, *, budget: int = TAPE_BUDGET_CHARS) -> dict:
@@ -98,7 +101,7 @@ def compact_tape(tape: list, *, budget: int = TAPE_BUDGET_CHARS) -> dict:
     # pass 2: ONE fold sized to reach the budget — the oldest span (merging any earlier epoch
     # marker so the label keeps the true first turn) collapses into a single marker.
     if total() > budget and len(tape) > 8:
-        overshoot = total() - budget
+        overshoot = total() - int(budget * _FOLD_TARGET)
         running, cut = 0, 0
         while cut < len(tape) - 4 and running < overshoot + 200:
             running += len(tape[cut]); cut += 1
