@@ -69,6 +69,7 @@ evals/*
 # (captured run data in evals/spine_probe_runs/ stays local).
 !evals/spine_probe.py
 !evals/spine_probe_verdict.py
+!evals/oflocators_verdict.py
 # Serializer census (audit instrument): code is versioned, captured run data
 # (evals/census_runs/, which may contain request content) stays local via the evals/* ignore.
 !evals/serializer_census.py
