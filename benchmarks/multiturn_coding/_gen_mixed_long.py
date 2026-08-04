@@ -284,7 +284,7 @@ def verify(root):
 '''
     json.dump(P, open(os.path.join(OUT, "prompts.json"), "w", encoding="utf-8"),
               ensure_ascii=False, indent=0)
-    json.dump({"max_steps_per_turn": 14, "use_code_index": False},
+    json.dump({"name": 's11_mixed_long', "turns": len(P) if 's11_mixed_long' == "s11_mixed_long" else len(prompts), "stressor": 'real-workload long horizon: five s2-difficulty phases + aging capsules/probes', "max_steps_per_turn": 14, "use_code_index": False},
               open(os.path.join(OUT, "meta.json"), "w", encoding="utf-8"))
     open(os.path.join(OUT, "setup.py"), "w", encoding="utf-8").write(setup)
     open(os.path.join(OUT, "verify.py"), "w", encoding="utf-8").write(verify)

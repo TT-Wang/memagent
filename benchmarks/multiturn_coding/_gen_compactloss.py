@@ -161,7 +161,7 @@ def verify(root):
 '''
     json.dump(prompts, open(os.path.join(OUT, "prompts.json"), "w", encoding="utf-8"),
               ensure_ascii=False, indent=0)
-    json.dump({"max_steps_per_turn": 12, "use_code_index": False},
+    json.dump({"name": 's10_compactloss', "turns": len(P) if 's10_compactloss' == "s11_mixed_long" else len(prompts), "stressor": 'forced transcript-compaction + assistant/tool-history-only information loss probes', "max_steps_per_turn": 12, "use_code_index": False},
               open(os.path.join(OUT, "meta.json"), "w", encoding="utf-8"))
     open(os.path.join(OUT, "setup.py"), "w", encoding="utf-8").write(setup)
     open(os.path.join(OUT, "verify.py"), "w", encoding="utf-8").write(verify)
