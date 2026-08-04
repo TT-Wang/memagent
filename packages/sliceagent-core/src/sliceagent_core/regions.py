@@ -1208,8 +1208,12 @@ def _ring_within_reserve(s) -> bool:
 # spine. Slot override at BUILD time under the flag — the declared table (and the golden layout
 # snapshot pinning it) stays the legacy truth. Relative reading order below the spine preserved.
 _SPINE_LAYOUT_SLOTS = {
-    "skills": 0, "memory": 0,          # task-keyed under the flag (R6b) -> cross-turn stable
+    "skills": 0,                       # revision-bound (skill activation), not per-turn
     "session_spine": 1,                # append-only: new bytes only at its end
+    # memory sits BELOW the spine (R6 remedy B): the lessons memo is rebuilt with every
+    # make_build_slice closure, and under a real vault the k=6 lookup re-ranks as episodes
+    # accumulate — its bytes are NOT cross-turn stable until snapshot-per-session lands.
+    "memory": 2,
     "intent": 2, "task_objective": 2, "corrections": 2, "task_constraints": 2, "open_files": 2,
     "related_code": 3, "conversation": 4,
     "findings": 5, "progress": 5, "world": 5, "threads": 5, "cache_manifest": 5,

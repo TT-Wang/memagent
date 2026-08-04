@@ -209,8 +209,9 @@ def test_spine_layout_head_precedes_volatile_regions(monkeypatch):
     monkeypatch.setenv("AGENT_SESSION_SPINE", "1")
     on = render_slice(st, artifacts="(no open files)", memory="lesson: check the seams")
     spine_at = on.index("# SESSION SPINE")
-    assert on.index("# RELEVANT KNOWLEDGE") < spine_at          # stable head above the spine
-    for volatile_hdr in ("# ACTIVE USER INTENT", "# OPEN FILES"):
+    # everything whose bytes can change between turns renders BELOW the spine — including the
+    # knowledge region (its k=6 lookup re-ranks as the episode store grows, R6 remedy B)
+    for volatile_hdr in ("# ACTIVE USER INTENT", "# OPEN FILES", "# RELEVANT KNOWLEDGE"):
         if volatile_hdr in on:
             assert on.index(volatile_hdr) > spine_at, volatile_hdr
     # legacy layout untouched when the flag is off
