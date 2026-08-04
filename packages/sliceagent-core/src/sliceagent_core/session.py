@@ -86,6 +86,10 @@ class Session:
         # and make_build_slice syncs it into whichever task's slice is active. Session-level because
         # slices are per-task views: parking a topic must not fork the session's frozen record.
         self.session_spine: list[str] = []
+        # Session Tape (docs/SESSION-TAPE-DESIGN.md): same ownership pattern — the session holds
+        # the append-only entry cache + the host-side composition registry; slices get synced views.
+        self.session_tape: list[str] = []
+        self.tape_files: dict = {}
         # Monotonic only within this live session. Evidence snapshots use it to prove conversational adjacency
         # across task switches; it is intentionally not durable because snapshots are not durable either.
         self.turn_generation: int = 0

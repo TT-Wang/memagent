@@ -565,6 +565,10 @@ def make_build_slice(state, tools, retriever, memory, task: str, session_id: str
             # drift as topics switch). Synced here — the one seam every lane's build passes
             # through — so any task's slice renders the same frozen record.
             s.continuity.session_spine = list(state.session_spine)
+        if is_session and isinstance(getattr(state, "session_tape", None), list):
+            # SESSION TAPE sync — same ownership pattern; parking a topic must not fork the tape.
+            s.continuity.session_tape = list(state.session_tape)
+            s.continuity.tape_files = dict(getattr(state, "tape_files", {}) or {})
         current_epoch = int(getattr(state, "workspace_epoch", 0) or 0)
         graph_active = bool(s.active_work.items)
         closure = s.active_work.dependency_closure() if graph_active else ()

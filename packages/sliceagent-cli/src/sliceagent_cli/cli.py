@@ -1692,6 +1692,24 @@ def main() -> None:
         if isinstance(_spine_digest, str) and _spine_digest:
             session.session_spine.append(_spine_digest)
             sealed_target.continuity.session_spine = list(session.session_spine)
+        if _tape_recorder["rec"] is not None:
+            # SESSION TAPE (production parity with the bench wiring): digest + true-diff
+            # patches + reply freeze at seal; the SESSION owns the cache (same pattern as the
+            # spine above; make_build_slice syncs it into whichever task's slice is active).
+            _last_exchange = (sealed_target.conversation[-1]
+                              if getattr(sealed_target, "conversation", None) else {})
+            sealed_target.continuity.session_tape = list(session.session_tape)
+            sealed_target.continuity.tape_files = dict(session.tape_files)
+            tape_seal_update(
+                sealed_target, base_tools, _tape_recorder["rec"].rows,
+                session_id=session.session_id, artifact_id=artifact_id,
+                task_id=active.task_id, status=stop_reason,
+                user_request=str(_last_exchange.get("user") or ""),
+                assistant_reply=str(_last_exchange.get("assistant") or ""),
+            )
+            _tape_recorder["rec"].reset()
+            session.session_tape = list(sealed_target.continuity.session_tape)
+            session.tape_files = dict(sealed_target.continuity.tape_files)
         session.tasks[active.task_id] = sealed_target
         session.turn_task_id = None
         _pending_seal_records.pop(active.artifact_id, None)
@@ -1972,8 +1990,18 @@ def main() -> None:
         print(f"  · slice monitor: writing to {_monitor_dir()} — view at the persistent server "
               "(run: python -m sliceagent.monitor)")
 
+    # SESSION TAPE recorder (AGENT_SESSION_TAPE=1): snapshots each successful file tool's
+    # post-state at EVENT time — the only moment per-edit deltas are individually observable —
+    # so the seal can append true-diff patches. Rebound per workspace handoff with `tools`, since
+    # a rebinding target has its own host and read seam. Inert when the flag is off.
+    from sliceagent_core.tape import TapeRecorder, tape_seal_update
+    _tape_on = os.environ.get("AGENT_SESSION_TAPE", "").strip() == "1"
+    _tape_recorder = {"rec": TapeRecorder(base_tools) if _tape_on else None}
+
     def _make_workspace_dispatch_for(dispatch_root, dispatch_episodic, dispatch_monitor):
         sinks = []
+        if _tape_recorder["rec"] is not None:
+            sinks.append(_tape_recorder["rec"].sink)
         if dispatch_episodic is not None:
             sinks.append(dispatch_episodic)
         sinks.append(log_sink(dispatch_root))
