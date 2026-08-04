@@ -221,6 +221,41 @@ def test_spine_layout_head_precedes_volatile_regions(monkeypatch):
         assert off.index("# ACTIVE USER INTENT") < off.index("# RELEVANT KNOWLEDGE")
 
 
+def test_projection_pin_keeps_msg1_byte_stable_within_turn(monkeypatch):
+    """P5 within-turn finding: unconditional per-call re-projection mutated msg1's tail as capacity
+    shrank (0/44 same-turn pairs byte-perfect), re-billing the whole trajectory each step. The pin
+    reuses the turn's projection verbatim while it fits, and re-projects only on real overflow."""
+    import json as _json
+    from sliceagent_core.context import SeedPlan
+    from sliceagent_core.loop import _project_request_seed
+    from sliceagent_core.regions import build_context_blocks, render_context_selection
+    from sliceagent_core.seed import _slice_context
+    monkeypatch.delenv("AGENT_CONTEXT_WINDOW", raising=False)
+    st = _mini_slice()
+    blocks = build_context_blocks(_slice_context(st, artifacts="x" * 4000, open_file_paths=()))
+    plan = SeedPlan(system="sys", blocks=blocks, render_blocks=render_context_selection,
+                    request_block="\n\nREQ", now_block="\nNOW")
+
+    class _Llm:
+        context_window = 200_000
+        max_tokens = 100
+    llm = _Llm()
+    first = _project_request_seed(plan, [], llm, [])
+    grown = [{"role": "assistant", "content": "step"}, {"role": "tool", "content": "out " * 100}]
+    second = _project_request_seed(plan, grown, llm, [])
+    assert _json.dumps(first) == _json.dumps(second)      # byte-identical msg1, whole turn
+    # real overflow pressure -> the pin yields and a fresh (tighter) projection is produced
+    llm.context_window = 2000
+    third = _project_request_seed(plan, grown, llm, [])
+    assert _json.dumps(third) != _json.dumps(first)
+    assert len(_json.dumps(third)) < len(_json.dumps(first))
+    # kill switch restores the legacy per-call behavior
+    monkeypatch.setenv("AGENT_PIN_PROJECTION", "0")
+    llm.context_window = 200_000
+    unpinned = _project_request_seed(plan, [], llm, [])
+    assert isinstance(unpinned, list) and unpinned[0]["role"] == "system"
+
+
 # ---------------------------------------------------------------- P4 exit gates (roadmap)
 
 def _lane_blocks(st):

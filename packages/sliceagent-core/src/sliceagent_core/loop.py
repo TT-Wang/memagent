@@ -558,10 +558,30 @@ def _project_request_seed(plan: SeedPlan, trajectory: list[dict], llm, schemas: 
                           *, capacity_hint: int | None = None) -> list[dict]:
     """Render one provider-fit seed from a turn-stable logical plan.
 
-    Capacity is recalculated for every call after accounting for the current native trajectory, schemas,
-    and output reserve. Exact strict preflight then corrects JSON escaping/Unicode overhead by tightening
-    the controller budget until one graded representation fits.
+    PROJECTION PIN (P5 within-turn finding, 2026-08-05): once a turn has one fitting projection,
+    every later call REUSES those exact bytes while they still fit — unconditional per-call
+    re-projection let the elastic selection drift as the trajectory grew, mutating msg1's tail
+    (0/44 same-turn pairs byte-perfect in the instrumented probe) and re-billing the whole
+    trajectory after the changed byte on every step. Elasticity was built for OVERFLOW, not for
+    continuous re-selection: the pin falls through to a fresh projection exactly when the pinned
+    candidate no longer fits (same fit criterion the prepare path already uses). Explicit
+    capacity_hint tightening (overflow/provider-pressure paths) bypasses the pin AND stays
+    one-shot — a hinted projection never becomes the pin, so a small-window model's degraded
+    selection cannot leak into a later roomier context (the model-fallback path must re-see FULL
+    blocks). Kill switch: AGENT_PIN_PROJECTION=0.
+
+    Capacity is otherwise recalculated for every call after accounting for the current native
+    trajectory, schemas, and output reserve. Exact strict preflight then corrects JSON
+    escaping/Unicode overhead by tightening the controller budget until one graded representation
+    fits.
     """
+    import os as _os
+    pinned = getattr(plan, "pinned_projection", None)
+    if (pinned is not None and capacity_hint is None
+            and _os.environ.get("AGENT_PIN_PROJECTION", "").strip() != "0"):
+        report = estimate_model_call(llm, [*pinned, *trajectory], schemas)
+        if not report.context_window or report.required_tokens <= report.context_window:
+            return copy.deepcopy(pinned)
     empty_content: str | list[dict]
     if plan.media_parts:
         empty_content = [{"type": "text", "text": ""}, *[dict(part) for part in plan.media_parts]]
@@ -575,9 +595,15 @@ def _project_request_seed(plan: SeedPlan, trajectory: list[dict], llm, schemas: 
     capacity = available_content_capacity(llm, fixed, schemas)
     if capacity is None:
         try:
-            return plan.project(capacity_hint) if capacity_hint is not None else plan.project()
+            projected = plan.project(capacity_hint) if capacity_hint is not None else plan.project()
         except ContextUnfitError as error:
             raise ContextOverflow(error) from error
+        if capacity_hint is None:
+            # Only an UNtightened projection may become the pin. A reactive/hinted tightening is
+            # one-shot (old semantics): pinning it would leak a small-model's degraded selection
+            # into a later, roomier context — e.g. the model-fallback path must re-see FULL blocks.
+            plan.pinned_projection = copy.deepcopy(projected)
+        return projected
     if capacity_hint is not None:
         capacity = min(capacity, capacity_hint)
 
@@ -592,6 +618,8 @@ def _project_request_seed(plan: SeedPlan, trajectory: list[dict], llm, schemas: 
         candidate = [*projected, *trajectory]
         report = estimate_model_call(llm, candidate, schemas)
         if report.required_tokens <= report.context_window:
+            if capacity_hint is None:   # see above: tightened projections never become the pin
+                plan.pinned_projection = copy.deepcopy(projected)
             return projected
         # The deficit is in TOKENS; capacity is a CHAR budget — convert with the exact estimator
         # inverse so one pass closes the gap (a raw token subtraction under-tightens ~2.6× and can
