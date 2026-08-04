@@ -104,6 +104,7 @@ docs/*
 !docs/SESSION-SPINE-DESIGN.md
 !docs/SESSION-SPINE-MAP.md
 !docs/SESSION-SPINE-REVIEW.md
+!docs/SESSION-SPINE-ROADMAP.md
 
 # ColBench raw HF dataset (huge; selected tasks are committed under evals/colbench/tasks/)
 evals/colbench/data/
