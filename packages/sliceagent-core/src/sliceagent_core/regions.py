@@ -11,6 +11,7 @@ from pfc.py/seed.py — they import FROM here (one direction), so there is no im
 """
 from __future__ import annotations
 
+import os
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -1191,6 +1192,20 @@ def build_context_blocks(ctx: dict) -> tuple[ContextBlock, ...]:
             continue
         priority, authority, freshness, mandatory = _REGION_META.get(
             name, (50, InstructionClass.TASK_STATE, FreshnessClass.DERIVED, False))
+        # AGENT_SEED_LAYOUT=cache — assembly order becomes a PURE FUNCTION of declared freshness:
+        # REVISION_BOUND(0) -> HISTORICAL/append-ish(1) -> DERIVED(2) -> LIVE(6). No new hand
+        # labels, so nothing new can drift. Motivation (measured, multi-turn matrix 2026-08-04):
+        # the legacy layout leads with `intent` and `open_files`, both freshness=LIVE — they change
+        # every turn, so the provider's longest-common-prefix cache dies at byte ~0 on every
+        # rebuild and each turn's FIRST call repays the whole ~11k seed as cache-miss input
+        # (~91.5% hit rate vs a transcript arm's 99%). Their `tier=stable` is an ATTENTION label,
+        # not a cache one; this flag orders by the field that actually tracks change frequency.
+        # Selection/elasticity are untouched — only the assembly slot changes; within a class,
+        # REGION_ORDER's relative order is preserved. Default stays the attention layout pending
+        # the pre-registered A/B (quality parity gate + fresh-token delta).
+        if os.environ.get("AGENT_SEED_LAYOUT", "").strip().lower() == "cache":
+            slot = {FreshnessClass.REVISION_BOUND: 0, FreshnessClass.HISTORICAL: 1,
+                    FreshnessClass.DERIVED: 2, FreshnessClass.LIVE: 6}.get(freshness, 2)
         if (name == "task_objective"
                 and getattr(getattr(ctx.get("s"), "task", None), "objective_status", "active")
                 == "provisionally_satisfied"):
