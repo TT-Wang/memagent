@@ -124,7 +124,7 @@ def _run_one(task: dict, workspace: str, model: str, max_steps: int,
     from sliceagent_cli.code_index import make_code_index
     from sliceagent_cli.code_grep import make_grep_tool
     from sliceagent_cli.coding_tool_host import LocalToolHost
-    from sliceagent_core.events import SliceBuilt, ToolResult, make_dispatcher
+    from sliceagent_core.events import SliceBuilt, StepEnd, ToolResult, make_dispatcher
     from sliceagent_core.llm import OpenAILLM
     from sliceagent_core.loop import run_turn
     from sliceagent_core.pfc import Slice, record_user, slice_sink
@@ -197,7 +197,26 @@ def _run_one(task: dict, workspace: str, model: str, max_steps: int,
         elif isinstance(e, SliceBuilt):
             slices.append(str(e.rendered or ""))
 
-    dispatch = make_dispatcher(slice_sink(state), _cap)
+    # COST AXIS. The control arm's trajectory carries real per-call provider usage, so this arm has to
+    # report the SAME quantities from the same source (the provider's own numbers) rather than an
+    # estimate. Deriving token counts from rendered character counts is not good enough: a chars/4
+    # estimate of the mini arm understated its real peak by 38% (47.3k vs 76.3k measured) and its
+    # cumulative input by 32% (1.46M vs 2.14M), which would have made every efficiency ratio wrong in
+    # our own favour. StepEnd.usage is the provider breakdown (llm._usage_dict), so peak is a real
+    # largest-single-call figure and the cache split is real, not inferred.
+    usage_acc = {"calls": 0, "peak_in": 0, "in_total": 0, "in_cached": 0, "out_total": 0}
+
+    def _usage(e):
+        if isinstance(e, StepEnd):
+            u = e.usage or {}
+            p = int(u.get("prompt_tokens", 0) or 0)
+            usage_acc["calls"] += 1
+            usage_acc["in_total"] += p
+            usage_acc["peak_in"] = max(usage_acc["peak_in"], p)
+            usage_acc["in_cached"] += int(u.get("input_cache_read", 0) or 0)
+            usage_acc["out_total"] += int(u.get("completion_tokens", 0) or 0)
+
+    dispatch = make_dispatcher(slice_sink(state), _cap, _usage)
     llm = OpenAILLM(model=model)
     record_user(state, prompt)
     build = make_build_slice(state, tools, retriever, None, prompt, model_id=model)
@@ -218,6 +237,7 @@ def _run_one(task: dict, workspace: str, model: str, max_steps: int,
         "stop": str(getattr(result, "status", "") or ""),
         "wall_s": round(time.time() - t0, 1),
         "n_steps": int(getattr(result, "steps", 0) or 0),
+        "usage": dict(usage_acc),
     }
 
 

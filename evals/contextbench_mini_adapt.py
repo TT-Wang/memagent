@@ -37,7 +37,7 @@ def adapt(traj: dict) -> tuple[dict, int]:
     moved = 0
     for msg in traj.get("messages") or []:
         m = dict(msg)
-        if m.get("role") == "assistant" and not str(m.get("content") or "").strip():
+        if m.get("role") == "assistant":
             fences = []
             for call in m.get("tool_calls") or []:
                 fn = (call or {}).get("function") or {}
@@ -52,7 +52,15 @@ def adapt(traj: dict) -> tuple[dict, int]:
                     fences.append(f"```bash\n{cmd}\n```")
                     moved += 1
             if fences:
-                m["content"] = "\n\n".join(fences)
+                # APPEND, never replace, and never gate on content being empty. The first version
+                # only fenced when assistant content was blank, on the theory that it must not
+                # overwrite real prose — but the model routinely narrates AND calls a tool in the
+                # same message, so 434 bash calls across 48/50 tasks were dropped before the
+                # extractor ever saw them. That silently deleted retrieval from ONE arm only:
+                # sliceagent's ledger is read from typed tool records and passes through nothing
+                # like this. Appending preserves the prose and the evidence.
+                prior = str(m.get("content") or "").strip()
+                m["content"] = ("\n\n".join([prior] + fences) if prior else "\n\n".join(fences))
         messages.append(m)
     out["messages"] = messages
     return out, moved
