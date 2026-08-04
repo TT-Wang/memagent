@@ -79,7 +79,11 @@ identical across consecutive turns of a scripted session (edits allowed, no topi
 Exit gates: full suite green; NEW lane-parity test (same session state → byte-identical
 prompt with and without an active graph, modulo graph-only tail blocks); reserve-pairing test.
 
-### P5 — Byte gate (the mechanism verdict)
+### P5 — Byte gate (the mechanism verdict) ✦ RAN 2026-08-05 — GATE FAILED, see
+`SESSION-SPINE-P5-VERDICT.md`: mechanism proven (break moved to the spine tip, prefix grows
++~0.5k/turn), ratio structurally capped ~34% on file-heavy s2 because the OPEN FILES/findings
+midsection is ~70% of the request and re-bills below the spine regardless. P6+ are ON HOLD
+pending the owner's re-scope decision (options A/B/C in the verdict doc).
 Instrumented probe (existing harness + system-message assertions from P3), scripted s2-like
 session, spine on vs off.
 Baseline policy (pre-registered): the 39–44% baseline predates P3. After P3 lands, the probe
