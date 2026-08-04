@@ -60,7 +60,9 @@ def main() -> None:
     prompts.append("Add a function median(xs) to core.py (no imports).")
     for i in range(1, N_BLOAT + 1):
         prompts.append(
-            f"Read data/blob_{i:02d}.txt and append ONE line to digest.md: "
+            f"Open data/blob_{i:02d}.txt and read the file IN FULL with your file-reading tool "
+            f"— do not grep/search/extract just one line; the whole content must pass before "
+            f"your eyes (it is an import audit). Then append ONE line to digest.md: "
             f"'blob_{i:02d}: <the 8-char token that appears after MARKER:>'.")
     prompts.append(
         "Quiz A: write the build id you noted earlier (just the id, one line) to "
