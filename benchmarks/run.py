@@ -199,7 +199,7 @@ def run(scn, memory_mode="real"):
                 )
                 recorder.reset()
                 tape_drift += info["drift"]; tape_rebased += len(info["rebased"])
-                tape_compactions += info.get("gc_removed", 0) + info.get("epoch_folds", 0)
+                tape_compactions += info.get("epoch_folds", 0)   # EVENTS only; gc entry counts are not events
             else:
                 # SESSION SPINE parity with the host: the CLI appends each committed turn's digest
                 # (rendered once, at seal) to the session cache. The bench has no artifact store, so

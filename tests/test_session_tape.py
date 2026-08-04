@@ -188,3 +188,22 @@ def test_seeded_secret_absent_from_tape(tmp_path):
     s, tools = _ws(tmp_path, body=f"token = '{secret}'\n")
     _seal(s, tools, [("read", "a.py", (tmp_path / "a.py").read_text(encoding="utf-8"))])
     assert secret not in "".join(s.continuity.session_tape)
+
+
+def test_fold_carries_live_bases_and_bails_when_nothing_foldable(tmp_path):
+    """s11 FAIL@33 root cause: a blind fold swallowed live file bases and the composition
+    contract forced re-reads. The type-aware fold carries every LATEST base across the fold
+    and bails (no empty marker) when only working set remains."""
+    from sliceagent_core.tape import compact_tape, render_tape_base
+    base_a = render_tape_base("a.py", "A " * 400)
+    tape = [f"[turn t-{i} · task k · completed]\nask: {'x' * 300}\n" for i in range(1, 9)]
+    tape.insert(2, base_a)                                   # live base buried in old history
+    info = compact_tape(tape, budget=2_500)
+    assert info["epoch_folds"] == 1
+    assert tape[0].startswith("[epoch compacted:")
+    assert any(e == base_a for e in tape), "live base must survive the fold"
+    # nothing-foldable bail: a tape that is ONLY live bases never stacks empty markers
+    only_bases = [render_tape_base(f"f{i}.py", "B " * 500) for i in range(6)]
+    before = list(only_bases)
+    info2 = compact_tape(only_bases, budget=1_000)
+    assert info2["epoch_folds"] == 0 and only_bases == before

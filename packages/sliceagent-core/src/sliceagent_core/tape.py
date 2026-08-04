@@ -106,13 +106,31 @@ def compact_tape(tape: list, *, budget: int = TAPE_BUDGET_CHARS) -> dict:
     if dead:
         info["gc_removed"] = len(dead)
         tape[:] = [e for i, e in enumerate(tape) if i not in dead]
-    # pass 2: ONE fold sized to reach the budget — the oldest span (merging any earlier epoch
-    # marker so the label keeps the true first turn) collapses into a single marker.
+    # pass 2: ONE type-aware fold sized to reach the budget. Only HISTORY entries (digests,
+    # replies, patches, externals, older epoch markers) fold; a file's LIVE base is working
+    # set, never history — s11's real-workload run proved the blind fold swallows live bases,
+    # the composition contract then forces re-reads, and cost + steps bleed out (FAIL@33,
+    # 36 compaction events, fresh 414k). Live bases inside the fold span are CARRIED to the
+    # tape tail instead (their bytes re-bill once — same price as the re-read they prevent,
+    # without spending the model's steps).
     if total() > budget and len(tape) > 8:
+        latest_base = {}
+        for i, e in enumerate(tape):
+            if e.startswith("[base "):
+                latest_base[e.split(" ", 2)[1]] = i
+        live = set(latest_base.values())
         overshoot = total() - int(budget * _FOLD_TARGET)
-        running, cut = 0, 0
+        running, cut, carried = 0, 0, []
         while cut < len(tape) - 4 and running < overshoot + 200:
-            running += len(tape[cut]); cut += 1
+            if cut in live:
+                carried.append(tape[cut])          # working set: carry, never fold
+            else:
+                running += len(tape[cut])
+            cut += 1
+        if cut - len(carried) <= 0:
+            # nothing foldable (the working set alone exceeds the target): bail rather than
+            # stack empty markers — the budget simply floors at the live bases + recent history
+            return info
         span = tape[:cut]
         turns = [e.split(" ", 2)[1] for e in span if e.startswith("[turn ")]
         first = turns[0] if turns else "start"
@@ -121,9 +139,11 @@ def compact_tape(tape: list, *, budget: int = TAPE_BUDGET_CHARS) -> dict:
             if prev:
                 first = prev
         last = turns[-1] if turns else "…"
-        marker = (f"[epoch compacted: {first}..{last} — {cut} entries removed; the full sealed "
-                  "record remains readable via read_file(\"@sliceagent/history/index.md\")]\n")
-        tape[:] = [marker, *tape[cut:]]
+        folded = cut - len(carried)
+        marker = (f"[epoch compacted: {first}..{last} — {folded} history entries removed; the "
+                  "full sealed record remains readable via "
+                  "read_file(\"@sliceagent/history/index.md\")]\n")
+        tape[:] = [marker, *carried, *tape[cut:]]
         info["epoch_folds"] += 1
     return info
 
