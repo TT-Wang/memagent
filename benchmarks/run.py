@@ -80,13 +80,24 @@ class _Tap:
         # provider endpoint, and cache hooks are part of the model-runner contract.
         return getattr(self.inner, name)
 
-    def complete(self, messages, tools):
-        t0 = time.time()
-        r = self.inner.complete(messages, tools)
+    def _record(self, r, t0):
         u = (r.usage or {}) if hasattr(r, "usage") else {}
+        cached = u.get("input_cache_read", 0) or u.get("cached_tokens", 0) or 0
         self.calls.append({"in": u.get("prompt_tokens", 0), "out": u.get("completion_tokens", 0),
-                           "cached": u.get("cached_tokens", 0), "wall": time.time() - t0})
+                           "cached": cached, "wall": time.time() - t0})
         return r
+
+    def complete(self, messages, tools):
+        return self._record(self.inner.complete(messages, tools), time.time())
+
+    def complete_with_control(self, messages, schemas, **kw):
+        # model_runner FEATURE-DETECTS this richer seam and prefers it whenever the adapter has it
+        # (production OpenAILLM does). __getattr__ forwarded the probe to the inner adapter, so the
+        # entire run flowed through the UNwrapped method and the meter read zero for every field
+        # while the scenario passed — a fully plausible-looking dead meter. Both entry points must
+        # be wrapped; transparent forwarding is exactly what makes the miss invisible.
+        t0 = time.time()
+        return self._record(self.inner.complete_with_control(messages, schemas, **kw), t0)
 
 
 def run(scn):
@@ -122,10 +133,15 @@ def run(scn):
             result = run_turn(build_slice=make_build_slice(state, tools, retriever, memory, p),
                               llm=tap, tools=tools, dispatch=dispatch, max_steps=max_steps)
             ct = tap.calls[n0:]
-            per_turn.append({"turn": i + 1, "peak_in": max((c["in"] for c in ct), default=0),
-                             "in": sum(c["in"] for c in ct), "out": sum(c["out"] for c in ct),
+            from meter import enrich as _enrich
+            per_turn.append({"turn": i + 1, "stop": result.stop_reason,
                              "wall": round(sum(c["wall"] for c in ct), 1),
-                             "stop": result.stop_reason})
+                             **_enrich({"calls": len(ct),
+                                        "peak_in": max((c["in"] for c in ct), default=0),
+                                        "in_total": sum(c["in"] for c in ct),
+                                        "in_cached": sum(c["cached"] for c in ct),
+                                        "out_total": sum(c["out"] for c in ct)},
+                                       os.environ.get("AGENT_MODEL", "deepseek-v4-flash"))})
             # Match the real host lifecycle: semantic state carries; detailed calls/trajectory counters do not.
             state.seal()
             if result.stop_reason != "end_turn":
@@ -136,18 +152,24 @@ def run(scn):
 
     passed, detail = (False, err) if err else scn["verify"](workdir)
     calls = tap.calls
+    from meter import enrich as _enrich
+    totals = _enrich({"calls": len(calls),
+                      "peak_in": max((c["in"] for c in calls), default=0),
+                      "in_total": sum(c["in"] for c in calls),
+                      "in_cached": sum(c["cached"] for c in calls),
+                      "out_total": sum(c["out"] for c in calls)},
+                     os.environ.get("AGENT_MODEL", "deepseek-v4-flash"))
     return {
         "scenario": scn["name"], "passed": bool(passed), "detail": str(detail)[:100],
         "steps": len(calls), "wall_s": round(time.time() - t0, 1),
-        "peak_in": max((c["in"] for c in calls), default=0),
-        "in_total": sum(c["in"] for c in calls), "in_cached": sum(c["cached"] for c in calls),
-        "out_total": sum(c["out"] for c in calls), "per_turn": per_turn,
+        "per_turn": per_turn, **totals,
     }
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Run the sliceagent multi-turn coding benchmark.")
     ap.add_argument("--scenario", default=None, help="one scenario name, or omit for all three")
+    ap.add_argument("--json-out", default="", help="directory to also write one <scenario>.json per run")
     args = ap.parse_args(argv)
     names = [args.scenario] if args.scenario else sorted(
         n for n in os.listdir(TASKS) if os.path.isdir(os.path.join(TASKS, n)))
@@ -159,6 +181,10 @@ def main(argv=None):
             print(f"{name}: setup/run error — {type(e).__name__}: {e}")
             failed = True
             continue
+        if args.json_out:
+            os.makedirs(args.json_out, exist_ok=True)
+            with open(os.path.join(args.json_out, f"{name}.json"), "w", encoding="utf-8") as f:
+                json.dump(r, f, ensure_ascii=False)
         failed = failed or not r["passed"]
         print(f"\n{r['scenario']}: {'PASS' if r['passed'] else 'FAIL'}  "
               f"steps={r['steps']} peak_in={r['peak_in']:,} "
