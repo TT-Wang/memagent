@@ -177,6 +177,16 @@ def run(scn, memory_mode="real"):
                                        os.environ.get("AGENT_MODEL", "deepseek-v4-flash"))})
             # Match the real host lifecycle: semantic state carries; detailed calls/trajectory counters do not.
             state.seal()
+            # SESSION SPINE parity with the host: the CLI appends each committed turn's digest
+            # (rendered once, at seal) to the session cache. The bench has no artifact store, so it
+            # feeds the SAME renderer (R3: one renderer serves every producer) with bench-local turn
+            # ids; the region renders it only under AGENT_SESSION_SPINE=1.
+            from sliceagent.spine import render_turn_digest as _digest
+            state.continuity.session_spine.append(_digest(
+                artifact_id=f"turn-{i + 1:03d}", session_id=session_id, task_id=scn["name"],
+                status="completed" if result.stop_reason == "end_turn" else str(result.stop_reason),
+                user_request=p,
+            ))
             if result.stop_reason != "end_turn":
                 err = f"turn {i + 1} stopped abnormally: {result.stop_reason}"
                 break

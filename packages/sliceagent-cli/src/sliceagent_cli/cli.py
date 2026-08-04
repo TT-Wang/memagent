@@ -585,6 +585,16 @@ def _hydrate_workspace_tasks(store, session, on_log: Callable[[str], None]) -> N
         except Exception as exc:  # noqa: BLE001 — one incompatible task must not hide the others
             on_log(f"local task {checkpoint.task_id} could not be restored "
                    f"({type(exc).__name__}: {exc})")
+    # SESSION SPINE resume (R1): the durable spine is the scan of this SESSION's sealed turn
+    # artifacts. Non-empty only when the process continues an existing session id (a fresh launch
+    # mints a new id, so its spine honestly starts empty — cross-session carry is the deferred R5
+    # workspace_continue work, not silently faked here).
+    try:
+        from sliceagent_core.spine import load_session_spine
+        session.session_spine = load_session_spine(
+            store.coordinator.artifacts.list_all(), session.session_id)
+    except Exception as exc:  # noqa: BLE001 — a torn artifact must not block startup
+        on_log(f"session spine scan failed ({type(exc).__name__}: {exc})")
     # Reconstruct the standing constant-size receipt view from immutable artifacts rather than duplicating it
     # into the semantic task checkpoint.  This keeps it available after restart without making it another
     # writable work-state owner.
@@ -1674,6 +1684,14 @@ def main() -> None:
             copy.deepcopy(receipt_projection) if isinstance(receipt_projection, dict) else None
         )
         sealed_target.continuity.last_receipt_artifact_id = artifact_id
+        # SESSION SPINE (R1): append the digest the seal just froze, from the COMMITTED artifact —
+        # the spine only ever grows from durable truth, never from a pre-seal projection. The
+        # SESSION owns the cache (make_build_slice syncs it into the active slice per turn);
+        # unconditional, because the flag gates rendering only.
+        _spine_digest = sealed_body.get("spine_digest")
+        if isinstance(_spine_digest, str) and _spine_digest:
+            session.session_spine.append(_spine_digest)
+            sealed_target.continuity.session_spine = list(session.session_spine)
         session.tasks[active.task_id] = sealed_target
         session.turn_task_id = None
         _pending_seal_records.pop(active.artifact_id, None)

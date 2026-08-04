@@ -176,6 +176,29 @@ def test_seal_and_recovery_share_renderer_byte_parity(tmp_path):
                      rec_artifact.structured_body["spine_digest"]]
 
 
+def test_session_owns_the_spine_and_build_syncs_the_active_slice(monkeypatch):
+    """The wiring gate (the typed-return-lane lesson: test the WIRING, not the ends): a digest
+    appended to Session.session_spine must reach the ACTIVE slice's rendered prompt on the next
+    build, for whichever task is active — parking a topic must not fork the session record."""
+    from sliceagent_core.memory_null import NullMemory
+    from sliceagent_core.seed import make_build_slice
+    from sliceagent_core.session import Session
+    monkeypatch.setenv("AGENT_SESSION_SPINE", "1")
+    sess = Session(NullMemory())
+    sess.new_topic("first task")
+    entry = "[turn t-1 · task t · completed]\nask: the first thing\n"
+    sess.session_spine.append(entry)
+
+    class _Host:
+        def root(self):
+            return ""
+    build = make_build_slice(sess, _Host(), None, NullMemory(), "second ask")
+    plan = build()
+    rendered = "".join(str(m.get("content", "")) for m in plan)
+    assert entry in rendered
+    assert sess.active().continuity.session_spine == [entry]
+
+
 # ---------------------------------------------------------------- P4 exit gates (roadmap)
 
 def _lane_blocks(st):

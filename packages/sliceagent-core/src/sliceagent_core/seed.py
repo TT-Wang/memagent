@@ -364,7 +364,10 @@ def make_build_slice(state, tools, retriever, memory, task: str, session_id: str
     if cwd:
         env_facts.append(f"- Working directory (cwd): {cwd}")
     gbs = git_branch_status(cwd) if cwd else ""
-    if gbs and os.environ.get("AGENT_SESSION_SPINE", "").strip() != "1":
+    # Flag values: "1" = full spine layout; "p3" = HEAD-STABILITY ONLY (this site + the lessons_memo
+    # keying below, no spine region) — the P5 attribution baseline, so a head-freeze-alone win can
+    # never be booked to the spine (roadmap P5 baseline policy).
+    if gbs and os.environ.get("AGENT_SESSION_SPINE", "").strip() not in ("1", "p3"):
         # R6a: under the spine, the system prefix must be byte-stable across turns — a live
         # branch/dirty/HEAD line here re-bills every downstream byte on each commit or edit. The
         # worktree region already carries live git state in the volatile tail; this line is the
@@ -472,6 +475,12 @@ def make_build_slice(state, tools, retriever, memory, task: str, session_id: str
     # The tags are for legibility only; do not reorder these lines by tag.
     def build() -> list[dict]:
         s = _active(state)                                             # PFC: resolve the active slice
+        if is_session and isinstance(getattr(state, "session_spine", None), list):
+            # SESSION SPINE sync (R1): the Session owns the authoritative in-memory cache of the
+            # sealed-digest scan (it is SESSION-scoped; slices are task-scoped views that would
+            # drift as topics switch). Synced here — the one seam every lane's build passes
+            # through — so any task's slice renders the same frozen record.
+            s.continuity.session_spine = list(state.session_spine)
         current_epoch = int(getattr(state, "workspace_epoch", 0) or 0)
         graph_active = bool(s.active_work.items)
         closure = s.active_work.dependency_closure() if graph_active else ()
@@ -493,7 +502,7 @@ def make_build_slice(state, tools, retriever, memory, task: str, session_id: str
         # slice. This matters on resume: the parked topic keeps its goal, but the new resume message is what
         # the user is asking for RIGHT NOW.
         goal = getattr(getattr(s, "intent", None), "current_request", "") or task
-        if os.environ.get("AGENT_SESSION_SPINE", "").strip() == "1":
+        if os.environ.get("AGENT_SESSION_SPINE", "").strip() in ("1", "p3"):
             # R6b: keyed by the per-turn request, the KNOWLEDGE region's bytes change every turn
             # while sitting in the head — the memory lookup re-runs and re-renders even when the
             # task is unchanged. Under the spine the memo keys by the STABLE task, so the region's

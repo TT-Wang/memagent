@@ -81,6 +81,11 @@ class Session:
         self.tasks: dict[str, Slice] = {}     # task_id -> live bounded slice (in-session)
         self.active_id: str | None = None
         self.turn_task_id: str | None = None  # immutable task binding while one model/tool turn runs
+        # SESSION SPINE (R1): the session-scoped cache of sealed-turn digests — the durable truth is
+        # the artifact scan (spine.load_session_spine); the host appends each committed digest here,
+        # and make_build_slice syncs it into whichever task's slice is active. Session-level because
+        # slices are per-task views: parking a topic must not fork the session's frozen record.
+        self.session_spine: list[str] = []
         # Monotonic only within this live session. Evidence snapshots use it to prove conversational adjacency
         # across task switches; it is intentionally not durable because snapshots are not durable either.
         self.turn_generation: int = 0
