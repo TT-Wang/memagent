@@ -1342,6 +1342,21 @@ def main() -> None:
 
     _bind_active_work_host(base_tools)
     llm.set_cache_key(session.session_id)
+    # PromptLayer is an explicit, fail-open production observer. DeepSeek/provider execution remains on
+    # SliceAgent's existing local credential and transport; only the post-call log is queued to PromptLayer.
+    try:
+        from .promptlayer_observer import make_promptlayer_observer
+
+        _promptlayer = make_promptlayer_observer(
+            session_id=session.session_id,
+            workspace_root=lambda: root,
+        )
+        if _promptlayer is not None:
+            llm.set_model_call_observer(_promptlayer)
+            print(f"  · PromptLayer: on ({_promptlayer.content_mode} content; background logging)")
+    except Exception as exc:  # noqa: BLE001 — optional observer must never block startup
+        _promptlayer = None
+        print(f"  · config warning: PromptLayer disabled ({type(exc).__name__}: {exc})")
     for _recovered in workspace.recovery_results:
         print(f"  · recovered local artifact {_recovered.artifact_id} ({_recovered.status})")
     _pending_seal_records: dict[str, tuple[int, dict]] = {}
@@ -2936,6 +2951,10 @@ def main() -> None:
                     print(f"  · consolidation: {st.get('skills_rejected', 0)} rejected, "
                           f"{st.get('errors', 0)} error(s)")
         _safe("memory close", getattr(memory, "close", lambda: None))  # FTS5 WAL checkpoint
+        if _promptlayer is not None:
+            _pl = _safe("PromptLayer flush", _promptlayer.close) or {}
+            print(f"  · PromptLayer: sent={_pl.get('sent', 0)} failed={_pl.get('failed', 0)} "
+                  f"dropped={_pl.get('dropped', 0)} pending={_pl.get('pending', 0)}")
         if metrics is not None:                                 # the moat number: per-turn fresh-input curve
             s = metrics.summary()
             print(f"  · metrics: per_turn_fresh={s['per_turn_fresh']} avg={s['avg_turn_fresh']} "

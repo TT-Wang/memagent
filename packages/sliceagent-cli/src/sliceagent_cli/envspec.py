@@ -111,6 +111,10 @@ REGISTRY: list[EnvVar] = [
     EnvVar("OPENAI_API_KEY", "provider", "Legacy alias for LLM_API_KEY.", "", secret=True),
     EnvVar("MOONSHOT_API_KEY", "provider", "Legacy alias for LLM_API_KEY (Moonshot).", "", secret=True),
     EnvVar("OPENAI_BASE_URL", "provider", "Legacy alias for LLM_BASE_URL.", ""),
+    EnvVar("PROMPTLAYER_API_KEY", "monitor", "PromptLayer workspace API key. Used only when "
+           "AGENT_PROMPTLAYER is enabled; never sent to the model provider.", "", secret=True),
+    EnvVar("PROMPTLAYER_BASE_URL", "monitor", "PromptLayer API endpoint override.",
+           "https://api.promptlayer.com"),
     # ── UI ────────────────────────────────────────────────────────────────────────────────────
     EnvVar("AGENT_TUI", "ui", "UI mode: live (default — the pinned rich TUI) or off (plain stdout; "
            "pipes/CI). The inline REPL tier is retired; legacy values rich/inline/repl mean live.",
@@ -143,6 +147,15 @@ REGISTRY: list[EnvVar] = [
     EnvVar("AGENT_MONITOR", "monitor", "Set truthy to enable the live monitor server.", ""),
     EnvVar("AGENT_MONITOR_PORT", "monitor", "Port for the monitor server.", ""),
     EnvVar("SLICEAGENT_MONITOR_DIR", "monitor", "Directory the monitor writes slice snapshots to.", ""),
+    EnvVar("AGENT_PROMPTLAYER", "monitor", "Opt in to background PromptLayer request logging. "
+           "Provider calls still use the existing local DeepSeek/OpenAI-compatible credential.", ""),
+    EnvVar("AGENT_PROMPTLAYER_CONTENT", "monitor", "PromptLayer payload policy: metadata uploads keyed "
+           "digests/roles/tool names only; full also uploads exact prompt, tool schemas/arguments, and output.",
+           "metadata", choices=("metadata", "full"), validate=True),
+    EnvVar("AGENT_PROMPTLAYER_TAGS", "monitor", "Comma-separated low-cardinality tags added to every "
+           "PromptLayer request log.", ""),
+    EnvVar("AGENT_PROMPTLAYER_ENVIRONMENT", "monitor", "PromptLayer environment tag, such as "
+           "development, staging, or production.", "development"),
     EnvVar("SLICEAGENT_DEBUG_TRACE", "debug", "Set truthy to print tracebacks for parked/hook errors.", ""),
     EnvVar("SLICEAGENT_NO_CLOSURE", "debug", "Debug flag: disable the turn closeout call.", ""),
     EnvVar("SLICEAGENT_PROMPT_FILE", "debug", "A/B experiment seam: path to a full SYSTEM_PROMPT template "

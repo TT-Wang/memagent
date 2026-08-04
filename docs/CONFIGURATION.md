@@ -2,7 +2,7 @@
 
 _Auto-generated from `src/sliceagent/envspec.py` — do not edit by hand (`python scripts/gen_config_reference.py`)._
 
-sliceagent reads **67** environment variables across **6** groups; every value is validated at startup (a misspelled enum warns instead of silently defaulting). Run `sliceagent config --list` to see the resolved value of each on your machine. Secrets (🔒) are read from the environment / config and never printed.
+sliceagent reads **73** environment variables across **6** groups; every value is validated at startup (a misspelled enum warns instead of silently defaulting). Run `sliceagent config --list` to see the resolved value of each on your machine. Secrets (🔒) are read from the environment / config and never printed.
 
 ## agent
 
@@ -68,7 +68,13 @@ sliceagent reads **67** environment variables across **6** groups; every value i
 | `AGENT_METRICS` | — | Set truthy to print per-turn fresh-token (moat) metrics at exit. |
 | `AGENT_MONITOR` | — | Set truthy to enable the live monitor server. |
 | `AGENT_MONITOR_PORT` | — | Port for the monitor server. |
+| `AGENT_PROMPTLAYER` | — | Opt in to background PromptLayer request logging. Provider calls still use the existing local DeepSeek/OpenAI-compatible credential. |
+| `AGENT_PROMPTLAYER_CONTENT` | `metadata` | PromptLayer payload policy: metadata uploads keyed digests/roles/tool names only; full also uploads exact prompt, tool schemas/arguments, and output. _(choices: metadata, full)_ |
+| `AGENT_PROMPTLAYER_ENVIRONMENT` | `development` | PromptLayer environment tag, such as development, staging, or production. |
+| `AGENT_PROMPTLAYER_TAGS` | — | Comma-separated low-cardinality tags added to every PromptLayer request log. |
 | `AGENT_TIMING` | — | Set truthy to print a per-turn latency breakdown (slice build vs model). |
+| `PROMPTLAYER_API_KEY` 🔒 | — | PromptLayer workspace API key. Used only when AGENT_PROMPTLAYER is enabled; never sent to the model provider. |
+| `PROMPTLAYER_BASE_URL` | `https://api.promptlayer.com` | PromptLayer API endpoint override. |
 | `SLICEAGENT_MONITOR_DIR` | — | Directory the monitor writes slice snapshots to. |
 
 ## provider
