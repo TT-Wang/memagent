@@ -125,12 +125,14 @@ def run_sliceagent(name, sc):
         print(f"  [mem {name} stage{i+1}/{len(sc['stages'])}] calls={len(tap.calls)} "
               f"call_ins(k)={[c['prompt']//1000 for c in tap.calls]}", flush=True)
     passed, vout = grade(sc, repo)
+    efficiency = tools.efficiency_metrics()
     shutil.rmtree(repo, ignore_errors=True)
     return {"task": name, "agent": "sliceagent", "passed": passed, "stages": len(sc["stages"]),
             "tools": ctr["tools"], "in_total": sum(c["prompt"] for c in sess),
             "in_cached": sum(c.get("cached", 0) for c in sess),
             "out_total": sum(c["completion"] for c in sess), "peak_in": max(peaks, default=0),
-            "peaks": peaks, "steps": steps_log, "wall_s": round(time.time() - t0, 1), "verify_tail": vout[-400:]}
+            "peaks": peaks, "steps": steps_log, "wall_s": round(time.time() - t0, 1), "verify_tail": vout[-400:],
+            **efficiency}
 
 
 def codex_turn(prompt, repo):

@@ -20,7 +20,7 @@ import math
 import queue as _stdqueue
 import threading
 import time
-from collections import Counter, deque
+from collections import Counter, OrderedDict, deque
 from collections.abc import Mapping
 
 from .access import AllAccess, FileAccess, ReadAllAccess
@@ -92,6 +92,16 @@ _OBSERVATION_REPEAT_NUDGE = (
     "one concise question if a genuinely missing choice prevents progress. Ordinary tools remain available."
 )
 
+# T4 A/B arm: repeated exact observations are still physically re-read so freshness is preserved, but the
+# second identical body may be represented to the model by a small typed alias when the host can persist the
+# exact bytes behind a read_file locator. OFF by default; the control path below is byte-for-byte unchanged.
+_register_flag(Flag(
+    "result_alias",
+    "A/B arm: replace a repeated exact observation body with a lossless locator alias",
+))
+_RESULT_ALIAS_TAG = "sliceagent_result_alias"
+_RESULT_ALIAS_MAX_KEYS = 128
+
 
 class _ObservationRepeatAdvisory:
     """One-shot, per-turn detector for varying reads that yield one repeated observation.
@@ -137,6 +147,105 @@ class _ObservationRepeatAdvisory:
                 self._emitted = True
                 return True
         return False
+
+
+class _ResultAliasExperiment:
+    """Per-turn presentation-only T4 arm.
+
+    Every call still executes.  Only a SUCCEEDED, deduplicable observation whose canonical call identity and
+    complete result digest both match its immediately remembered value is eligible.  The host must first
+    persist that exact result and return a read_file locator; if it cannot, the full result remains inline.
+    Canonical ToolOutcome/ToolResult events are published before this projection and therefore retain the
+    complete observation for receipts, reducers, and audit.
+    """
+
+    def __init__(self, *, max_keys: int = _RESULT_ALIAS_MAX_KEYS):
+        self._seen: OrderedDict[str, bytes] = OrderedDict()
+        self._max_keys = max(1, int(max_keys))
+
+    @staticmethod
+    def _candidate(row: dict) -> tuple[str, str, bytes] | None:
+        name = str(row.get("name") or "")
+        if name not in DEDUP_SAFE_TOOL_NAMES or row.get("status") != ToolStatus.SUCCEEDED.value:
+            return None
+        output = str(row.get("output") or "")
+        if not output.strip():
+            return None
+        args = row.get("args") or {}
+        # A locator read is already the recovery path. Aliasing it again would create an unnecessary chain.
+        path = str(args.get("path") or "").replace("\\", "/") if isinstance(args, Mapping) else ""
+        if ".sliceagent/blobs/" in path:
+            return None
+        try:
+            key = name + "\x00" + canonical_tool_args(args)
+        except Exception:
+            return None
+        digest = hashlib.sha256(output.encode("utf-8", "replace")).digest()
+        return key, output, digest
+
+    def project(self, rows: list[dict], tools) -> list[dict]:
+        arm_enabled = _flag_enabled("result_alias")
+        preserve = getattr(tools, "preserve_observation_result", None)
+        observe_repeat = getattr(tools, "record_result_repeat", None)
+        # The control arm may retain counter-only observation so the paired report can identify its repeated
+        # stratum. With neither a treatment capability nor a counter sink, this is literally a no-op.
+        if not arm_enabled and not callable(observe_repeat):
+            return rows
+        # Freeze the prior-batch view. Two twins first introduced in one provider batch are handled by the
+        # existing same-wave execution dedup and must not qualify as a *cross-step re-observation*.
+        prior_seen = dict(self._seen)
+        projected = []
+        for original in rows:
+            row = original
+            candidate = self._candidate(original)
+            if candidate is not None:
+                key, output, digest = candidate
+                prior = prior_seen.get(key)
+                self._seen[key] = digest
+                self._seen.move_to_end(key)
+                while len(self._seen) > self._max_keys:
+                    self._seen.popitem(last=False)
+                if prior == digest:
+                    if callable(observe_repeat):
+                        try:
+                            observe_repeat(source_chars=len(output))
+                        except Exception:
+                            pass
+                    locator = None
+                    if arm_enabled and callable(preserve):
+                        try:
+                            locator = preserve(
+                                str(original.get("name") or ""), original.get("args") or {}, output,
+                            )
+                        except Exception:
+                            locator = None
+                    if arm_enabled and locator:
+                        digest_hex = digest.hex()
+                        import json as _json
+                        alias = (
+                            f'<{_RESULT_ALIAS_TAG} version="1" sha256="{digest_hex}" '
+                            f'chars="{len(output)}">unchanged exact observation; full result: '
+                            f'read_file({_json.dumps(str(locator), ensure_ascii=False)})'
+                            f'</{_RESULT_ALIAS_TAG}>'
+                        )
+                        row = dict(original)
+                        row["output"] = alias
+                        # Host/eval-only diagnostic. Provider projection reads only ``output``; canonical
+                        # ToolOutcome remains the already-published full result.
+                        row["result_alias"] = {
+                            "sha256": digest_hex,
+                            "source_chars": len(output),
+                            "inline_chars": len(alias),
+                            "locator": str(locator),
+                        }
+                        observe_alias = getattr(tools, "record_result_alias", None)
+                        if callable(observe_alias):
+                            try:
+                                observe_alias(source_chars=len(output), inline_chars=len(alias))
+                            except Exception:
+                                pass
+            projected.append(row)
+        return projected
 
 
 def _dedup_key(name: str, args):
@@ -1581,6 +1690,7 @@ def run_turn(*, build_slice, llm, tools, scheduler: ToolScheduler | None = None,
     slice_built_dispatched = False
     model_attempts: dict[int, int] = {}
     repeated_observation = _ObservationRepeatAdvisory()
+    result_alias = _ResultAliasExperiment()
     failure_origin = ""
     response_only_next = False
     length_continuations = 0   # bounded finish_reason=length resumes (Hermes parity: 3, then park)
@@ -2164,6 +2274,10 @@ def run_turn(*, build_slice, llm, tools, scheduler: ToolScheduler | None = None,
                     steer_probe=_steer_pending,
                 )
                 tool_phase = False
+                # Observe the canonical full bodies first. T4 then changes only the provider-facing view;
+                # reducer/audit events and the convergence advisory keep the real result.
+                repeated_nudge = repeated_observation.observe(results)
+                results = result_alias.project(results, tools)
                 catastrophic_stop: str | None = None
                 park_control = None
                 park_conflict = False
@@ -2186,7 +2300,7 @@ def run_turn(*, build_slice, llm, tools, scheduler: ToolScheduler | None = None,
                     for report in batch_child_reports
                     if report["tool_call_id"]
                 })
-                if repeated_observation.observe(results):
+                if repeated_nudge:
                     # Model-only liveness advice after every real result has been delivered. It is neither a
                     # rejection nor a stop condition, and deliberately emits no presentation event to the user.
                     messages.append({"role": "user", "content": _OBSERVATION_REPEAT_NUDGE})
