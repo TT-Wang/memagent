@@ -58,10 +58,11 @@ def test_event_time_snapshots_make_replay_an_identity(tmp_path):
     info = _seal(s, tools, rec.rows)
     tape = s.continuity.session_tape
     assert info["drift"] == 0 and info["rebased"] == []
+    # defer-base: the FIRST edit founds the base (post-state return 2); the second is a true diff
+    assert sum(1 for e in tape if e.startswith("[base a.py")) == 1
     patches = [e for e in tape if e.startswith("[patch a.py")]
-    assert len(patches) == 2
-    assert "-    return 1" in patches[0] and "+    return 2" in patches[0]
-    assert "-    return 2" in patches[1] and "+    return 3" in patches[1]
+    assert len(patches) == 1
+    assert "-    return 2" in patches[0] and "+    return 3" in patches[0]
     disk = (tmp_path / "a.py").read_text(encoding="utf-8")
     assert s.continuity.tape_files["a.py"]["hash"] == _h(disk)
 
@@ -78,7 +79,7 @@ def test_long_chain_never_rebases_small_edits(tmp_path):
     tape = s.continuity.session_tape
     assert info["rebased"] == [] and info["drift"] == 0
     assert sum(1 for e in tape if e.startswith("[base a.py")) == 1
-    assert sum(1 for e in tape if e.startswith("[patch a.py")) == 20
+    assert sum(1 for e in tape if e.startswith("[patch a.py")) == 19
 
 
 def test_full_rewrite_picks_base_by_size_not_policy(tmp_path):
@@ -90,14 +91,15 @@ def test_full_rewrite_picks_base_by_size_not_policy(tmp_path):
     rows.append(("edit", "a.py", rewrite))
     info = _seal(s, tools, rows)
     tape = s.continuity.session_tape
-    assert info["rebased"] == ["a.py"]                      # diff >= body -> fresh base wins
-    assert sum(1 for e in tape if e.startswith("[base a.py")) == 2
+    assert info["rebased"] == []                            # first edit FOUNDS the base
+    assert sum(1 for e in tape if e.startswith("[base a.py")) == 1
+    assert "COMPLETELY" in next(e for e in tape if e.startswith("[base a.py"))
     assert not any(e.startswith("[patch a.py") for e in tape)
 
 
 def test_honesty_net_catches_out_of_band_change(tmp_path):
     s, tools = _ws(tmp_path)
-    _seal(s, tools, [("read", "a.py", (tmp_path / "a.py").read_text(encoding="utf-8"))])
+    _seal(s, tools, [("edit", "a.py", (tmp_path / "a.py").read_text(encoding="utf-8"))])
     (tmp_path / "a.py").write_text("SHELL WROTE THIS\n", encoding="utf-8")
     info = _seal(s, tools, [], n=2)
     tape = s.continuity.session_tape
@@ -113,7 +115,7 @@ def test_region_layout_and_flags(tmp_path, monkeypatch):
     from sliceagent_core.memory_null import NullMemory
     from sliceagent_core.seed import make_build_slice
     s, tools = _ws(tmp_path)
-    _seal(s, tools, [("read", "a.py", (tmp_path / "a.py").read_text(encoding="utf-8"))])
+    _seal(s, tools, [("edit", "a.py", (tmp_path / "a.py").read_text(encoding="utf-8"))])
     monkeypatch.setenv("AGENT_SESSION_TAPE", "1")
     monkeypatch.delenv("AGENT_SESSION_SPINE", raising=False)
     plan = make_build_slice(s, tools, None, NullMemory(), "edit a.py")()
@@ -186,7 +188,7 @@ def test_compaction_contract_gc_then_epoch_fold(tmp_path):
 def test_seeded_secret_absent_from_tape(tmp_path):
     secret = "sk-test-secret-0123456789abcdef"
     s, tools = _ws(tmp_path, body=f"token = '{secret}'\n")
-    _seal(s, tools, [("read", "a.py", (tmp_path / "a.py").read_text(encoding="utf-8"))])
+    _seal(s, tools, [("edit", "a.py", (tmp_path / "a.py").read_text(encoding="utf-8"))])
     assert secret not in "".join(s.continuity.session_tape)
 
 

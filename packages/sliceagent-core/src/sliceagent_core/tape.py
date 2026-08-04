@@ -211,13 +211,16 @@ def tape_seal_update(s, tools, rows, *, session_id: str, artifact_id: str, task_
     for kind, path, snapshot in rows:
         if snapshot is None:
             continue
+        if kind == "read":
+            # DEFER-BASE-UNTIL-EDIT (cost review item 6, forced by s10: 40 read-only blobs would
+            # colonize the tape with ~360k chars of bases). Read-only material lives in the
+            # trajectory + the hash index; the tape tracks only files the model AUTHORS. The
+            # composition contract already routes "absent from the tape" to a re-read.
+            continue
         body_r = redact_text(snapshot, code_file=True)
         if path not in files:
-            # first observation (read or edit of an untracked file) -> base
-            _append_base(path, body_r)
+            _append_base(path, body_r)      # first EDIT of an untracked file -> base = post-state
             touched.append(path)
-            continue
-        if kind == "read":
             continue
         touched.append(path)
         state = files[path]
