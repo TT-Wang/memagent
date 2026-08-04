@@ -62,6 +62,7 @@ evals/*
 !evals/slipstream_replay.py
 !evals/contextbench_run.py
 !evals/contextbench_mini_adapt.py
+!evals/contextbench_kimi.py
 !evals/seed_baseline.py
 !evals/usersim.py
 # The component-A/B engine + its metric harnesses are load-bearing deliverable infra (spec P2):
