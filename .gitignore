@@ -101,6 +101,8 @@ docs/*
 # Peer collaboration (C1/C2/C4): the conformance contract and the host design that makes
 # those primitives reachable from production are one design contract, so both are versioned.
 !docs/PEER-PARK-HOST-DESIGN.md
+!docs/SESSION-SPINE-DESIGN.md
+!docs/SESSION-SPINE-MAP.md
 
 # ColBench raw HF dataset (huge; selected tasks are committed under evals/colbench/tasks/)
 evals/colbench/data/
