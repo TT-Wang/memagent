@@ -95,6 +95,7 @@ def extract_one(path: str) -> tuple[dict, list, int]:
     """-> (spans_by_file, steps, escapes). Paths normalised repo-relative; absolute paths outside
     the task workspace count as escapes."""
     calls_by_id = {}
+    read_paths = {}
     steps = []
     union: dict[str, list] = {}
     escapes = 0
@@ -133,10 +134,12 @@ def extract_one(path: str) -> tuple[dict, list, int]:
                 name = fn.get("name")
                 calls_by_id[c.get("id")] = name
                 if name == "Read":
-                    lo = int(a.get("line_offset") or 1)
-                    n = int(a.get("n_lines") or 0)
-                    add(step_spans, a.get("path") or a.get("file_path"), lo,
-                        lo + max(n - 1, 0) if n else lo + 4000)
+                    # Span comes from the RESULT's numbered lines (below), never from the args:
+                    # 36% of Reads omit n_lines, and the first extractor bridged that with a
+                    # fabricated 4000-line span — inflating line pred_size ~15x, which crushed
+                    # line precision to 0.021 while flattering coverage. The result shows exactly
+                    # the numbered range the model saw, the same rule sliceagent's ledger uses.
+                    read_paths[c.get("id")] = rel(a.get("path") or a.get("file_path") or "")
                 elif name == "Bash":
                     for v in _bash_views(str(a.get("command") or "")):
                         f2 = rel(str(v.get("file") or ""))
@@ -148,6 +151,12 @@ def extract_one(path: str) -> tuple[dict, list, int]:
             if step_spans:
                 steps.append(step_spans)
         elif o.get("role") == "tool":
+            if o.get("tool_call_id") in read_paths:
+                f2 = read_paths.pop(o.get("tool_call_id"))
+                nums = [int(m) for m in re.findall(r"^\s*(\d+)\t", str(o.get("content") or ""),
+                                                   re.M)]
+                if f2 and nums:
+                    steps.append({f2: [[min(nums), max(nums)]]})
             if calls_by_id.get(o.get("tool_call_id")) == "Grep":
                 gsp: dict[str, list] = {}
                 for f, n in _HIT.findall(str(o.get("content") or "")):
