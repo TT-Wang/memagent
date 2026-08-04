@@ -1,0 +1,17 @@
+[
+  "I want to tag my notes. Give add a repeatable --tag option and store the tags on each note in a tags field (an empty list when none are given). Then let list take a --tag option so it only shows notes carrying exactly that tag. The existing add/list/find behavior has to keep working.",
+
+  "Record when each note is created: store an ISO timestamp on the note record in a created_at field. Then add a --since YYYY-MM-DD option to list so I only see notes created on or after that date.",
+
+  "Tags are getting messy — 'Python', ' python' and 'PYTHON  3' style variants pile up as different tags. Normalize every tag: lowercase it, strip leading and trailing whitespace, and collapse each run of internal whitespace down to a single '-'. Apply it both when add stores a tag and when list --tag filters, so that 'My  Tag ' and 'my-tag' mean the same tag everywhere.",
+
+  "I need to archive old notes without deleting them. Add archive ID and unarchive ID commands that flip an archived flag on the note record. Archived notes should be hidden from list and find by default; give both commands an --all flag that includes them again.",
+
+  "Add a search TEXT command that actually finds things: match case-insensitively against title and body (substring matching is fine), and also match against tags — searching for a tag's name should surface the notes tagged with it, with the same forgiving tag matching we already have elsewhere. Archived notes stay out of search results unless --all is passed.",
+
+  "Actually, that tag cleanup we added a while back is biting people — someone tagged a note 'API Design' and it got stored as 'api-design'. Take it back out, and take it out cleanly: I don't want that cleanup logic left lying around in the code, and if any docs or tests still describe it, clear those up too. Tags should go back to working the way they did before we brought it in. Don't rewrite anything already in the file — notes that already got the cleaned-up tags keep them, and looking those tags up by their stored form still has to work. And be careful with the search we added after that: it has to keep behaving exactly the way it does now.",
+
+  "Add a rename-tag OLD NEW command. It should go through every note — archived ones too — and wherever a tag equals OLD exactly as stored, replace it with NEW exactly as I typed it: no cleanup, no case-folding, nothing clever. Print how many notes were changed.",
+
+  "One more tag request: bring back that normalization behavior we removed, but strictly opt-in this time. Add a --normalize-tags flag to add and to list. With the flag, add cleans up incoming tags exactly the way it used to back then, and list --tag cleans up the query the same way before matching. Without the flag, everything stays raw exactly as it is now."
+]
