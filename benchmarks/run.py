@@ -158,7 +158,7 @@ def run(scn, memory_mode="real"):
     # so the seal can append host-authored bases/patches (SESSION-TAPE-DESIGN §2). Inert otherwise.
     from sliceagent.tape import TapeRecorder, tape_seal_update
     tape_on = os.environ.get("AGENT_SESSION_TAPE", "").strip() == "1"
-    recorder = TapeRecorder()
+    recorder = TapeRecorder(tools)
     if tape_on:
         sinks.append(recorder.sink)
     # State reduction is authoritative, not a best-effort observer. A reducer failure must fail the eval.

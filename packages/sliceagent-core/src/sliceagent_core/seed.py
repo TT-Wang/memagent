@@ -506,10 +506,11 @@ def make_build_slice(state, tools, retriever, memory, task: str, session_id: str
         # read-first discipline: reads become the exception (hash mismatch / untracked), not the rule.
         locators_block = (
             "\n\n# WORKSPACE FILES VIA THE SESSION TAPE\n"
-            "File contents live in the SESSION TAPE as [base] versions plus the [patch]es you "
-            "already applied — the host recorded each patch exactly as it executed, so composing "
-            "base+patches mentally gives you the current file. Every patch shows the resulting "
-            "sha256; the OPEN FILES index shows each file's CURRENT on-disk sha256.\n"
+            "File contents live in the SESSION TAPE as [base] versions plus [patch] entries — "
+            "each patch is the EXACT unified diff of an edit you already made, recorded by the "
+            "host from the file itself, so applying base+patches in order gives you the current "
+            "file verbatim. Every patch shows the resulting sha256; the OPEN FILES index shows "
+            "each file's CURRENT on-disk sha256.\n"
             "Rules:\n"
             "1. Hashes match -> your composition IS the file: edit directly, no read needed.\n"
             "2. File absent from the tape, marked [external], or hash mismatch -> read_file "
