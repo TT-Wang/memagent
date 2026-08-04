@@ -36,6 +36,7 @@ from .regions import (
     render_context_selection,
     render_regions,
     render_threads,
+    stream_mode,
 )
 from .safety import wrap_untrusted
 from .sensory_cortex import (
@@ -474,6 +475,17 @@ def make_build_slice(state, tools, retriever, memory, task: str, session_id: str
         ) else ""
     except Exception:
         repo_map_text = ""
+    if stream_mode() and repo_map_text:
+        # Frozen-stream layouts (spine/tape): the map lives in msg0, ABOVE the stream — any byte
+        # change there re-bills the entire prompt (s11 measured: 3 map refreshes as the model
+        # created files = full-prompt cache misses). Freeze the FIRST computed map for the
+        # session; files authored after that are visible through the tape + the OPEN FILES index,
+        # which are the on-stream truth anyway.
+        frozen = getattr(state, "_frozen_repo_map", None)
+        if frozen is None:
+            state._frozen_repo_map = repo_map_text
+        else:
+            repo_map_text = frozen
     # DELEGATION (swarm) guidance — included ONLY when spawn_* tools are actually offered (sub_depth>0 and not a
     # read-only child). Computed ONCE: schemas are stable per session, so the system message stays byte-stable
     # (prompt-cache warm). Without spawn tools the block is empty (we never advertise a tool the model lacks).

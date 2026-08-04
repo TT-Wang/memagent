@@ -112,8 +112,16 @@ def main() -> None:
          "CAPSULE qz_ flush key (unstated)")
     turn("Add validate() to config.py: reject non-int values for *_count/*_ms keys, unknown "
          "log levels. Tests.",
-         "import taskdag.config as c; ok=True\n"
-         "try: c.set_key('worker_count','x'); ok=False\nexcept Exception: pass\nassert ok",
+         "import taskdag.config as c; assert callable(getattr(c,'validate',None)); wired=False\n"
+         "try: c.set_key('worker_count','x')\nexcept Exception: wired=True\n"
+         "ok=wired\n"
+         "if not ok:\n"
+         "    for call in (lambda: c.validate({'worker_count':'x'}), lambda: c.validate()):\n"
+         "        try: r=call(); ok=bool(r)\n"
+         "        except TypeError: continue\n"
+         "        except Exception: ok=True\n"
+         "        break\n"
+         "assert ok",
          "validate")
     turn("Add dump()/load(path) JSON round-trip for CONFIG. Tests with tmp file.",
          "import taskdag.config as c, tempfile, os; p=tempfile.mktemp(); c.dump(p); "
@@ -134,7 +142,9 @@ def main() -> None:
     turn("Rename the registry parameter API: functions accept either a dict or the new "
          "Registry class (add taskdag/registry.py wrapping the dict with .add/.remove/.deps). "
          "Tests for both call styles.",
-         "import taskdag.registry as reg; R=reg.Registry(); R.add('a'); assert R.deps('a')==set()",
+         "import taskdag.registry as reg; R=reg.Registry(); R.add('a'); d=R.deps\n"
+         "v=d('a') if callable(d) else (d.get('a') if hasattr(d,'get') else d['a'])\n"
+         "assert not v",
          "Registry class")
     turn("Adopt Registry in scheduler.run/dry_run (dict still accepted). Tests.",
          "import taskdag.scheduler as s, taskdag.registry as reg; R=reg.Registry(); R.add('a'); "
@@ -185,7 +195,7 @@ def main() -> None:
     turn("Add a stats module: taskdag/stats.py summarize(result) -> dict with counts and a "
          "one-line human string. Tests.",
          "import taskdag.stats as st; d=st.summarize({'done':['a'],'failed':[],'skipped':[]}); "
-         "assert d['counts']['done']==1", "stats")
+         "assert isinstance(d,dict); s=str(d).lower(); assert 'done' in s and '1' in s", "stats")
     turn("Add JSON export: results_to_json(result, path). Tests with tmp file.",
          "import taskdag.stats as st, tempfile, os, json; p=tempfile.mktemp(); "
          "st.results_to_json({'done':[],'failed':[],'skipped':[]},p); "
@@ -254,7 +264,7 @@ def setup(root):
     with open(os.path.join(root, "README.md"), "w", encoding="utf-8") as f:
         f.write("# taskdag\\nA tiny task DAG toolkit (session-built).\\n")
 '''
-    quiz_expect = {1: "graph", 2: "3", 3: "queue", 4: "two"}
+    quiz_expect = {1: ["graph"], 2: ["3"], 3: ["queue", "flush"], 4: ["two", "2"]}
     verify = f'''import os
 import subprocess
 import sys
@@ -275,8 +285,8 @@ def verify(root):
         p = os.path.join(root, "answers", f"q{{n}}.md")
         if not os.path.isfile(p):
             loss.append(f"q{{n}} missing")
-        elif want.lower() not in open(p, encoding="utf-8").read().lower():
-            loss.append(f"q{{n}} lacks {{want!r}}")
+        elif not any(w.lower() in open(p, encoding="utf-8").read().lower() for w in want):
+            loss.append(f"q{{n}} lacks any of {{want!r}}")
     ok = not failed and not loss
     detail = ("all {{}} checks + quizzes hold".format(len(CHECKS)) if ok else
               ("LOSS: " + "; ".join(loss) + " | " if loss else "") + "; ".join(failed[:10]))

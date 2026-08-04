@@ -57,8 +57,8 @@ def render_tape_patch(path: str, diff: str, post_hash: str) -> str:
 
 
 def render_tape_external(path: str, new_hash: str, reason: str) -> str:
-    return (f"[external {path} -> @sha256:{new_hash} — {reason}; the base below is the "
-            "current truth]\n")
+    return (f"[external {path} -> @sha256:{new_hash} — {reason}; the entry below re-anchors "
+            "to the current on-disk truth]\n")
 
 
 # The reply entry replaces the RECENT CONVERSATION region under the tape (census 2026-08-05:
@@ -249,7 +249,17 @@ def tape_seal_update(s, tools, rows, *, session_id: str, artifact_id: str, task_
             reason = ("changed after your last recorded edit this turn (a command/script "
                       "modified it)" if path in touched else "changed outside the recorded edits")
             tape.append(render_tape_external(path, _h(body_r), reason))
-            _append_base(path, body_r)
+            # Re-anchor with the SAME size-choice as recorded edits (s11 measured: 18 drifts ×
+            # full-body bases dominated re-anchor bytes; a script's delta is usually small).
+            # Provenance stays loud in the [external] notice; composition stays exact — we hold
+            # the last recorded content, so the diff to disk truth is as sound as a fresh base.
+            state = files[path]
+            diff = unified_patch(path, state["content"], body_r)
+            if len(diff) < len(body_r):
+                state.update(content=body_r, hash=_h(body_r))
+                tape.append(render_tape_patch(path, diff, state["hash"]))
+            else:
+                _append_base(path, body_r)
             if path not in rebased:
                 rebased.append(path)
 
