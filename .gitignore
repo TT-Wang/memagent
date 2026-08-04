@@ -65,6 +65,10 @@ evals/*
 !evals/contextbench_kimi.py
 !evals/seed_baseline.py
 !evals/usersim.py
+# Session Spine P5 byte gate: probe + pre-registered verdict are load-bearing infra
+# (captured run data in evals/spine_probe_runs/ stays local).
+!evals/spine_probe.py
+!evals/spine_probe_verdict.py
 # The component-A/B engine + its metric harnesses are load-bearing deliverable infra (spec P2):
 # code is versioned, captured run data (prompt_ab/runs/, *.json results) stays local.
 !evals/prompt_ab/
