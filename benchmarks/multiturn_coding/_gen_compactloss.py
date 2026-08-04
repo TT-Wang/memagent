@@ -33,7 +33,7 @@ OUT = os.path.join(HERE, "s10_compactloss")
 
 BUILD_ID = "bx-" + hashlib.sha256(b"s10-compactloss-build").hexdigest()[:10]
 LINT_ERROR = "E9107 dangling-sentinel: 'qz_marker' bound but never sealed (frame 3)"
-N_BLOAT = 40
+N_BLOAT = 64
 
 
 def main() -> None:
