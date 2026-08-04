@@ -504,6 +504,25 @@ def make_build_slice(state, tools, retriever, memory, task: str, session_id: str
             s, tools, full_file_lines=FULL_FILE_LINES, read_budget=read_budget,
             selected_paths=graph_paths,
         )
+        # AGENT_FREEZE_OPEN_FILES=1 — freeze the OPEN FILES bytes for the duration of ONE turn.
+        # Within a turn the seed is re-projected per call, and every edit re-renders the edited
+        # file, invalidating the provider's prefix cache for everything after it — the measured #1
+        # same-turn break source (two instrumented diagnoses; e.g. test_seed.py x9). The model's own
+        # edits are already visible in the trajectory (tool results), which is exactly how a
+        # transcript agent survives without any live-file view, so the turn-START snapshot plus the
+        # trajectory is complete information. Cache key = object identity + turn ordinal: a new turn
+        # (seal/reset increments s.turns) naturally invalidates; nothing persists across turns.
+        if os.environ.get("AGENT_FREEZE_OPEN_FILES", "").strip() == "1":
+            _key = (id(s), int(getattr(s, "turns", 0) or 0))
+            _frozen = getattr(make_build_slice, "_frozen_artifacts", None)
+            if _frozen is None:
+                _frozen = {}
+                make_build_slice._frozen_artifacts = _frozen
+            if _key in _frozen:
+                artifacts = _frozen[_key]
+            else:
+                _frozen.clear()            # keep exactly one turn's snapshot — no growth
+                _frozen[_key] = artifacts
         open_file_paths = physical_active_files(
             s, tools, s.active_files if graph_paths is None else graph_paths,
         )

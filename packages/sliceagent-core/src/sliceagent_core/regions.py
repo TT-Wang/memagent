@@ -1208,7 +1208,18 @@ def build_context_blocks(ctx: dict) -> tuple[ContextBlock, ...]:
         # REGION_ORDER's relative order is preserved. Default stays the attention layout pending
         # the pre-registered A/B (quality parity gate + fresh-token delta).
         _layout = os.environ.get("AGENT_SEED_LAYOUT", "").strip().lower()
-        if _layout == "v3":
+        if _layout == "m1":
+            # m1 — the MINIMAL move: only the two measured cross-turn/per-step offenders go to the
+            # tail (findings 8, intent 9); every other region keeps its declared slot. The v1/v2/v3
+            # lesson was that wholesale reordering destabilizes constraint-discipline scenarios
+            # (s5 failed under all three) — m1 perturbs exactly two regions, both TOWARD the ask
+            # cluster at the end, where the intent region sits beside the CURRENT REQUEST it
+            # restates obligations for.
+            if name == "findings":
+                slot = 8
+            elif name == "intent":
+                slot = 9
+        elif _layout == "v3":
             # v3 — chronology-mimicking order (the transcript lesson, applied to a rebuilt seed):
             # stable knowledge first, accumulating state in the middle, live workspace state late,
             # and THE CURRENT ASK LAST. Transcript agents get cache locality for free because their
