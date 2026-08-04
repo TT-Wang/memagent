@@ -225,8 +225,13 @@ def render_file_locators(s: Slice, tools, *, selected_paths=None) -> str:
         except Exception as ex:
             parts.append(f"### {p} (exists but not shown: {one_line(ex, 120)})")
             continue
-        digest = _hashlib.sha256(body.encode("utf-8", "replace")).hexdigest()[:12]
-        parts.append(f'### {p} — {len(body.splitlines())} lines · sha256:{digest} · '
+        # HASH SEAM (cost review 2026-08-05): hash the REDACTED body — the tape lane hashes
+        # redacted bytes (tape.py), so a raw-bytes hash here could NEVER match for any file the
+        # redactor touches, permanently forcing rule-2 re-reads despite perfect composition.
+        from .safety import redact_text as _redact
+        body_r = _redact(body, code_file=True)
+        digest = _hashlib.sha256(body_r.encode("utf-8", "replace")).hexdigest()[:12]
+        parts.append(f'### {p} — {len(body_r.splitlines())} lines · sha256:{digest} · '
                      f'read_file("{p}") to view{edited}')
     return "\n".join(parts)
 

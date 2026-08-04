@@ -30,22 +30,30 @@ def _h(text: str) -> str:
 
 
 def render_tape_base(path: str, body: str) -> str:
+    # UN-numbered (cost review 2026-08-05): cat-n numbering cost 7 chars/line (14-17% of every
+    # base) and fought the composition contract — patches are plain unified diffs, so a numbered
+    # base forces the model to strip numbers before applying hunks. Line references still work:
+    # the header carries the line count and hunks carry @@ offsets.
     lines = body.splitlines()
     return (f"[base {path} @sha256:{_h(body)} · {len(lines)} lines]\n"
-            + "\n".join(f"{i + 1:>6}\t{line}" for i, line in enumerate(lines))
-            + f"\n[end base {path}]\n")
+            + body + ("" if body.endswith("\n") else "\n")
+            + f"[end base {path}]\n")
 
 
 def unified_patch(path: str, before: str, after: str) -> str:
-    """The TRUE delta of a host-applied edit, as a deterministic unified diff."""
+    """The TRUE delta of a host-applied edit, as a deterministic unified diff.
+
+    n=1 context and constant a/b labels (the wrapper line already names the path once) — on the
+    measured s2 mix the old shape (n=2 + path repeated three times) was up to 72% of a small
+    patch entry."""
     return "".join(difflib.unified_diff(
         before.splitlines(keepends=True), after.splitlines(keepends=True),
-        fromfile=f"a/{path}", tofile=f"b/{path}", n=2,
+        fromfile="a", tofile="b", n=1,
     ))
 
 
 def render_tape_patch(path: str, diff: str, post_hash: str) -> str:
-    return f"[patch {path} -> @sha256:{post_hash} · unified diff of the edit you made]\n{diff}\n"
+    return f"[patch {path} -> @sha256:{post_hash}]\n{diff}\n"
 
 
 def render_tape_external(path: str, new_hash: str, reason: str) -> str:

@@ -926,7 +926,8 @@ _NOW_FOOTER = ("# NOW: address the CURRENT REQUEST above. If it asks a QUESTION 
                "reversible judgment to carry it through within the exact user constraints; ask only when a "
                "material ambiguity would change the result or before an unclear consequential external action. "
                "Base changes on OPEN FILES; once the request is fully handled and verified "
-               "as well as the environment allows, write your final summary and make NO tool call.")
+               "as well as the environment allows, deliver a brief closeout (outcome + verification — the host "
+               "already records each edit) and make NO tool call.")
 
 
 def render_current_request(goal: str) -> str:

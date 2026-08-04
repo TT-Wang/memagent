@@ -37,7 +37,7 @@ def test_renderers_and_diff_deterministic():
     assert "[base a.py @sha256:" in a and "2 lines]" in a
     d = unified_patch("a.py", "x = 1\ny = 2\n", "x = 9\ny = 2\n")
     assert d == unified_patch("a.py", "x = 1\ny = 2\n", "x = 9\ny = 2\n")
-    assert "-x = 1" in d and "+x = 9" in d and "a/a.py" in d
+    assert "-x = 1" in d and "+x = 9" in d and "--- a" in d
 
 
 def test_event_time_snapshots_make_replay_an_identity(tmp_path):
