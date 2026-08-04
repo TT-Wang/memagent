@@ -202,6 +202,13 @@ def gen_s8():
             r = rng.choice(terminals(turn, age=5))
             routes.remove(r)
             born.pop(r["path"], None)
+            # "the page is gone, no redirect needed" — every reasonable reader ALSO removes
+            # redirects now pointing at nothing. The first oracle kept them dangling, and both
+            # transcript arms failed s8 by being MORE sensible than the expected table (identical
+            # missing=[/docs,/export] on two independent agents = the scenario, not the agents).
+            for d in [x for x in routes if x.get("redirect_to") == r["path"]]:
+                routes.remove(d)
+                born.pop(d["path"], None)
             prompts.append(f"Remove the {r['path']} route entirely — the page is gone, "
                            f"no redirect needed.")
     return prompts, routes
@@ -361,7 +368,17 @@ def verify(workdir):
         got = json.loads(out.stdout.strip().splitlines()[-1])
     except Exception as exc:
         return False, [f"probe_crash: {type(exc).__name__}"]
-    if got["ROUTES"] != EXPECTED_ROUTES:
+    def _norm(rs):
+        # AMBIGUITY NORMALISATION. "Remove /X-v2 entirely — no redirect needed" has two defensible
+        # readings when /X redirects to /X-v2: clean the dangling pointer too (mini and kimi did),
+        # or touch only the named route (slice did, matching the seed's "keep entries EXACT").
+        # Scoring either as wrong grades interpretation, not state-keeping — so dangling redirects
+        # are dropped from BOTH sides before comparison, and resolve() probes (identical under
+        # both readings) carry the behavioral truth. Order-insensitive: order was never asked for.
+        live = {r["path"] for r in rs}
+        kept = [r for r in rs if "redirect_to" not in r or r["redirect_to"] in live]
+        return sorted(json.dumps(r, sort_keys=True) for r in kept)
+    if _norm(got["ROUTES"]) != _norm(EXPECTED_ROUTES):
         gp = {r["path"] for r in got["ROUTES"]}; ep = {r["path"] for r in EXPECTED_ROUTES}
         fails.append(f"table_mismatch missing={sorted(ep-gp)[:4]} extra={sorted(gp-ep)[:4]}")
     for p in probes:

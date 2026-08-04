@@ -4,7 +4,7 @@ import os
 import subprocess
 import sys
 
-EXPECTED_ROUTES = [{'path': '/', 'endpoint': 'home'}, {'path': '/docs', 'redirect_to': '/docs-v2'}, {'path': '/export', 'redirect_to': '/export-v2'}, {'path': '/billing', 'endpoint': 'billing_page'}, {'path': '/jobs', 'redirect_to': '/jobs-v2'}, {'path': '/help', 'redirect_to': '/help-v2'}, {'path': '/archive', 'redirect_to': '/archive-v2'}, {'path': '/jobs-v2', 'redirect_to': '/jobs-next'}, {'path': '/help-v2', 'endpoint': 'help_page_v3_v2'}, {'path': '/reports', 'endpoint': 'reports_page'}, {'path': '/jobs-next', 'endpoint': 'jobs_page'}, {'path': '/keys', 'endpoint': 'keys_page'}, {'path': '/files', 'redirect_to': '/files-v2'}, {'path': '/audit', 'endpoint': 'audit_page'}, {'path': '/labels', 'endpoint': 'labels_page'}, {'path': '/webhooks', 'endpoint': 'webhooks_page'}, {'path': '/plans', 'endpoint': 'plans_page'}, {'path': '/status', 'endpoint': 'status_page'}, {'path': '/archive-v2', 'endpoint': 'archive_page_v2'}, {'path': '/settings', 'endpoint': 'settings_page'}, {'path': '/runs', 'endpoint': 'runs_page'}, {'path': '/profile', 'endpoint': 'profile_page'}, {'path': '/invoices', 'endpoint': 'invoices_page'}, {'path': '/files-v2', 'endpoint': 'files_page_v3'}, {'path': '/digest', 'endpoint': 'digest_page'}]
+EXPECTED_ROUTES = [{'path': '/', 'endpoint': 'home'}, {'path': '/billing', 'endpoint': 'billing_page'}, {'path': '/jobs', 'redirect_to': '/jobs-v2'}, {'path': '/help', 'redirect_to': '/help-v2'}, {'path': '/archive', 'redirect_to': '/archive-v2'}, {'path': '/jobs-v2', 'redirect_to': '/jobs-next'}, {'path': '/help-v2', 'endpoint': 'help_page_v3_v2'}, {'path': '/reports', 'endpoint': 'reports_page'}, {'path': '/jobs-next', 'endpoint': 'jobs_page'}, {'path': '/keys', 'endpoint': 'keys_page'}, {'path': '/files', 'redirect_to': '/files-v2'}, {'path': '/audit', 'endpoint': 'audit_page'}, {'path': '/labels', 'endpoint': 'labels_page'}, {'path': '/webhooks', 'endpoint': 'webhooks_page'}, {'path': '/plans', 'endpoint': 'plans_page'}, {'path': '/status', 'endpoint': 'status_page'}, {'path': '/archive-v2', 'endpoint': 'archive_page_v2'}, {'path': '/settings', 'endpoint': 'settings_page'}, {'path': '/runs', 'endpoint': 'runs_page'}, {'path': '/profile', 'endpoint': 'profile_page'}, {'path': '/invoices', 'endpoint': 'invoices_page'}, {'path': '/files-v2', 'endpoint': 'files_page_v3'}, {'path': '/digest', 'endpoint': 'digest_page'}]
 
 PROBE = r'''
 import json, sys
@@ -38,7 +38,17 @@ def verify(workdir):
         got = json.loads(out.stdout.strip().splitlines()[-1])
     except Exception as exc:
         return False, [f"probe_crash: {type(exc).__name__}"]
-    if got["ROUTES"] != EXPECTED_ROUTES:
+    def _norm(rs):
+        # AMBIGUITY NORMALISATION. "Remove /X-v2 entirely — no redirect needed" has two defensible
+        # readings when /X redirects to /X-v2: clean the dangling pointer too (mini and kimi did),
+        # or touch only the named route (slice did, matching the seed's "keep entries EXACT").
+        # Scoring either as wrong grades interpretation, not state-keeping — so dangling redirects
+        # are dropped from BOTH sides before comparison, and resolve() probes (identical under
+        # both readings) carry the behavioral truth. Order-insensitive: order was never asked for.
+        live = {r["path"] for r in rs}
+        kept = [r for r in rs if "redirect_to" not in r or r["redirect_to"] in live]
+        return sorted(json.dumps(r, sort_keys=True) for r in kept)
+    if _norm(got["ROUTES"]) != _norm(EXPECTED_ROUTES):
         gp = {r["path"] for r in got["ROUTES"]}; ep = {r["path"] for r in EXPECTED_ROUTES}
         fails.append(f"table_mismatch missing={sorted(ep-gp)[:4]} extra={sorted(gp-ep)[:4]}")
     for p in probes:
