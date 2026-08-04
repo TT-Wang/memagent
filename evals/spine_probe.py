@@ -125,8 +125,14 @@ def main(argv=None):
         a, b = calls[i - 1]["messages_ser"], calls[i]["messages_ser"]
         cp = common_prefix_len(a, b)
         same_turn = turn_of[i - 1] == turn_of[i] if i < len(turn_of) else True
+        # WITHIN-turn the correct metric is APPEND INTEGRITY, not a survival ratio: b should
+        # EXTEND a, and whole-list JSON serialization guarantees cp == len(a)-1 for a perfect
+        # append (a's closing ']' becomes ',').  A frac<1 on a growing request is arithmetic,
+        # not churn — misreading that cost this program a false within-turn diagnosis (erratum
+        # in SESSION-SPINE-P5-VERDICT.md).  Cross-turn pairs are real rebuilds; frac stands.
         rows.append({"pair": i, "same_turn": same_turn, "cp_chars": cp, "next_len": len(b),
-                     "frac": cp / max(len(b), 1), "break_at": region_at(b, cp)})
+                     "frac": cp / max(len(b), 1), "break_at": region_at(b, cp),
+                     "append_gap": (len(a) - cp) if same_turn else None})
 
     # ---- tail composition (decision data for the ratio ceiling): per-region char sizes of the
     # LAST turn's first-call request, split on serialized single-hash region headers. Which bytes
@@ -204,6 +210,11 @@ def main(argv=None):
         "liveness": liveness, "invalid": invalid,
         "composition_last_turn_first_call": composition,
         "tool_counts_per_turn": tool_counts,
+        "same_turn_append_integrity": {
+            "clean": sum(1 for row in rows
+                         if row["same_turn"] and (row["append_gap"] or 0) <= 1),
+            "n": sum(1 for row in rows if row["same_turn"] and row["append_gap"] is not None),
+        },
         "rows": rows,
     }
     os.makedirs(args.out, exist_ok=True)
@@ -211,10 +222,11 @@ def main(argv=None):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(summary, f, ensure_ascii=False)
 
-    ct, st = summary["cross_turn"], summary["same_turn"]
+    ct = summary["cross_turn"]
+    ai = summary["same_turn_append_integrity"]
     print(f"[{args.label} r{args.rep}] passed={res['passed']} "
           f"cross-turn median {ct.get('median', 0) * 100:.1f}% (n={ct['n']}) · "
-          f"same-turn median {st.get('median', 0) * 100:.1f}% (n={st['n']})"
+          f"same-turn append-integrity {ai['clean']}/{ai['n']}"
           + (f"  !! {invalid}" if invalid else ""))
     for name, cnt in breaks.most_common(5):
         print(f"    cross-turn breaks at {name:<48} x{cnt}")

@@ -1,5 +1,22 @@
 # Session Spine — P5 Byte Gate: Verdict & Diagnosis
 
+> **ERRATUM (2026-08-05, post-verdict):** every WITHIN-turn "mutation" this document and its
+> follow-ups reported was a measurement artifact. Comparing whole-list JSON serializations makes
+> a perfect append look like a tail change: the previous request's closing `]` becomes `,`, so
+> cp == len(a)−1 ALWAYS, and a survival *ratio* under append growth is arithmetic, not churn.
+> Re-audited across all four captured runs (off r1, spine r1/r3, ctl r1): **zero real within-turn
+> mutations — the engine was already perfectly append-only within a turn, before the projection
+> pin.** Consequences: (1) the "NOW-footer migrates / per-call re-projection tax" analysis is
+> WITHDRAWN; (2) the projection pin (9dd7357) is retained as a defensive guarantee (selection
+> cannot drift under mid-turn capacity pressure) and a per-call compute saving, but its commit
+> narrative overstated the motivating evidence; (3) same-turn "93–95% median" figures in this doc
+> are the append-growth ratio, not a defect — the correct within-turn metric is append integrity
+> (gap ≤ 1), now reported by the probe; (4) the external audit's warm-replay accounting (within-
+> turn replay is cache-priced) stands as written. CROSS-turn findings are unaffected: turn-boundary
+> pairs are real rebuilds and every cross-turn number and conclusion in this document stands.
+> New trap for the catalogue: serialized-list prefix comparison — measure strict-prefix extension,
+> never ratio, for append-shaped sequences.
+
 Date: 2026-08-05. Status: **GATE FAILED — mechanism PROVEN, ratio ceiling is structural.**
 Stopped by owner decision after 3 instrumented runs (off r1, spine r1 pre-layout-fix, spine r3
 post-fix); p3 baseline runs cancelled — their result is derivable (see §4). Evidence:
