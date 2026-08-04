@@ -1207,65 +1207,11 @@ def build_context_blocks(ctx: dict) -> tuple[ContextBlock, ...]:
         # Selection/elasticity are untouched — only the assembly slot changes; within a class,
         # REGION_ORDER's relative order is preserved. Default stays the attention layout pending
         # the pre-registered A/B (quality parity gate + fresh-token delta).
-        _layout = os.environ.get("AGENT_SEED_LAYOUT", "").strip().lower()
-        if _layout == "m1":
-            # m1 — the MINIMAL move: only the two measured cross-turn/per-step offenders go to the
-            # tail (findings 8, intent 9); every other region keeps its declared slot. The v1/v2/v3
-            # lesson was that wholesale reordering destabilizes constraint-discipline scenarios
-            # (s5 failed under all three) — m1 perturbs exactly two regions, both TOWARD the ask
-            # cluster at the end, where the intent region sits beside the CURRENT REQUEST it
-            # restates obligations for.
-            if name == "findings":
-                slot = 8
-            elif name == "intent":
-                slot = 9
-        elif _layout == "v3":
-            # v3 — chronology-mimicking order (the transcript lesson, applied to a rebuilt seed):
-            # stable knowledge first, accumulating state in the middle, live workspace state late,
-            # and THE CURRENT ASK LAST. Transcript agents get cache locality for free because their
-            # order IS chronology: old-and-frozen leads, newest-and-salient trails. v1/v2 sorted by
-            # declared freshness and buried the ask mid-tail among six LIVE regions — quality broke
-            # (max_steps spins) while the prefix barely improved. v3 keeps the recency slot for the
-            # ask itself: intent is the LAST bytes before the model answers, exactly where a chat
-            # turn puts the newest user message.
-            _V3_SLOT = {
-                "skills": 0, "memory": 0, "task_objective": 0, "task_constraints": 0,
-                "corrections": 0,
-                "conversation": 1, "related_code": 1,
-                "findings": 2, "progress": 2, "world": 2, "threads": 2, "cache_manifest": 2,
-                "open_files": 3, "worktree": 3,
-                "user_report": 6, "reconciliation": 6, "error": 6,
-                "focus": 7, "turn_contract": 8, "intent": 9,
-            }
-            slot = _V3_SLOT.get(name, slot)
-        elif _layout == "cache":
-            # v2. v1 ranked by declared freshness ALONE and got measurably burned: `findings`
-            # (REVISION_BOUND) and four other volatile-tier regions accumulate PER STEP, so
-            # hoisting them into the stable head broke the within-turn prefix on every call —
-            # fresh went UP 25% on s2 (134k -> 168k) and s5 failed. Declared freshness ranks
-            # cross-turn change; the tier already encodes within-turn mutability. Both gates:
-            # anything volatile-tier or LIVE goes to the tail, full stop.
-            if _tier == "volatile" or freshness == FreshnessClass.LIVE:
-                slot = 6
-            else:
-                slot = {FreshnessClass.REVISION_BOUND: 0, FreshnessClass.HISTORICAL: 1,
-                        FreshnessClass.DERIVED: 2}.get(freshness, 2)
-        if (name == "task_objective"
-                and getattr(getattr(ctx.get("s"), "task", None), "objective_status", "active")
-                == "provisionally_satisfied"):
-            # Same topic does not mean "redo the original request".  Once a clean turn provisionally
-            # completes it, retain it as lower-authority, pageable background until an explicit resume or
-            # failure report reactivates it.
-            priority, authority, freshness, mandatory = (
-                28, InstructionClass.TASK_STATE, FreshnessClass.HISTORICAL, False,
-            )
-        if name == "conversation" and _ring_within_reserve(ctx.get("s")):
-            # VERBATIM USER RESERVE, legacy (no-graph) lane — mirrors _adjacency_blocks' reserved
-            # priority so behavior is lane-independent (the known path-asymmetry bug class). SOFT:
-            # the locator alternative below stays available as the true last resort. A ring whose
-            # total chars exceed the budget (giant pastes inside the floor) keeps normal priority
-            # and degrades like any region.
-            priority = RESERVE_PRIORITY
+        # (Layout experiment branches removed. Four orderings — cache/v2/v3/m1 — each failed its
+        # pre-registered A/B during the 2026-08-04 sprint: fresh tokens never dropped (the seed
+        # midsection mutates every turn regardless of order) and wholesale reorderings destabilized
+        # constraint-discipline scenarios. The structural successor is the Session Spine
+        # (docs/SESSION-SPINE-DESIGN.md): frozen sealed-turn bytes, not re-rendered projections.)
         group = f"region:{name}"
         role, scope, source_refs, resource_refs = _region_provenance(name, ctx)
         out.append(ContextBlock(
