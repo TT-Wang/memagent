@@ -176,6 +176,11 @@ def render_conversation(s) -> str:
     """The RECENT CONVERSATION tier: the last few COMPLETED user<->assistant exchanges (the in-progress
     one is excluded — its user message is the current task). Ends with a pointer to recall the rest."""
     prior = [e for e in s.conversation[:-1] if e.get("user")]
+    if os.environ.get("AGENT_SESSION_SPINE", "").strip() == "1":
+        # R8: the paired verbatim reserve keeps the most recent COMPLETED exchanges (deixis resolves
+        # against assistant text — "go with your recommendation" needs the reply that enumerated the
+        # options); the SESSION SPINE subsumes everything older. Boundary = the last 2 pairs.
+        prior = prior[-2:]
     if not prior:
         return ""
     lines = []
@@ -955,6 +960,14 @@ REGIONS: tuple[RegionSpec, ...] = (
     RegionSpec("skills",         STABLE,   lambda c: (f"# ACTIVE SKILL(S) (loaded instructions — FOLLOW these when addressing the CURRENT REQUEST)\n{render_skills(c['s'].active_skills)}\n\n" if render_skills(c["s"].active_skills) else ""), 2, 65, InstructionClass.TASK_STATE, FreshnessClass.REVISION_BOUND, False, EpistemicRole.PROCEDURE),
     RegionSpec("memory",         STABLE,   lambda c: (f"# RELEVANT KNOWLEDGE CANDIDATES (selected USER, PROJECT, CRAFT, or legacy leads — not current-world proof; verify when load-bearing)\n{c['memory']}\n\n" if c["memory"] else ""), 2, 20, InstructionClass.DATA, FreshnessClass.HISTORICAL, False, EpistemicRole.CLAIM),
     # ──────────── TIER 3 · MY STATE — what the agent has established / is doing. ────────────
+    RegionSpec("session_spine",  STABLE,   lambda c: ((
+        "# SESSION SPINE (sealed record of this session's earlier turns — what was ASKED and "
+        "DONE then, not current-world truth; verify against live state before relying on it. "
+        "Frozen; each entry ends with the read_file locator for its full sealed turn)\n"
+        + "".join(getattr(c["s"], "session_spine", ()) or ())
+        + "\n") if (os.environ.get("AGENT_SESSION_SPINE", "").strip() == "1"
+                     and getattr(c["s"], "session_spine", None)) else ""),
+        2, 92, InstructionClass.TASK_STATE, FreshnessClass.HISTORICAL, False, EpistemicRole.CLAIM),
     RegionSpec("conversation",   STABLE,   lambda c: (f"# RECENT CONVERSATION (the last few exchanges this session — for continuity; older turns are paged out — read_file(\"@sliceagent/history/turn-N.md\") fetches one, read_file(\"@sliceagent/history/index.md\") lists all)\n{render_conversation(c['s'])}\n\n" if render_conversation(c["s"]) else ""), 2, 80, InstructionClass.USER, FreshnessClass.HISTORICAL, False, EpistemicRole.CLAIM),
     RegionSpec("findings",       VOLATILE, lambda c: (f"# YOUR NOTES FROM PRIOR TOOL CALLS (task-scoped observations and claims to REUSE as leads; OPEN FILES stays ground truth for current contents. Per-note tags mark trust: no tag = observed, '(your note)' = summary, '(UNVERIFIED claim)' = not confirmed)\n{render_findings(c['s'].findings[-c['max_findings']:], c['s'].finding_source)}\n\n" if render_findings(c["s"].findings[-c["max_findings"]:], c["s"].finding_source) else ""), 3, 82, InstructionClass.TASK_STATE, FreshnessClass.REVISION_BOUND, False, EpistemicRole.CLAIM),
     # progress/world carry CLAIM (not the CONTROL_STATE fallback they used to inherit): both are the model's
@@ -967,7 +980,7 @@ REGIONS: tuple[RegionSpec, ...] = (
     # each with the exact @sliceagent/history/ read_file call to page it back. Sits beside GHOST INDEX
     # (same "it's paged out, here's the one call to get it"
     # idiom) so the model has a SEEN target to read; an unseen cache is the dead channel. Locators only.
-    RegionSpec("cache_manifest", VOLATILE, lambda c: (f"\n# PAGED-OUT HISTORY (canonical exact evidence from earlier turns, not current-world truth; read a turn with the shown @sliceagent/history/ locator, read_file(\"@sliceagent/history/index.md\") for the full list, or search_history(\"keywords\") across sessions)\n{c['cache_manifest']}\n" if c.get("cache_manifest") else ""), 3, 30, InstructionClass.DATA, FreshnessClass.HISTORICAL, False, EpistemicRole.LOCATOR),
+    RegionSpec("cache_manifest", VOLATILE, lambda c: "" if os.environ.get("AGENT_SESSION_SPINE", "").strip() == "1" else (f"\n# PAGED-OUT HISTORY (canonical exact evidence from earlier turns, not current-world truth; read a turn with the shown @sliceagent/history/ locator, read_file(\"@sliceagent/history/index.md\") for the full list, or search_history(\"keywords\") across sessions)\n{c['cache_manifest']}\n" if c.get("cache_manifest") else ""), 3, 30, InstructionClass.DATA, FreshnessClass.HISTORICAL, False, EpistemicRole.LOCATOR),
     # ──────────── TIER 5 · LIVE STATE — what's wrong / where things stand (VOLATILE, high-authority tail). ────────────
     # (The REPEATED/FAILING ACTIONS header + tally regions were deleted 2026-08-03 — render-dead at
     # seed time; the anti-loop advisory rides the message channel, and the surviving action-log FOLD

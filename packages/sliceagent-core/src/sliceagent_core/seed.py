@@ -364,8 +364,14 @@ def make_build_slice(state, tools, retriever, memory, task: str, session_id: str
     if cwd:
         env_facts.append(f"- Working directory (cwd): {cwd}")
     gbs = git_branch_status(cwd) if cwd else ""
-    if gbs:
+    if gbs and os.environ.get("AGENT_SESSION_SPINE", "").strip() != "1":
+        # R6a: under the spine, the system prefix must be byte-stable across turns — a live
+        # branch/dirty/HEAD line here re-bills every downstream byte on each commit or edit. The
+        # worktree region already carries live git state in the volatile tail; this line is the
+        # legacy placement and is omitted when the spine layout is active.
         env_facts.append(f"- Git: {gbs}")
+    elif gbs:
+        pass
     environment_block = (
         "\n\n# ENVIRONMENT (OBSERVED ground truth at session start — use THESE real values; do NOT "
         "assume a generic sandbox/OS or path)\n" + "\n".join(env_facts)
@@ -487,6 +493,12 @@ def make_build_slice(state, tools, retriever, memory, task: str, session_id: str
         # slice. This matters on resume: the parked topic keeps its goal, but the new resume message is what
         # the user is asking for RIGHT NOW.
         goal = getattr(getattr(s, "intent", None), "current_request", "") or task
+        if os.environ.get("AGENT_SESSION_SPINE", "").strip() == "1":
+            # R6b: keyed by the per-turn request, the KNOWLEDGE region's bytes change every turn
+            # while sitting in the head — the memory lookup re-runs and re-renders even when the
+            # task is unchanged. Under the spine the memo keys by the STABLE task, so the region's
+            # bytes hold for the task's duration (snapshot-per-topic, the review's remedy).
+            goal = task or goal
         typed_knowledge_push = callable(getattr(memory, "seed_recall", None))
         if goal not in lessons_memo and (typed_knowledge_push or not graph_active or needs_memory):
             # KNOWLEDGE candidates through the ONE read seam (memory-lessons backend) — no sibling recall.

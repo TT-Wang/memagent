@@ -43,6 +43,10 @@ Rewrite DESIGN.md around the one-lane target with every review requirement resol
 - R7: degradation = whole-spine → single index locator, per-turn latch, spine priority above
   the volatile tail; oscillation probe specced.
 - R8: paired reserve retained; spine boundary = reserve floor.
+- R10: the digest SCHEMA bans current-truth claims ("key findings" excluded by design);
+  fields are provenance-grade only (ask/outcome/files/locator), and the spine region's frame
+  carries the epistemic header ("sealed record, not current-world truth"). Schema is a P1
+  artifact; P2 merely implements it.
 Exit gate: design v2 committed; every R-item either resolved in text or explicitly deferred
 with rationale.
 
@@ -53,6 +57,8 @@ Exit gates (all mechanical, no LLM):
 - byte-parity: seal-path render == journal-only recovery render, per turn, on a scripted session
 - redaction: seeded secret in the ask → absent from spine bytes and artifact alike
 - resume: restart mid-session → byte-identical spine (single-workspace scope per R5 decision)
+
+*(P2 and P3 have no data dependency and parallelize safely — both are on the critical path.)*
 
 ### P3 — Head stability prerequisites (R6; spine is worthless without this)
 - system prefix: epoch-pinned (compute once per session/epoch); live git line moves to TAIL
@@ -76,15 +82,27 @@ prompt with and without an active graph, modulo graph-only tail blocks); reserve
 ### P5 — Byte gate (the mechanism verdict)
 Instrumented probe (existing harness + system-message assertions from P3), scripted s2-like
 session, spine on vs off.
-Pre-registered success: cross-turn prefix survival median 39–44% → **≥80%**; same-turn ≥96%
-maintained. Failure = stop and diagnose; no quality runs until the mechanism is proven —
-end-to-end fresh numbers are behavior-confounded and cannot arbitrate this.
+Baseline policy (pre-registered): the 39–44% baseline predates P3. After P3 lands, the probe
+re-runs under P3-ONLY config and that becomes the attribution baseline — the spine gate then
+requires BOTH (a) absolute cross-turn survival ≥80% and (b) a material delta over the P3-only
+baseline, so a head-freeze-alone win can never be booked to the spine. Same-turn ≥96% maintained.
+The campaign's v2 measurement stack rolls in here: LCP probe, divergence-region attribution
+(fixed to recognise single-hash region headers, not only file headers), arm-neutral classifier.
+Failure = stop and diagnose; no quality runs until the mechanism is proven — end-to-end fresh
+numbers are behavior-confounded and cannot arbitrate this.
 
-### P6 — Quality gate
-s2/s5 × n=2 spine-on vs spine-off (s5 = the reordering canary), plus one 50-turn accumulation
-scenario (s7) for the long-horizon shape, plus s6 real-memory (recall surfaces intact).
-Pre-registered: all pass; fresh/turn and cost deltas reported with the meter; liveness fields
-(memory_mode/episodes/recalls) mandatory.
+### P6 — Quality gate (R12 in full)
+Two legs, both pre-registered and falsifiable:
+- **Execution leg**: the FULL 8-scenario matrix × n=2, spine-on vs spine-off. Per-scenario
+  pass definition = the scenario's own behavioral oracle (verify.py) — and the gate criterion is
+  "spine-on outcome ≥ spine-off outcome per scenario at n=2" (no post-hoc goal-post moves).
+  s7's metric is stated explicitly: oracle green AND per-turn peak curve stays flat (≤1.2× the
+  spine-off median peak).
+- **Conversational leg** (the R8 regression class execution scenarios cannot see): the usersim
+  probe suite — deixis ("go with your recommendation"), ordinal reference ("the second option"),
+  correction-following across the reserve boundary — spine-on vs spine-off, same grading
+  rubric as the existing usersim harness.
+Meter deltas (fresh/turn, cost) reported; liveness fields mandatory.
 
 ### P7 — Subsumption cleanup (negative diff)
 conversation window → paired reserve only · cache_manifest region deleted (digest replaces the
@@ -103,6 +121,9 @@ Deferred safely: sessions under ~30 turns never hit the trigger; P5/P6 do not de
 - ContextBench 5-task spot-check (single-turn: expect no change; verify, don't assume)
 - refresh `cost-thesis-pricing-regime` memory + the DeepSeek材料 (task #15) with post-spine
   numbers; the r-sensitivity table regenerated from real ledgers
+- **R9(d) lands here**: the public peak claim is RESTATED ("ramps to head+B then holds", never
+  "flat from turn 1") and README/benchmark tables are re-baselined against post-spine ledgers —
+  renumbering without restating the claim would ship an over-claim with fresher digits
 
 ## Risk register (from the review, ranked)
 

@@ -1351,6 +1351,18 @@ class SealCoordinator:
                         turn_status="interrupted",
                         artifact_refs=recovered_refs,
                     ).to_dict()
+                    # Session Spine (R3): SIGKILL recovery renders the digest from journal-only
+                    # data with the SAME renderer the seal path uses — two renderers would be the
+                    # path-asymmetric-wiring bug class. Segment fields are absent from a recovered
+                    # journal; the digest carries status='interrupted' and defaults honestly.
+                    from .spine import render_turn_digest
+                    recovered_body["spine_digest"] = render_turn_digest(
+                        artifact_id=snapshot.artifact_id,
+                        session_id=str(header.get("session_id") or "unknown-session"),
+                        task_id=str(header.get("task_id") or "unknown-task"),
+                        status="interrupted",
+                        user_request=request,
+                    )
                 artifact = Artifact(
                     id=snapshot.artifact_id,
                     kind=kind,

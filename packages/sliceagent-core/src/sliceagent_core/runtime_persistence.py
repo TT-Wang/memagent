@@ -829,6 +829,23 @@ class LocalTurnStore:
             artifact_refs=refs,
             usage=receipt_usage,
         ).to_dict()
+        # Session Spine (R1/R2/R3): the digest is rendered HERE — after the indeterminate upgrade,
+        # from the same post-redaction material the artifact embeds — and rides the existing
+        # 3-stage seal protocol as a plain field of the structured body. One renderer serves this
+        # path and crash recovery; consumers treat the stored string as frozen bytes.
+        from .spine import render_turn_digest
+        safe_record["spine_digest"] = render_turn_digest(
+            artifact_id=snapshot.artifact_id,
+            session_id=self.session_id,
+            task_id=turn.task_id,
+            status=effective_status,
+            user_request=str(snapshot.header.get("user_request", "") or ""),
+            logical_turn_id=str(meta.get("logical_turn_id") or ""),
+            segment_index=int(meta.get("segment_index") or 0),
+            segment_outcome=str(meta.get("segment_outcome") or ""),
+            title=redact_text(str(title)),
+            files=tuple(redact_text(str(path)) for path in files),
+        )
         artifact = Artifact(
             id=snapshot.artifact_id,
             kind="turn",
