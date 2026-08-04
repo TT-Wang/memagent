@@ -374,6 +374,15 @@ protects the integrity of the durable local store rather than interpreting user 
 | `SLICEAGENT_VAULT` | `~/.sliceagent/vault` | legacy episodic/task compatibility records (not canonical typed L2) |
 | `AGENT_VERIFY_CMD` | *(unset)* | test command used as the verification oracle |
 
+**PromptLayer observability (optional).** Set `PROMPTLAYER_API_KEY`, `AGENT_PROMPTLAYER=1`, and
+`AGENT_PROMPTLAYER_CONTENT=metadata` to log every physical model attempt in a bounded background worker.
+Provider execution continues to use the existing local `LLM_API_KEY`/`DEEPSEEK_API_KEY`; PromptLayer is a
+post-call observer and cannot create a provider retry or failed turn. Metadata mode uploads token/cache/cost
+fields, timing, roles/tool names, experiment tags, keyed session/workspace IDs, and content digests—not prompt
+text, source code, tool arguments, output, provider error bodies, paths, or credentials. Choosing `full`
+explicitly uploads exact prompt messages, tool schemas/arguments, and assistant output. Truthy
+`AGENT_EXPERIMENTAL_*` switches are added as `experiment:<flag>` tags for production A/B slices.
+
 DeepSeek official-API configurations should move from the retiring `deepseek-chat` / `deepseek-reasoner`
 aliases to `deepseek-v4-flash` or `deepseek-v4-pro`. SliceAgent keeps the old names temporarily compatible,
 but new provider setup and model suggestions use the V4 names.

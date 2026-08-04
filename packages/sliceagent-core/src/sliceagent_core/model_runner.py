@@ -1,8 +1,31 @@
 """Single provider-call seam for capacity preflight and retry policy."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from .errors import with_retry
 from .execution import preflight_model_call
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _observe_physical_call(llm, record: dict) -> None:
+    """Publish one best-effort, post-I/O observation without perturbing the call.
+
+    The host may install ``_model_call_observer`` on any LLM adapter.  Keeping this seam
+    duck-typed preserves the public two-argument LLM protocol and the core's zero-dependency
+    boundary.  Observers receive the exact prepared request and final provider outcome, but
+    their failures never become provider retries or failed agent turns.
+    """
+    observer = getattr(llm, "_model_call_observer", None)
+    if not callable(observer):
+        return
+    try:
+        observer(record)
+    except Exception:  # noqa: BLE001 - telemetry must never alter provider-call semantics
+        pass
 
 
 def complete_model_call(
@@ -40,15 +63,42 @@ def complete_model_call(
         # Production adapters may expose the richer per-request control seam.  Feature detection keeps the
         # public two-argument LLMClient protocol (and every test/third-party adapter implementing it) intact;
         # cancellation and transport activity are never smuggled into arbitrary ``complete`` callables.
-        controlled = getattr(llm, "complete_with_control", None)
-        if callable(controlled):
-            return controlled(
-                messages,
-                schemas,
-                should_cancel=should_cancel,
-                transport_activity=transport_activity,
-            )
-        return llm.complete(messages, schemas)
+        started_at = _utc_now()
+        effort = getattr(llm, "_effort", None)
+        try:
+            api_type = "responses" if callable(effort) and effort() else "chat-completions"
+        except Exception:  # noqa: BLE001 - wire-type metadata must never block the call
+            api_type = "chat-completions"
+        common = {
+            "attempt": physical_attempt,
+            "started_at": started_at,
+            "model": str(getattr(llm, "model", "") or ""),
+            "base_url": str(getattr(llm, "_base_url", "") or ""),
+            "reasoning": str(getattr(llm, "reasoning", "") or ""),
+            "api_type": api_type,
+            "messages": messages,
+            "schemas": schemas,
+        }
+        try:
+            controlled = getattr(llm, "complete_with_control", None)
+            if callable(controlled):
+                response = controlled(
+                    messages,
+                    schemas,
+                    should_cancel=should_cancel,
+                    transport_activity=transport_activity,
+                )
+            else:
+                response = llm.complete(messages, schemas)
+        except Exception as error:
+            _observe_physical_call(llm, {
+                **common, "ended_at": _utc_now(), "response": None, "error": error,
+            })
+            raise
+        _observe_physical_call(llm, {
+            **common, "ended_at": _utc_now(), "response": response, "error": None,
+        })
+        return response
 
     if not retry:
         return invoke()

@@ -1253,6 +1253,10 @@ class OpenAILLM:
         # Optional low-rate transport lifecycle observer. It is deliberately separate from token rendering so
         # a child can report "reasoning"/"writing" without leaking its private deltas into the parent TUI.
         self._transport_activity = None
+        # Optional host-owned post-call observer. The shared model runner invokes it once per physical
+        # provider attempt, after the required ModelCallPrepared publication. It is intentionally absent
+        # from the public LLM protocol and may only observe; failures are contained by model_runner.
+        self._model_call_observer = None
         # Sticky: set True once this provider 400s on reasoning_effort+tools (gpt-5.5 chat/completions);
         # thereafter reasoning_effort is dropped when tools are present (graceful degrade, no re-400).
         self._drop_reasoning_effort = False
@@ -1349,6 +1353,10 @@ class OpenAILLM:
         passed to :meth:`complete` wins for that request.
         """
         self._transport_activity = fn
+
+    def set_model_call_observer(self, fn) -> None:
+        """Install a host-owned, best-effort observer for completed physical model calls."""
+        self._model_call_observer = fn
 
     def set_stream_transport(self, enabled: bool) -> None:
         """Enable/disable SSE transport explicitly (default: enabled).
