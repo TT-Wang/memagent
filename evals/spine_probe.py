@@ -128,6 +128,31 @@ def main(argv=None):
         rows.append({"pair": i, "same_turn": same_turn, "cp_chars": cp, "next_len": len(b),
                      "frac": cp / max(len(b), 1), "break_at": region_at(b, cp)})
 
+    # ---- tail composition (decision data for the ratio ceiling): per-region char sizes of the
+    # LAST turn's first-call request, split on serialized single-hash region headers. Which bytes
+    # dominate below the spine is what arbitrates "layout done, tail is the remaining problem".
+    composition = {}
+    first_of_last_turn = None
+    for i in range(1, len(turn_of)):
+        if turn_of[i] != turn_of[i - 1]:
+            first_of_last_turn = i
+    if first_of_last_turn is not None:
+        ser = calls[first_of_last_turn]["messages_ser"]
+        marks = []
+        pos = 0
+        while True:
+            hit = ser.find("\\n# ", pos)
+            if hit < 0:
+                break
+            end = min(x for x in (ser.find("\\n", hit + 4), ser.find(" (", hit + 4), hit + 44)
+                      if x > 0)
+            marks.append((hit, ser[hit + 4:end].strip()[:36]))
+            pos = hit + 4
+        marks.append((len(ser), "END"))
+        composition = {"_pre_first_header": marks[0][0] if marks else len(ser)}
+        for (start, name), (nxt, _n2) in zip(marks, marks[1:]):
+            composition[name] = composition.get(name, 0) + (nxt - start)
+
     # ---- liveness (mandatory; a dead arm is HARNESS INVALID, not a low score)
     spine_seen = sum(1 for c in calls if "# SESSION SPINE" in c["messages_ser"])
     late_calls = sum(t["calls"] for t in res["per_turn"][1:])   # calls after turn 1
@@ -158,6 +183,7 @@ def main(argv=None):
         "meter": {k: res.get(k) for k in ("in_total", "in_cached", "in_fresh", "out_total",
                                           "peak_in", "cost_usd", "calls")},
         "liveness": liveness, "invalid": invalid,
+        "composition_last_turn_first_call": composition,
         "rows": rows,
     }
     os.makedirs(args.out, exist_ok=True)
