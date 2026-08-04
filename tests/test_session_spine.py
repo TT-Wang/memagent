@@ -199,6 +199,27 @@ def test_session_owns_the_spine_and_build_syncs_the_active_slice(monkeypatch):
     assert sess.active().continuity.session_spine == [entry]
 
 
+def test_spine_layout_head_precedes_volatile_regions(monkeypatch):
+    """P5 byte-gate fix: under the flag the prompt must read [stable head][SPINE][per-turn tail] —
+    the frozen record is worthless below the first per-turn byte (measured: LCP died at the intent
+    region at the same offset in both arms, spine 33.6% vs control 39.9%)."""
+    from sliceagent_core.seed import render_slice
+    st = _mini_slice()
+    st.active_files = []
+    monkeypatch.setenv("AGENT_SESSION_SPINE", "1")
+    on = render_slice(st, artifacts="(no open files)", memory="lesson: check the seams")
+    spine_at = on.index("# SESSION SPINE")
+    assert on.index("# RELEVANT KNOWLEDGE") < spine_at          # stable head above the spine
+    for volatile_hdr in ("# ACTIVE USER INTENT", "# OPEN FILES"):
+        if volatile_hdr in on:
+            assert on.index(volatile_hdr) > spine_at, volatile_hdr
+    # legacy layout untouched when the flag is off
+    monkeypatch.delenv("AGENT_SESSION_SPINE", raising=False)
+    off = render_slice(st, artifacts="(no open files)", memory="lesson: check the seams")
+    if "# ACTIVE USER INTENT" in off:
+        assert off.index("# ACTIVE USER INTENT") < off.index("# RELEVANT KNOWLEDGE")
+
+
 # ---------------------------------------------------------------- P4 exit gates (roadmap)
 
 def _lane_blocks(st):

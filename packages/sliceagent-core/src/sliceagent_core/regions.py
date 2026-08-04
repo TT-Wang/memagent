@@ -1200,8 +1200,32 @@ def _ring_within_reserve(s) -> bool:
     return total <= user_reserve_chars()
 
 
+# SESSION SPINE LAYOUT (P5 byte-gate finding, 2026-08-05): with the legacy slots, the per-turn
+# intent family renders at slot 0 — the cross-turn LCP died at byte ~17.1k in BOTH arms at the
+# exact same offset, so the frozen spine sat entirely BELOW the first changed byte and only grew
+# the denominator (33.6% vs control 39.9%). The north star is [HEAD: cross-turn stable]
+# [SPINE: append-only] [TAIL: per-turn]; only what cannot change between turns may precede the
+# spine. Slot override at BUILD time under the flag — the declared table (and the golden layout
+# snapshot pinning it) stays the legacy truth. Relative reading order below the spine preserved.
+_SPINE_LAYOUT_SLOTS = {
+    "skills": 0, "memory": 0,          # task-keyed under the flag (R6b) -> cross-turn stable
+    "session_spine": 1,                # append-only: new bytes only at its end
+    "intent": 2, "task_objective": 2, "corrections": 2, "task_constraints": 2, "open_files": 2,
+    "related_code": 3, "conversation": 4,
+    "findings": 5, "progress": 5, "world": 5, "threads": 5, "cache_manifest": 5,
+    # turn_contract/focus/worktree/user_report/reconciliation/error keep slot 6 (tail)
+}
+
+
+def spine_layout_slot(name: str, legacy_slot: int) -> int:
+    """Flag-layout slot for a region: mapped, or the legacy slot pushed below the spine (>=2) so a
+    region added later can never silently land in the stable head."""
+    return _SPINE_LAYOUT_SLOTS.get(name, max(legacy_slot, 2))
+
+
 def build_context_blocks(ctx: dict) -> tuple[ContextBlock, ...]:
     """Project every non-empty region into the shared elasticity contract."""
+    spine_layout = os.environ.get("AGENT_SESSION_SPINE", "").strip() == "1"
     out = []
     for order, (name, _tier, render, slot) in enumerate(REGION_ORDER):
         if not _region_selected_by_source_needs(name, ctx):
@@ -1211,6 +1235,8 @@ def build_context_blocks(ctx: dict) -> tuple[ContextBlock, ...]:
             continue
         priority, authority, freshness, mandatory = _REGION_META.get(
             name, (50, InstructionClass.TASK_STATE, FreshnessClass.DERIVED, False))
+        if spine_layout:
+            slot = spine_layout_slot(name, slot)
         # AGENT_SEED_LAYOUT=cache — assembly order becomes a PURE FUNCTION of declared freshness:
         # REVISION_BOUND(0) -> HISTORICAL/append-ish(1) -> DERIVED(2) -> LIVE(6). No new hand
         # labels, so nothing new can drift. Motivation (measured, multi-turn matrix 2026-08-04):

@@ -358,12 +358,15 @@ def compile_active_context(
         selected.update(_INTENT_FALLBACK)
 
     kept = [block for block in blocks if _region_name(block) in selected]
+    # Under the spine layout the live work graph is per-turn content and must render BELOW the
+    # frozen spine (slot 2, beside the intent family it replaces); legacy keeps the head slot.
+    _aw_slot = 2 if os.environ.get("AGENT_SESSION_SPINE", "").strip() == "1" else 0
     kept.append(ContextBlock(
         block_id="active-work:full", item_id="active-work", alternative_group="active-work",
         priority=100, instruction_class=InstructionClass.USER,
         freshness=FreshnessClass.REVISION_BOUND, fidelity=Fidelity.FULL,
         representation_loss=RepresentationLoss.NONE, content=active_text,
-        mandatory=True, order=-1, slot=0, epistemic_role=EpistemicRole.DIRECTIVE,
+        mandatory=True, order=-1, slot=_aw_slot, epistemic_role=EpistemicRole.DIRECTIVE,
         scope=("task",),
         source_refs=tuple(ContextSourceRef("user_utterance", ref.event_id)
                           for item in closure for ref in item.source_refs),
