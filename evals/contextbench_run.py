@@ -238,7 +238,19 @@ def _run_one(task: dict, workspace: str, model: str, max_steps: int,
             usage_acc["out_total"] += int(u.get("completion_tokens", 0) or 0)
 
     dispatch = make_dispatcher(slice_sink(state), _cap, _usage, *extra_sinks)
-    llm = OpenAILLM(model=model)
+    # Endpoint resolution parity with benchmarks/run.py (dead-run incident 2026-08-05: a bare
+    # OpenAILLM(model=...) fell through to the DEFAULT endpoint and 404'd every task in ~1s —
+    # 50 silent one-step no-ops that read as a finished sweep). Env wins; config supplies the
+    # provider base_url/key otherwise.
+    if not (os.environ.get("LLM_BASE_URL") and os.environ.get("LLM_API_KEY")):
+        from sliceagent.config import load_config
+        _cfg = load_config()
+        _prov = (_cfg.providers() or {}).get("deepseek") if "deepseek" in str(model) else None
+        llm = OpenAILLM(model=model,
+                        api_key=os.environ.get("LLM_API_KEY") or (_prov or {}).get("api_key") or _cfg.api_key,
+                        base_url=os.environ.get("LLM_BASE_URL") or (_prov or {}).get("base_url") or _cfg.base_url or None)
+    else:
+        llm = OpenAILLM(model=model)
     record_user(state, prompt)
     build = make_build_slice(state, tools, retriever, memory, prompt, session_id, model_id=model)
     t0 = time.time()
