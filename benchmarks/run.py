@@ -100,7 +100,7 @@ class _Tap:
         return self._record(self.inner.complete_with_control(messages, schemas, **kw), t0)
 
 
-def run(scn):
+def run(scn, memory_mode="real"):
     from sliceagent.code_index import make_code_index
     from sliceagent.events import make_dispatcher
     from sliceagent.loop import run_turn
@@ -121,16 +121,39 @@ def run(scn):
     tap = _Tap(_configured_llm())
     if hasattr(tap.inner, "set_cache_key"):
         tap.inner.set_cache_key(os.path.basename(workdir))
-    memory = NullMemory()
+    # PRODUCTION PARITY IS THE DEFAULT. The original harness wired NullMemory, whose
+    # episode_manifest/search_episodes return empty — the recall channel (hippocampus paging,
+    # search_history, history/ locators) was STRUCTURALLY absent from every published multi-turn
+    # number, and a scenario built to exercise recall (s6) silently tested an agent without it.
+    # "null" remains available as the labeled carried-slice-only ABLATION, never the default.
+    session_id = f"bench-{scn['name']}-{os.getpid()}"
+    sinks = []
+    telem = None
+    if memory_mode == "real":
+        vault = tempfile.mkdtemp(prefix=f"bench-vault-{scn['name']}-")
+        os.environ["SLICEAGENT_VAULT"] = vault          # isolate: never the user's ~/.sliceagent
+        from sliceagent.hippocampus import EpisodeSink, HistoryFS, make_search_history_tool
+        from sliceagent.memory import LocalMemory
+        from sliceagent.telemetry import make_telemetry_sink
+        memory = LocalMemory(prefer_memem=False)
+        episodic = EpisodeSink(memory, session_id=session_id, task_id_fn=lambda: "t-bench",
+                               title_fn=lambda: scn["name"], outcome_fn=lambda: {})
+        telem = make_telemetry_sink()
+        sinks = [episodic, telem]
+        tools._history = HistoryFS(memory, session_id)
+        tools.registry.register(make_search_history_tool(memory, session_id))
+    else:
+        memory = NullMemory()
     # State reduction is authoritative, not a best-effort observer. A reducer failure must fail the eval.
-    dispatch = make_dispatcher(required=(slice_sink(state),))
+    dispatch = make_dispatcher(*sinks, required=(slice_sink(state),))
 
     per_turn = []; t0 = time.time(); err = ""
     try:
         for i, p in enumerate(prompts):
             record_user(state, p)
             n0 = len(tap.calls)
-            result = run_turn(build_slice=make_build_slice(state, tools, retriever, memory, p),
+            result = run_turn(build_slice=make_build_slice(state, tools, retriever, memory, p,
+                                                           session_id),
                               llm=tap, tools=tools, dispatch=dispatch, max_steps=max_steps)
             ct = tap.calls[n0:]
             from meter import enrich as _enrich
@@ -159,10 +182,25 @@ def run(scn):
                       "in_cached": sum(c["cached"] for c in calls),
                       "out_total": sum(c["out"] for c in calls)},
                      os.environ.get("AGENT_MODEL", "deepseek-v4-flash"))
+    # LIVENESS GATE: a run that claims the real memory mode must PROVE the archive was written and
+    # report the recall counters. "No episodes" under memory_mode=real is a harness failure, not a
+    # result — the exact defect this gate exists to make impossible to miss again.
+    liveness = {"memory_mode": memory_mode, "episodes_written": None,
+                "recalls": None, "re_reads": None}
+    if memory_mode == "real":
+        try:
+            eps, _total = memory.episode_manifest(session_id, 200)
+            liveness["episodes_written"] = len(eps)
+        except Exception as exc:  # noqa: BLE001
+            liveness["episodes_written"] = f"manifest_error:{type(exc).__name__}"
+        if telem is not None:
+            liveness.update(telem.summary())
+        if not eps:
+            passed, detail = False, "HARNESS INVALID: memory_mode=real but zero episodes archived"
     return {
         "scenario": scn["name"], "passed": bool(passed), "detail": str(detail)[:100],
         "steps": len(calls), "wall_s": round(time.time() - t0, 1),
-        "per_turn": per_turn, **totals,
+        "per_turn": per_turn, **liveness, **totals,
     }
 
 
@@ -170,13 +208,16 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="Run the sliceagent multi-turn coding benchmark.")
     ap.add_argument("--scenario", default=None, help="one scenario name, or omit for all three")
     ap.add_argument("--json-out", default="", help="directory to also write one <scenario>.json per run")
+    ap.add_argument("--memory", choices=("real", "null"), default="real",
+                    help="real = production wiring (archive + recall + telemetry, isolated vault); "
+                         "null = the carried-slice-only ablation, labeled as such")
     args = ap.parse_args(argv)
     names = [args.scenario] if args.scenario else sorted(
         n for n in os.listdir(TASKS) if os.path.isdir(os.path.join(TASKS, n)))
     failed = False
     for name in names:
         try:
-            r = run(load_scenario(name))
+            r = run(load_scenario(name), memory_mode=args.memory)
         except Exception as e:  # noqa: BLE001
             print(f"{name}: setup/run error — {type(e).__name__}: {e}")
             failed = True

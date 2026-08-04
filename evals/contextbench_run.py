@@ -119,7 +119,7 @@ def _spans_from_slice(rendered: str, root: str) -> dict[str, list[list[int]]]:
 
 
 def _run_one(task: dict, workspace: str, model: str, max_steps: int,
-             prompt_style: str = "baseline") -> dict:
+             prompt_style: str = "baseline", memory_mode: str = "real") -> dict:
     """One read-only retrieval turn. Returns both ledgers plus accounting."""
     from sliceagent_cli.code_index import make_code_index
     from sliceagent_cli.code_grep import make_grep_tool
@@ -155,6 +155,27 @@ def _run_one(task: dict, workspace: str, model: str, max_steps: int,
     tools = LocalToolHost(workspace)
     tools.registry.register(make_grep_tool(tools))
     retriever = make_code_index(workspace)
+    # PRODUCTION PARITY (same defect as benchmarks/run.py): the original arm passed memory=None, so
+    # the model never even SAW the search_history tool or the manifest region — a different tool
+    # surface from production, silently. Single-turn means the archive is empty (as in any real
+    # first turn), but surface parity is still parity. "null" stays available as the ablation.
+    import tempfile as _tf
+    session_id = f"cb-{task['instance_id'][-16:]}-{os.getpid()}"
+    memory = None
+    telem = None
+    extra_sinks = []
+    if memory_mode == "real":
+        os.environ["SLICEAGENT_VAULT"] = _tf.mkdtemp(prefix="cb-vault-")
+        from sliceagent_cli.hippocampus import EpisodeSink, HistoryFS, make_search_history_tool
+        from sliceagent_cli.memory import LocalMemory
+        from sliceagent_cli.telemetry import make_telemetry_sink
+        memory = LocalMemory(prefer_memem=False)
+        telem = make_telemetry_sink()
+        extra_sinks = [EpisodeSink(memory, session_id=session_id, task_id_fn=lambda: "t-cb",
+                                   title_fn=lambda: task["instance_id"][-24:], outcome_fn=lambda: {}),
+                       telem]
+        tools._history = HistoryFS(memory, session_id)
+        tools.registry.register(make_search_history_tool(memory, session_id))
 
     pulled: dict[str, list[list[int]]] = {}
     steps: list[dict] = []
@@ -216,10 +237,10 @@ def _run_one(task: dict, workspace: str, model: str, max_steps: int,
             usage_acc["in_cached"] += int(u.get("input_cache_read", 0) or 0)
             usage_acc["out_total"] += int(u.get("completion_tokens", 0) or 0)
 
-    dispatch = make_dispatcher(slice_sink(state), _cap, _usage)
+    dispatch = make_dispatcher(slice_sink(state), _cap, _usage, *extra_sinks)
     llm = OpenAILLM(model=model)
     record_user(state, prompt)
-    build = make_build_slice(state, tools, retriever, None, prompt, model_id=model)
+    build = make_build_slice(state, tools, retriever, memory, prompt, session_id, model_id=model)
     t0 = time.time()
     result = run_turn(build_slice=build, llm=llm, tools=tools, dispatch=dispatch,
                       max_steps=max_steps)
@@ -238,6 +259,11 @@ def _run_one(task: dict, workspace: str, model: str, max_steps: int,
         "wall_s": round(time.time() - t0, 1),
         "n_steps": int(getattr(result, "steps", 0) or 0),
         "usage": dict(usage_acc),
+        "memory_mode": memory_mode,
+        "episodes_written": (len(memory.episode_manifest(session_id, 50)[0])
+                             if memory is not None else None),
+        **({"recalls": telem.summary()["recalls"], "re_reads": telem.summary()["re_reads"]}
+           if telem is not None else {"recalls": None, "re_reads": None}),
     }
 
 
@@ -266,6 +292,9 @@ def main() -> int:
     ap.add_argument("--language", default="python", help="'' for all languages")
     ap.add_argument("--model", default=os.environ.get("AGENT_MODEL", "deepseek-v4-flash"))
     ap.add_argument("--max-steps", type=int, default=40)
+    ap.add_argument("--memory", choices=("real", "null"), default="real",
+                    help="real = production tool surface (archive+search_history, isolated vault); "
+                         "null = the legacy ablation without the recall surface")
     ap.add_argument("--prompt", choices=("baseline", "exhaustive"), default="baseline",
                     help="convergence arm: 'exhaustive' asks for a COMPLETE location list")
     ap.add_argument("--work", default=os.path.expanduser("~/.cache/contextbench-repos"))
@@ -293,7 +322,7 @@ def main() -> int:
         if workspace is None:
             continue
         try:
-            run = _run_one(task, workspace, a.model, a.max_steps, a.prompt)
+            run = _run_one(task, workspace, a.model, a.max_steps, a.prompt, a.memory)
         except Exception as exc:  # noqa: BLE001 — one bad task never kills the sweep
             import traceback
             print(f"  run failed: {type(exc).__name__}: {str(exc)[:160]}", file=sys.stderr)
