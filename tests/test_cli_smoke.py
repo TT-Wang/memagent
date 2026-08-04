@@ -47,6 +47,7 @@ def _no_key_env():
     import tempfile
     env = {k: v for k, v in os.environ.items()
            if k not in ("LLM_API_KEY", "OPENAI_API_KEY", "MOONSHOT_API_KEY", "DEEPSEEK_API_KEY",
+                        "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY",
                         "AGENT_MODEL", "LLM_BASE_URL", "AGENT_PROVIDER")}
     home = tempfile.mkdtemp(prefix="firstrun-home-")
     env.update({"PYTHONPATH": os.path.join(_ROOT, "src"),
@@ -62,7 +63,9 @@ def piped_no_key_run_keeps_the_gate_no_prompt():
                        cwd=_ROOT, env=_no_key_env(), stdin=subprocess.DEVNULL,
                        capture_output=True, text=True, timeout=60)
     out = r.stdout + r.stderr
-    assert "No API key found" in out, out[-800:]
+    # Either first-run gate is acceptable — the no-default-model gate (added later) fires before
+    # the key gate on a fully blank env; the contract under test is gate-not-wizard + exit 1.
+    assert "No API key found" in out or "No model configured" in out, out[-800:]
     assert "guided setup.\n\n" not in out and "sliceagent setup" not in out, \
         "wizard must not auto-start without a tty:\n" + out[-800:]
     assert r.returncode == 1, f"expected gate exit 1, got {r.returncode}"
@@ -125,7 +128,9 @@ def aborted_wizard_falls_back_to_the_gate():
     from sliceagent import cli as cli_mod
     from sliceagent import onboarding as ob
 
-    env_patch = {k: "" for k in ("LLM_API_KEY", "OPENAI_API_KEY", "MOONSHOT_API_KEY", "AGENT_MODEL")}
+    env_patch = {k: "" for k in (   # every key var the CLI's _key_present() checks — keep in sync
+        "LLM_API_KEY", "OPENAI_API_KEY", "MOONSHOT_API_KEY", "DEEPSEEK_API_KEY",
+        "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "AGENT_MODEL")}
     env_patch["HOME"] = tempfile.mkdtemp(prefix="firstrun-abort-")
     out = io.StringIO()
     # one fake object doubling as tty-stdin (isatty only) and capturing tty-stdout: redirect_stdout

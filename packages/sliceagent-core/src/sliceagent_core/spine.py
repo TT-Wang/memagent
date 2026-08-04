@@ -20,6 +20,11 @@ from collections.abc import Iterable, Mapping
 _ASK_CAP_CHARS = 2000
 _MAX_FILES = 8
 
+# R8: the paired verbatim reserve boundary — the spine subsumes every turn OLDER than this many
+# completed exchanges. ONE shared knob: both lanes (the conversation region and the graph lane's
+# adjacency blocks) import this constant, so the subsumption boundary can never drift per-lane.
+RESERVE_PAIRS = 2
+
 
 def _session_key(session_id: str) -> str:
     """MUST stay byte-identical to contextfs.ArtifactHistoryProvider._session_key — the frozen

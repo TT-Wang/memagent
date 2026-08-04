@@ -113,3 +113,134 @@ def test_reserve_boundary_keeps_last_two_pairs(monkeypatch):
     assert "ask 4" in reserved and "ask 5" in reserved
     assert "ask 1" not in reserved and "ask 2" not in reserved
     assert full.count("ask ") >= reserved.count("ask ")
+
+
+# ---------------------------------------------------------------- P2 exit gates (roadmap)
+
+def _store(root, session="session-1"):
+    from sliceagent_core.runtime_persistence import LocalTurnStore
+    import pathlib
+    root = pathlib.Path(root); root.mkdir(parents=True, exist_ok=True)
+    workspace = str(root / "ws"); (root / "ws").mkdir(exist_ok=True)
+    return LocalTurnStore(workspace, session, store_root=str(root / "store"))
+
+
+def test_seeded_secret_absent_from_spine_bytes_and_artifact(tmp_path):
+    """Roadmap P2: seeded secret in the ask -> absent from spine bytes and artifact alike (R2)."""
+    secret = "sk-test-secret-0123456789abcdef"
+    store = _store(tmp_path)
+    active = store.begin(task_id="task-A", logical_id="turn-1",
+                         user_request=f"deploy with token {secret} now")
+    store.seal(state={}, record={}, status="end_turn", title=f"used {secret}",
+               files=("a.py",))
+    artifact = store.coordinator.artifacts.get(active.artifact_id)
+    digest = artifact.structured_body["spine_digest"]
+    assert secret not in digest
+    assert secret not in str(artifact.to_dict())
+    assert "deploy with token" in digest          # the ask survives, only the secret is masked
+
+
+def test_seal_and_recovery_share_renderer_byte_parity(tmp_path):
+    """Roadmap P2: seal-path render == journal-only recovery render through the ONE renderer (R3).
+
+    Literal cross-status equality is impossible (recovery is honestly 'interrupted'), so the parity
+    contract is: each path's stored digest must byte-equal render_turn_digest fed ONLY the
+    journal-derivable inputs that path had. Any hidden live-state input on either side breaks this.
+    """
+    # (a) seal path
+    store = _store(tmp_path / "a")
+    active = store.begin(task_id="task-A", logical_id="turn-1", user_request="fix the bug")
+    store.seal(state={}, record={}, status="end_turn", title="fixed", files=("b.py",))
+    artifact = store.coordinator.artifacts.get(active.artifact_id)
+    expected = render_turn_digest(
+        artifact_id=active.artifact_id, session_id="session-1", task_id="task-A",
+        status=artifact.status, user_request="fix the bug",
+        logical_turn_id="turn-1", segment_index=0, title="fixed", files=("b.py",),
+    )
+    assert artifact.structured_body["spine_digest"] == expected
+    # (b) crash before any seal -> journal-only recovery, same renderer
+    crashed = _store(tmp_path / "b")
+    crash = crashed.begin(task_id="task-A", logical_id="turn-1", user_request="continue the fix")
+    crashed.close()
+    recovered = _store(tmp_path / "b", session="session-2")
+    result = recovered.recover_pending()[0]
+    rec_artifact = recovered.coordinator.artifacts.get(result.artifact_id)
+    assert result.artifact_id == crash.artifact_id
+    assert rec_artifact.structured_body["spine_digest"] == render_turn_digest(
+        artifact_id=crash.artifact_id, session_id="session-1", task_id="task-A",
+        status="interrupted", user_request="continue the fix",
+    )
+    # both digests are loadable spine entries of the ORIGINAL session, in seal order
+    spine = load_session_spine([artifact, rec_artifact], "session-1")
+    assert spine == [artifact.structured_body["spine_digest"],
+                     rec_artifact.structured_body["spine_digest"]]
+
+
+# ---------------------------------------------------------------- P4 exit gates (roadmap)
+
+def _lane_blocks(st):
+    """The REAL region blocks both lanes consume (seed._slice_context + regions.build_context_blocks)."""
+    from sliceagent_core.seed import _slice_context
+    from sliceagent_core.regions import build_context_blocks
+    return build_context_blocks(_slice_context(st, artifacts="# none", open_file_paths=()))
+
+
+def test_lane_parity_spine_bytes_reach_the_graph_lane(monkeypatch):
+    """Roadmap P4: same session state -> the frozen spine bytes appear IDENTICALLY in the prompt
+    with and without an active graph (graph-only tail blocks aside). Guards the compile_active_context
+    filter from silently dropping the sealed record on graph turns."""
+    from sliceagent_core.active_work import WorkDelta, WorkGraph, WorkItem
+    from sliceagent_core.context import ElasticityController
+    from sliceagent_core.context_compiler import compile_active_context
+    from sliceagent_core.regions import render_context_selection
+    monkeypatch.setenv("AGENT_SESSION_SPINE", "1")
+    entry = "[turn t-9 · task t · completed]\nask: refactor the parser\n"
+    st = _mini_slice(spine=(entry,))
+    st.continuity.conversation = [
+        {"user": "earlier ask", "assistant": "earlier reply", "artifact_id": "t-9"},
+        {"user": "current ask"},
+    ]
+    blocks = _lane_blocks(st)
+
+    plain = render_context_selection(ElasticityController().select(
+        compile_active_context(st, blocks)))
+
+    graph = WorkGraph().open_request("event-1", "current ask", logical_id="L1")
+    root = graph.request_roots[0]
+    graph = graph.apply(WorkDelta(expected_revision=1, creates=(WorkItem(
+        id="do-it", root_id=root.id, source_refs=root.source_refs,
+        description="do the work", status="in_progress",
+    ),)))
+    st.active_work = graph
+    graphed = render_context_selection(ElasticityController().select(
+        compile_active_context(st, _lane_blocks(st), source_texts={"event-1": "current ask"},
+                               current_logical_id="L1")))
+
+    assert entry in plain
+    assert entry in graphed                        # the filter must not drop the sealed record
+    spine_header = "# SESSION SPINE"
+    assert spine_header in plain and spine_header in graphed
+    # frozen means frozen: header through entry bytes are identical across lanes
+    def spine_section(text):
+        start = text.index(spine_header)
+        return text[start: text.index(entry, start) + len(entry)]
+    assert spine_section(plain) == spine_section(graphed)
+
+
+def test_lane_parity_reserve_boundary_shared_knob(monkeypatch):
+    """Roadmap P4 reserve-pairing gate: under the flag BOTH lanes keep exactly spine.RESERVE_PAIRS
+    completed exchanges verbatim — the subsumption boundary cannot drift per-lane (R8)."""
+    from sliceagent_core.context_compiler import _adjacency_blocks
+    from sliceagent_core.regions import render_conversation
+    from sliceagent_core.spine import RESERVE_PAIRS
+    from sliceagent_core.pfc import Slice
+    monkeypatch.setenv("AGENT_SESSION_SPINE", "1")
+    st = Slice(); st.reset("now")
+    st.continuity.conversation = [
+        {"user": f"ask {i}", "assistant": f"reply {i}"} for i in range(1, 6)
+    ] + [{"user": "now"}]
+    conv = render_conversation(st)
+    kept_conv = [i for i in range(1, 6) if f"ask {i}" in conv]
+    adj = [b for b in _adjacency_blocks(st) if b.fidelity.name == "FULL"]
+    kept_adj = [i for i in range(1, 6) if any(f"ask {i}" in b.content for b in adj)]
+    assert kept_conv == kept_adj == [5 - RESERVE_PAIRS + 1 + k for k in range(RESERVE_PAIRS)]

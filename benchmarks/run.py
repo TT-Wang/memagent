@@ -25,6 +25,10 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TASKS = os.path.join(HERE, "multiturn_coding")
+if HERE not in sys.path:
+    # `from meter import …` below must resolve regardless of the caller's cwd — the harness is
+    # loaded via importlib from probes/tests that never chdir into benchmarks/.
+    sys.path.insert(0, HERE)
 
 
 def _load(path, name):
@@ -97,7 +101,13 @@ class _Tap:
         # while the scenario passed — a fully plausible-looking dead meter. Both entry points must
         # be wrapped; transparent forwarding is exactly what makes the miss invisible.
         t0 = time.time()
-        return self._record(self.inner.complete_with_control(messages, schemas, **kw), t0)
+        inner_fn = getattr(self.inner, "complete_with_control", None)
+        if inner_fn is None:
+            # The tap must MIRROR the inner adapter's capability, not add one: a class-level method
+            # makes the feature probe true even when the wrapped LLM (a two-argument fake) lacks the
+            # seam. Fall back exactly as model_runner would on the unwrapped adapter.
+            return self._record(self.inner.complete(messages, schemas), t0)
+        return self._record(inner_fn(messages, schemas, **kw), t0)
 
 
 def run(scn, memory_mode="real"):
@@ -188,6 +198,7 @@ def run(scn, memory_mode="real"):
     liveness = {"memory_mode": memory_mode, "episodes_written": None,
                 "recalls": None, "re_reads": None}
     if memory_mode == "real":
+        eps = ()
         try:
             eps, _total = memory.episode_manifest(session_id, 200)
             liveness["episodes_written"] = len(eps)
@@ -196,7 +207,12 @@ def run(scn, memory_mode="real"):
         if telem is not None:
             liveness.update(telem.summary())
         if not eps:
-            passed, detail = False, "HARNESS INVALID: memory_mode=real but zero episodes archived"
+            # Liveness invalidates a PASS; it must never OVERWRITE the detail of a run that already
+            # failed for its own reason (the masked-first-cause trap: the reducer error vanished
+            # behind this line and the eval read as a harness problem instead of a product one).
+            note = "HARNESS INVALID: memory_mode=real but zero episodes archived"
+            detail = note if passed else f"{detail}; {note}"
+            passed = False
     return {
         "scenario": scn["name"], "passed": bool(passed), "detail": str(detail)[:100],
         "steps": len(calls), "wall_s": round(time.time() - t0, 1),

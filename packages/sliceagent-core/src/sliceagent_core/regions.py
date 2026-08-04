@@ -179,8 +179,10 @@ def render_conversation(s) -> str:
     if os.environ.get("AGENT_SESSION_SPINE", "").strip() == "1":
         # R8: the paired verbatim reserve keeps the most recent COMPLETED exchanges (deixis resolves
         # against assistant text — "go with your recommendation" needs the reply that enumerated the
-        # options); the SESSION SPINE subsumes everything older. Boundary = the last 2 pairs.
-        prior = prior[-2:]
+        # options); the SESSION SPINE subsumes everything older. Boundary = spine.RESERVE_PAIRS,
+        # shared with the graph lane's adjacency blocks so the two lanes cannot drift.
+        from .spine import RESERVE_PAIRS
+        prior = prior[-RESERVE_PAIRS:]
     if not prior:
         return ""
     lines = []
@@ -1225,6 +1227,24 @@ def build_context_blocks(ctx: dict) -> tuple[ContextBlock, ...]:
         # midsection mutates every turn regardless of order) and wholesale reorderings destabilized
         # constraint-discipline scenarios. The structural successor is the Session Spine
         # (docs/SESSION-SPINE-DESIGN.md): frozen sealed-turn bytes, not re-rendered projections.)
+        if (name == "task_objective"
+                and getattr(getattr(ctx.get("s"), "task", None), "objective_status", "active")
+                == "provisionally_satisfied"):
+            # Same topic does not mean "redo the original request".  Once a clean turn provisionally
+            # completes it, retain it as lower-authority, pageable background until an explicit resume or
+            # failure report reactivates it. (Restored 2026-08-04: the layout-branch deletion above swept
+            # this LIVE demotion by accident; test_requirements is the guard.)
+            priority, authority, freshness, mandatory = (
+                28, InstructionClass.TASK_STATE, FreshnessClass.HISTORICAL, False,
+            )
+        if name == "conversation" and _ring_within_reserve(ctx.get("s")):
+            # VERBATIM USER RESERVE, legacy (no-graph) lane — mirrors _adjacency_blocks' reserved
+            # priority so behavior is lane-independent (the known path-asymmetry bug class). SOFT:
+            # the locator alternative below stays available as the true last resort. A ring whose
+            # total chars exceed the budget (giant pastes inside the floor) keeps normal priority
+            # and degrades like any region. (Restored 2026-08-04: the layout-branch deletion above
+            # swept this LIVE elevation by accident; test_user_reserve is the guard.)
+            priority = RESERVE_PRIORITY
         group = f"region:{name}"
         role, scope, source_refs, resource_refs = _region_provenance(name, ctx)
         out.append(ContextBlock(

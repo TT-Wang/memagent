@@ -56,7 +56,7 @@ def _run(host, llm):
 
 def test_t4_reexecutes_then_aliases_only_the_provider_view(monkeypatch, tmp_path):
     body = "\n".join(f"value-{i:04d}" for i in range(400))
-    (tmp_path / "data.txt").write_text(body)
+    (tmp_path / "data.txt").write_text(body, encoding="utf-8")
     monkeypatch.setenv("AGENT_EXPERIMENTAL_RESULT_ALIAS", "1")
     host = _CountingHost(root=str(tmp_path))
     llm = _LLM([
@@ -79,12 +79,12 @@ def test_t4_reexecutes_then_aliases_only_the_provider_view(monkeypatch, tmp_path
     assert metrics["result_alias_count"] == 1
     assert metrics["result_alias_saved_chars"] > 0
     blobs = list((tmp_path / ".sliceagent" / "blobs").glob("observation-*.txt"))
-    assert len(blobs) == 1 and blobs[0].read_text() == messages[0]
+    assert len(blobs) == 1 and blobs[0].read_text(encoding="utf-8") == messages[0]
 
 
 def test_t4_flag_off_is_the_unchanged_full_result_path(monkeypatch, tmp_path):
     monkeypatch.delenv("AGENT_EXPERIMENTAL_RESULT_ALIAS", raising=False)
-    (tmp_path / "data.txt").write_text("alpha\nbeta\n")
+    (tmp_path / "data.txt").write_text("alpha\nbeta\n", encoding="utf-8")
     host = _CountingHost(root=str(tmp_path))
     llm = _LLM([
         _response(_call("read_file", "r1", path="data.txt")),
@@ -103,7 +103,7 @@ def test_t4_flag_off_is_the_unchanged_full_result_path(monkeypatch, tmp_path):
 
 def test_t4_changed_result_is_never_aliased(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_EXPERIMENTAL_RESULT_ALIAS", "1")
-    (tmp_path / "data.txt").write_text("old\n")
+    (tmp_path / "data.txt").write_text("old\n", encoding="utf-8")
     host = _CountingHost(root=str(tmp_path))
     llm = _LLM([
         _response(_call("read_file", "r1", path="data.txt")),
@@ -141,7 +141,7 @@ def test_t4_requires_a_recoverable_exact_source(monkeypatch):
 
 def test_t4_does_not_treat_same_wave_dedup_as_cross_step_reobservation(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_EXPERIMENTAL_RESULT_ALIAS", "1")
-    (tmp_path / "data.txt").write_text("one wave\n")
+    (tmp_path / "data.txt").write_text("one wave\n", encoding="utf-8")
     host = _CountingHost(root=str(tmp_path))
     llm = _LLM([
         _response(

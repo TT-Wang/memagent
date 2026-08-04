@@ -7,6 +7,7 @@ small embedding hosts compatible without creating a second admission heuristic.
 """
 from __future__ import annotations
 
+import os
 from collections.abc import Iterable, Mapping
 
 from .active_work import SourceMismatchError, WorkGraph, WorkItem
@@ -26,7 +27,10 @@ from .regions import RESERVE_PRIORITY, reserve_keep
 
 # These are host-owned live control surfaces, not optional topical furniture. Child outcomes are ordinary
 # current-turn tool results; they deliberately do not become a second cross-turn context region.
-_ALWAYS = frozenset({"focus", "reconciliation"})
+# session_spine: frozen sealed-turn bytes are the session's durable record and must reach BOTH lanes
+# through this one seam (SESSION-SPINE-ROADMAP P4); the region self-suppresses when the flag is off
+# or the spine is empty, so unconditional selection costs nothing outside the spine layout.
+_ALWAYS = frozenset({"focus", "reconciliation", "session_spine"})
 _INTENT_FALLBACK = frozenset({"intent", "task_objective", "corrections", "task_constraints"})
 _FILE_KINDS = frozenset({"file", "workspace_file", "path", "workspace", "git"})
 def _region_name(block: ContextBlock) -> str:
@@ -238,7 +242,14 @@ def _adjacency_blocks(s, *, order: int = 10_000) -> tuple[ContextBlock, ...]:
     # the known path-asymmetry bug class): keep the newest exchanges up to the reserve budget
     # (floor = the legacy _ADJACENCY_ROUNDS), and mark the within-budget ones RESERVE_PRIORITY
     # so they degrade only as the true last resort — soft, so ContextUnfit semantics survive.
-    chosen = prior[-reserve_keep(prior, floor=_ADJACENCY_ROUNDS):]   # oldest first ... immediate prior last
+    if os.environ.get("AGENT_SESSION_SPINE", "").strip() == "1":
+        # R8 under the spine: everything older than the paired reserve is already frozen in the
+        # SESSION SPINE, so keeping extra verbatim pairs here would duplicate spine bytes. The
+        # boundary is spine.RESERVE_PAIRS — the SAME knob the conversation region uses.
+        from .spine import RESERVE_PAIRS
+        chosen = prior[-RESERVE_PAIRS:]
+    else:
+        chosen = prior[-reserve_keep(prior, floor=_ADJACENCY_ROUNDS):]   # oldest first ... immediate prior last
     reserved = reserve_keep(chosen, floor=0)      # how many NEWEST pairs fit the budget outright
     newest = len(chosen) - 1
     blocks: list[ContextBlock] = []
