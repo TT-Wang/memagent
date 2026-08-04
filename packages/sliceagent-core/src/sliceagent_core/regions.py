@@ -1006,7 +1006,10 @@ REGIONS: tuple[RegionSpec, ...] = (
         + "\n") if (stream_mode() == "tape"
                      and getattr(c["s"], "session_tape", None)) else ""),
         2, 92, InstructionClass.TASK_STATE, FreshnessClass.HISTORICAL, False, EpistemicRole.CLAIM),
-    RegionSpec("conversation",   STABLE,   lambda c: (f"# RECENT CONVERSATION (the last few exchanges this session — for continuity; older turns are paged out — read_file(\"@sliceagent/history/turn-N.md\") fetches one, read_file(\"@sliceagent/history/index.md\") lists all)\n{render_conversation(c['s'])}\n\n" if render_conversation(c["s"]) else ""), 2, 80, InstructionClass.USER, FreshnessClass.HISTORICAL, False, EpistemicRole.CLAIM),
+    # Under the TAPE the conversation region is retired: user asks live verbatim in the digests,
+    # assistant replies as frozen [reply] entries — same bytes, billed once instead of every
+    # boundary (census 2026-08-05: this region cost 3.8k chars per boundary at full price).
+    RegionSpec("conversation",   STABLE,   lambda c: ("" if stream_mode() == "tape" else (f"# RECENT CONVERSATION (the last few exchanges this session — for continuity; older turns are paged out — read_file(\"@sliceagent/history/turn-N.md\") fetches one, read_file(\"@sliceagent/history/index.md\") lists all)\n{render_conversation(c['s'])}\n\n" if render_conversation(c["s"]) else "")), 2, 80, InstructionClass.USER, FreshnessClass.HISTORICAL, False, EpistemicRole.CLAIM),
     RegionSpec("findings",       VOLATILE, lambda c: (f"# YOUR NOTES FROM PRIOR TOOL CALLS (task-scoped observations and claims to REUSE as leads; OPEN FILES stays ground truth for current contents. Per-note tags mark trust: no tag = observed, '(your note)' = summary, '(UNVERIFIED claim)' = not confirmed)\n{render_findings(c['s'].findings[-c['max_findings']:], c['s'].finding_source)}\n\n" if render_findings(c["s"].findings[-c["max_findings"]:], c["s"].finding_source) else ""), 3, 82, InstructionClass.TASK_STATE, FreshnessClass.REVISION_BOUND, False, EpistemicRole.CLAIM),
     # progress/world carry CLAIM (not the CONTROL_STATE fallback they used to inherit): both are the model's
     # own carried-forward assertions — same epistemic status as findings — never live observation.

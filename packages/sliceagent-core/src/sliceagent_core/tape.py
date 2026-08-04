@@ -53,6 +53,70 @@ def render_tape_external(path: str, new_hash: str, reason: str) -> str:
             "current truth]\n")
 
 
+# The reply entry replaces the RECENT CONVERSATION region under the tape (census 2026-08-05:
+# that region cost 3.8k chars EVERY boundary at full price; a frozen reply entry is billed once).
+# Verbatim head + loud cap; the sealed turn artifact carries the full text.
+REPLY_CAP_CHARS = 1200
+
+
+def render_tape_reply(artifact_id: str, text: str) -> str:
+    body = str(text or "").strip()
+    if len(body) > REPLY_CAP_CHARS:
+        body = body[:REPLY_CAP_CHARS] + f" …[+{len(body) - REPLY_CAP_CHARS} chars in sealed turn]"
+    return f"[reply {artifact_id}]\n{body}\n[end reply]\n" if body else ""
+
+
+# Generational compaction v1 (SESSION-TAPE-DESIGN §3): the bound is a CONTRACT. When the tape
+# exceeds the budget, dead file history (entries superseded by a later base) is garbage-collected
+# first; if still over, the oldest span folds into one epoch marker with a locator. Each
+# compaction mutates frozen bytes and therefore breaks the provider prefix ONCE — deliberately,
+# rarely, and counted (liveness reports it; the byte probe attributes it).
+TAPE_BUDGET_CHARS = 48_000
+
+
+def compact_tape(tape: list, *, budget: int = TAPE_BUDGET_CHARS) -> dict:
+    def total() -> int:
+        return sum(len(e) for e in tape)
+    info = {"gc_removed": 0, "epoch_folds": 0}
+    if total() <= budget:
+        return info
+    # pass 1: GC dead file history — for each path keep only entries at/after its LATEST base
+    latest_base: dict[str, int] = {}
+    for i, e in enumerate(tape):
+        if e.startswith("[base "):
+            latest_base[e.split(" ", 2)[1]] = i
+    dead = set()
+    for i, e in enumerate(tape):
+        for kind in ("[base ", "[patch ", "[external "):
+            if e.startswith(kind):
+                path = e[len(kind):].split(" ", 1)[0]
+                if path in latest_base and i < latest_base[path]:
+                    dead.add(i)
+    if dead:
+        info["gc_removed"] = len(dead)
+        tape[:] = [e for i, e in enumerate(tape) if i not in dead]
+    # pass 2: ONE fold sized to reach the budget — the oldest span (merging any earlier epoch
+    # marker so the label keeps the true first turn) collapses into a single marker.
+    if total() > budget and len(tape) > 8:
+        overshoot = total() - budget
+        running, cut = 0, 0
+        while cut < len(tape) - 4 and running < overshoot + 200:
+            running += len(tape[cut]); cut += 1
+        span = tape[:cut]
+        turns = [e.split(" ", 2)[1] for e in span if e.startswith("[turn ")]
+        first = turns[0] if turns else "start"
+        if span and span[0].startswith("[epoch compacted: "):
+            prev = span[0][len("[epoch compacted: "):].split("..", 1)[0].strip()
+            if prev:
+                first = prev
+        last = turns[-1] if turns else "…"
+        marker = (f"[epoch compacted: {first}..{last} — {cut} entries removed; the full sealed "
+                  "record remains readable via read_file(\"@sliceagent/history/index.md\")]\n")
+        tape[:] = [marker, *tape[cut:]]
+        info["epoch_folds"] += 1
+    return info
+
+
 class TapeRecorder:
     """Collects (kind, path, disk-snapshot) at TOOL-EVENT time — the only moment each edit's
     post-state is individually observable (a seal-time disk read collapses a turn's edits)."""
@@ -86,7 +150,8 @@ class TapeRecorder:
 
 
 def tape_seal_update(s, tools, rows, *, session_id: str, artifact_id: str, task_id: str,
-                     status: str, user_request: str) -> dict:
+                     status: str, user_request: str, assistant_reply: str = "",
+                     budget: int = TAPE_BUDGET_CHARS) -> dict:
     """Append this sealed turn's entries to ``s.continuity.session_tape``.
 
     ``rows`` = TapeRecorder rows in execution order. Composition state lives in
@@ -153,4 +218,12 @@ def tape_seal_update(s, tools, rows, *, session_id: str, artifact_id: str, task_
             _append_base(path, body_r)
             if path not in rebased:
                 rebased.append(path)
-    return {"entries": len(tape), "drift": drift, "rebased": rebased}
+
+    # the turn's outward answer, frozen last (chronology) — replaces the RECENT CONVERSATION
+    # region's per-boundary re-bill; deixis anchors against tape bytes from here on
+    reply_entry = render_tape_reply(artifact_id, redact_text(str(assistant_reply or "")))
+    if reply_entry:
+        tape.append(reply_entry)
+
+    compaction = compact_tape(tape, budget=budget)
+    return {"entries": len(tape), "drift": drift, "rebased": rebased, **compaction}

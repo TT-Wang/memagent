@@ -109,4 +109,4 @@ def test_contextfs_contract_is_compiled_only_from_a_live_advertised_schema():
 def test_kernel_is_cacheable_and_materially_compact():
     assert SYSTEM_PROMPT.count("{{MEMORY_MODEL}}") == 1
     rendered = SYSTEM_PROMPT.replace("{{MEMORY_MODEL}}", MEMORY_ACCUMULATE)
-    assert len(rendered) < 12_000, "stable operating kernel regrew into a policy encyclopedia"
+    assert len(rendered) < 12_300, "stable operating kernel regrew into a policy encyclopedia"  # +300 budget 2026-08-05: the verified-absence stop rule (measured spin class: 11-command re-proving loops, ~$0.02/run)

@@ -131,6 +131,58 @@ def test_region_layout_and_flags(tmp_path, monkeypatch):
     assert "def f():" in off[1]["content"]
 
 
+def test_reply_entry_replaces_conversation_region(tmp_path, monkeypatch):
+    """A2: the turn's outward answer freezes into the tape (billed once); the RECENT CONVERSATION
+    region and the graph adjacency lane render nothing under the tape."""
+    from sliceagent_core.context_compiler import _adjacency_blocks
+    from sliceagent_core.memory_null import NullMemory
+    from sliceagent_core.pfc import Slice
+    from sliceagent_core.seed import make_build_slice
+    s, tools = _ws(tmp_path)
+    s.continuity.conversation = [{"user": "first ask", "assistant": "I recommend option two."},
+                                 {"user": "now"}]
+    tape_seal_update(s, tools, [], session_id="s", artifact_id="t-1", task_id="k",
+                     status="completed", user_request="first ask",
+                     assistant_reply="I recommend option two.")
+    assert any(e.startswith("[reply t-1]") and "option two" in e
+               for e in s.continuity.session_tape)
+    big = tape_seal_update(s, tools, [], session_id="s", artifact_id="t-2", task_id="k",
+                          status="completed", user_request="x", assistant_reply="y" * 5000)
+    assert any("…[+3800 chars in sealed turn]" in e for e in s.continuity.session_tape)
+    monkeypatch.setenv("AGENT_SESSION_TAPE", "1")
+    plan = make_build_slice(s, tools, None, NullMemory(), "next ask")()
+    user = plan[1]["content"]
+    assert "# RECENT CONVERSATION" not in user
+    assert "[reply t-1]" in user
+    assert _adjacency_blocks(s) == ()
+    monkeypatch.delenv("AGENT_SESSION_TAPE", raising=False)
+    off = make_build_slice(s, tools, None, NullMemory(), "next ask")()
+    assert "# RECENT CONVERSATION" in off[1]["content"]
+
+
+def test_compaction_contract_gc_then_epoch_fold(tmp_path):
+    """A3: over budget -> dead file history GC'd first, then oldest span folds to ONE epoch
+    marker with a locator; under budget -> frozen bytes untouched."""
+    from sliceagent_core.tape import compact_tape, render_tape_base
+    tape = [f"[turn t-{i} · task k · completed]\nask: step {i}\n" for i in range(1, 4)]
+    tape.insert(1, render_tape_base("a.py", "old " * 300))
+    tape.insert(2, "[patch a.py -> @sha256:aaa · unified diff of the edit you made]\n-x\n+y\n")
+    tape.append(render_tape_base("a.py", "new " * 300))          # supersedes the old history
+    before = list(tape)
+    assert compact_tape(tape, budget=10_000_000) == {"gc_removed": 0, "epoch_folds": 0}
+    assert tape == before                                        # under budget: untouched
+    info = compact_tape(tape, budget=2_000)
+    assert info["gc_removed"] == 2                               # dead base+patch removed
+    assert not any("old old" in e for e in tape)
+    assert any("new new" in e for e in tape)                     # latest base survives
+    tape2 = [f"[turn t-{i} · task k · completed]\nask: {'x' * 400}\n" for i in range(1, 21)]
+    info2 = compact_tape(tape2, budget=4_000)
+    assert info2["epoch_folds"] >= 1
+    assert tape2[0].startswith("[epoch compacted: t-1..")
+    assert "index.md" in tape2[0]
+    assert sum(len(e) for e in tape2) <= 4_000
+
+
 def test_seeded_secret_absent_from_tape(tmp_path):
     secret = "sk-test-secret-0123456789abcdef"
     s, tools = _ws(tmp_path, body=f"token = '{secret}'\n")

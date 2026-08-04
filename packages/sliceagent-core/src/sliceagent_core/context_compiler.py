@@ -231,6 +231,10 @@ def _adjacency_blocks(s, *, order: int = 10_000) -> tuple[ContextBlock, ...]:
     two``, and corrections resolve against the recent conversation directly instead of a transcript.  Historical
     user text is framed as adjacency, never a second current directive.
     """
+    if os.environ.get("AGENT_SESSION_TAPE", "").strip() == "1":
+        # Under the tape the adjacency lane is retired with the conversation region: asks live in
+        # the digests, replies as frozen [reply] entries — one stream, both lanes (path-symmetry).
+        return ()
     prior = [
         row for row in getattr(s, "conversation", ())[:-1]
         if str(row.get("user") or "").strip() and str(row.get("assistant") or "").strip()

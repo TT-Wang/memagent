@@ -165,7 +165,7 @@ def run(scn, memory_mode="real"):
     dispatch = make_dispatcher(*sinks, required=(slice_sink(state),))
 
     per_turn = []; t0 = time.time(); err = ""
-    tape_drift = 0; tape_rebased = 0
+    tape_drift = 0; tape_rebased = 0; tape_compactions = 0
     try:
         for i, p in enumerate(prompts):
             record_user(state, p)
@@ -188,14 +188,18 @@ def run(scn, memory_mode="real"):
             if tape_on:
                 # SESSION TAPE seal update (digest + bases + patches + honesty net), ONE renderer
                 # family for every producer; the recorder resets per turn.
+                _reply = ""
+                if getattr(state, "conversation", None):
+                    _reply = str(state.conversation[-1].get("assistant") or "")
                 info = tape_seal_update(
                     state, tools, recorder.rows, session_id=session_id,
                     artifact_id=f"turn-{i + 1:03d}", task_id=scn["name"],
                     status="completed" if result.stop_reason == "end_turn" else str(result.stop_reason),
-                    user_request=p,
+                    user_request=p, assistant_reply=_reply,
                 )
                 recorder.reset()
                 tape_drift += info["drift"]; tape_rebased += len(info["rebased"])
+                tape_compactions += info.get("gc_removed", 0) + info.get("epoch_folds", 0)
             else:
                 # SESSION SPINE parity with the host: the CLI appends each committed turn's digest
                 # (rendered once, at seal) to the session cache. The bench has no artifact store, so
@@ -229,7 +233,9 @@ def run(scn, memory_mode="real"):
                 "recalls": None, "re_reads": None}
     if tape_on:
         liveness.update(tape_entries=len(state.continuity.session_tape),
-                        tape_drift=tape_drift, tape_rebased=tape_rebased)
+                        tape_drift=tape_drift, tape_rebased=tape_rebased,
+                        tape_compactions=tape_compactions,
+                        tape_chars=sum(len(e) for e in state.continuity.session_tape))
     if memory_mode == "real":
         eps = ()
         try:

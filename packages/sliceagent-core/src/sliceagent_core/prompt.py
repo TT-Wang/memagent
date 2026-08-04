@@ -95,6 +95,8 @@ SYSTEM_PROMPT = (
     "<stop>\n"
     "When the end-state is verified as far as the environment allows, deliver the result and make no further tool "
     "call. Do not repeat a check that already established the required property.\n"
+    "A verified ABSENCE is equally terminal: a reported problem that does not reproduce, or a change that already "
+    "holds, is delivered with its one piece of evidence — never re-proven with more reproductions.\n"
     "</stop>\n\n"
     "<communication>\n"
     "Replies belong to the user and are not a scratchpad. Think silently; do not narrate process with `Let me`, "
