@@ -185,8 +185,12 @@ def render_conversation(s) -> str:
             lines.extend(("assistant (verbatim):", str(e["assistant"])))
         lines.append("--- end recent exchange ---")
     older = s.turns - len(prior) - 1  # turns beyond the ring (minus the current in-progress turn)
-    tail = (f"\n(+{older} earlier turn(s) this session not shown — they're listed in PAGED-OUT HISTORY "
-            "below; read_file(\"@sliceagent/history/turn-N.md\") to view any)") if older > 0 else ""
+    # Self-sufficient locator, no section pointer: the old "listed in PAGED-OUT HISTORY below" could
+    # dangle TODAY (kernel-graph turns render conversation with no manifest section at all), and any
+    # layout reorder flips "below" to false. The locator alone is the recovery path either way.
+    tail = (f"\n(+{older} earlier turn(s) this session not shown — "
+            "read_file(\"@sliceagent/history/turn-N.md\") to view any, "
+            "read_file(\"@sliceagent/history/index.md\") for the list)") if older > 0 else ""
     return "\n".join(lines) + tail
 
 
@@ -617,7 +621,7 @@ def render_task_objective(s) -> str:
         )
     return (
         "# STABLE TASK OBJECTIVE (original user objective; keep it active across follow-ups. "
-        + ("The RETAINED USER CORRECTIONS below are newer and override conflicting base details"
+        + ("The RETAINED USER CORRECTIONS section is newer and overrides conflicting base details"
            if has_corrections else "A newer retained user correction supersedes any conflicting detail")
         + ")\n"
         f"{goal}{provenance}\n\n"
@@ -948,10 +952,10 @@ REGIONS: tuple[RegionSpec, ...] = (
     RegionSpec("related_code",   STABLE,   lambda c: (f"\n# RELATED CODE (repo map — relevant files & their definitions; read/grep for the actual code)\n{c['discovery']}\n" if c["discovery"] else ""), 1, 45, InstructionClass.DATA, FreshnessClass.DERIVED, False, EpistemicRole.CLAIM),
     # REPO MAP moved to the BYTE-STABLE system prefix (make_build_slice) so it's a prompt-cache PREFIX
     # shared across every turn + subagent, instead of full-price in the volatile user slice. (Region removed.)
-    RegionSpec("skills",         STABLE,   lambda c: (f"# ACTIVE SKILL(S) (loaded instructions — FOLLOW these for the task)\n{render_skills(c['s'].active_skills)}\n\n" if render_skills(c["s"].active_skills) else ""), 2, 65, InstructionClass.TASK_STATE, FreshnessClass.REVISION_BOUND, False, EpistemicRole.PROCEDURE),
+    RegionSpec("skills",         STABLE,   lambda c: (f"# ACTIVE SKILL(S) (loaded instructions — FOLLOW these when addressing the CURRENT REQUEST)\n{render_skills(c['s'].active_skills)}\n\n" if render_skills(c["s"].active_skills) else ""), 2, 65, InstructionClass.TASK_STATE, FreshnessClass.REVISION_BOUND, False, EpistemicRole.PROCEDURE),
     RegionSpec("memory",         STABLE,   lambda c: (f"# RELEVANT KNOWLEDGE CANDIDATES (selected USER, PROJECT, CRAFT, or legacy leads — not current-world proof; verify when load-bearing)\n{c['memory']}\n\n" if c["memory"] else ""), 2, 20, InstructionClass.DATA, FreshnessClass.HISTORICAL, False, EpistemicRole.CLAIM),
     # ──────────── TIER 3 · MY STATE — what the agent has established / is doing. ────────────
-    RegionSpec("conversation",   STABLE,   lambda c: (f"# RECENT CONVERSATION (the last few exchanges this session — for continuity; older turns are paged out — see PAGED-OUT HISTORY below for the read_file(\"@sliceagent/history/turn-N.md\") call to fetch each)\n{render_conversation(c['s'])}\n\n" if render_conversation(c["s"]) else ""), 2, 80, InstructionClass.USER, FreshnessClass.HISTORICAL, False, EpistemicRole.CLAIM),
+    RegionSpec("conversation",   STABLE,   lambda c: (f"# RECENT CONVERSATION (the last few exchanges this session — for continuity; older turns are paged out — read_file(\"@sliceagent/history/turn-N.md\") fetches one, read_file(\"@sliceagent/history/index.md\") lists all)\n{render_conversation(c['s'])}\n\n" if render_conversation(c["s"]) else ""), 2, 80, InstructionClass.USER, FreshnessClass.HISTORICAL, False, EpistemicRole.CLAIM),
     RegionSpec("findings",       VOLATILE, lambda c: (f"# YOUR NOTES FROM PRIOR TOOL CALLS (task-scoped observations and claims to REUSE as leads; OPEN FILES stays ground truth for current contents. Per-note tags mark trust: no tag = observed, '(your note)' = summary, '(UNVERIFIED claim)' = not confirmed)\n{render_findings(c['s'].findings[-c['max_findings']:], c['s'].finding_source)}\n\n" if render_findings(c["s"].findings[-c["max_findings"]:], c["s"].finding_source) else ""), 3, 82, InstructionClass.TASK_STATE, FreshnessClass.REVISION_BOUND, False, EpistemicRole.CLAIM),
     # progress/world carry CLAIM (not the CONTROL_STATE fallback they used to inherit): both are the model's
     # own carried-forward assertions — same epistemic status as findings — never live observation.
@@ -1203,9 +1207,38 @@ def build_context_blocks(ctx: dict) -> tuple[ContextBlock, ...]:
         # Selection/elasticity are untouched — only the assembly slot changes; within a class,
         # REGION_ORDER's relative order is preserved. Default stays the attention layout pending
         # the pre-registered A/B (quality parity gate + fresh-token delta).
-        if os.environ.get("AGENT_SEED_LAYOUT", "").strip().lower() == "cache":
-            slot = {FreshnessClass.REVISION_BOUND: 0, FreshnessClass.HISTORICAL: 1,
-                    FreshnessClass.DERIVED: 2, FreshnessClass.LIVE: 6}.get(freshness, 2)
+        _layout = os.environ.get("AGENT_SEED_LAYOUT", "").strip().lower()
+        if _layout == "v3":
+            # v3 — chronology-mimicking order (the transcript lesson, applied to a rebuilt seed):
+            # stable knowledge first, accumulating state in the middle, live workspace state late,
+            # and THE CURRENT ASK LAST. Transcript agents get cache locality for free because their
+            # order IS chronology: old-and-frozen leads, newest-and-salient trails. v1/v2 sorted by
+            # declared freshness and buried the ask mid-tail among six LIVE regions — quality broke
+            # (max_steps spins) while the prefix barely improved. v3 keeps the recency slot for the
+            # ask itself: intent is the LAST bytes before the model answers, exactly where a chat
+            # turn puts the newest user message.
+            _V3_SLOT = {
+                "skills": 0, "memory": 0, "task_objective": 0, "task_constraints": 0,
+                "corrections": 0,
+                "conversation": 1, "related_code": 1,
+                "findings": 2, "progress": 2, "world": 2, "threads": 2, "cache_manifest": 2,
+                "open_files": 3, "worktree": 3,
+                "user_report": 6, "reconciliation": 6, "error": 6,
+                "focus": 7, "turn_contract": 8, "intent": 9,
+            }
+            slot = _V3_SLOT.get(name, slot)
+        elif _layout == "cache":
+            # v2. v1 ranked by declared freshness ALONE and got measurably burned: `findings`
+            # (REVISION_BOUND) and four other volatile-tier regions accumulate PER STEP, so
+            # hoisting them into the stable head broke the within-turn prefix on every call —
+            # fresh went UP 25% on s2 (134k -> 168k) and s5 failed. Declared freshness ranks
+            # cross-turn change; the tier already encodes within-turn mutability. Both gates:
+            # anything volatile-tier or LIVE goes to the tail, full stop.
+            if _tier == "volatile" or freshness == FreshnessClass.LIVE:
+                slot = 6
+            else:
+                slot = {FreshnessClass.REVISION_BOUND: 0, FreshnessClass.HISTORICAL: 1,
+                        FreshnessClass.DERIVED: 2}.get(freshness, 2)
         if (name == "task_objective"
                 and getattr(getattr(ctx.get("s"), "task", None), "objective_status", "active")
                 == "provisionally_satisfied"):
@@ -1263,5 +1296,10 @@ def render_context_selection(selection: ContextSelection) -> str:
     # list KeyError'd if a leading slot was empty and SILENTLY DROPPED any region added at a gap slot
     # (e.g. 5). Slot 5 stays the reserved blank separator between the stable bulk (≤4, cache-leading) and
     # the volatile high-authority tail (≥6); an empty slot renders as "" (a blank line), as before.
+    # Runtime layouts (AGENT_SEED_LAYOUT) may REASSIGN block slots beyond the declared range —
+    # v3 places turn_contract/intent at 8/9 — so the ceiling must come from the blocks actually
+    # selected, not from the declared table alone (which capped at 6 and silently dropped them).
     max_slot = max(entry[3] for entry in REGION_ORDER)
+    if selection.blocks:
+        max_slot = max(max_slot, max(block.slot for block in selection.blocks))
     return "\n".join(slots.get(i, "") for i in range(max_slot + 1))
