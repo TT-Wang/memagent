@@ -170,15 +170,61 @@ def one_placement_law():
                         content="c")
     assert blk.slot == zones["intent"]
     # the seam rejects ANY producer above the tape, including one built by hand
-    rogue = ContextBlock(block_id="rogue:full", item_id="rogue", alternative_group="rogue",
-                         priority=1, instruction_class=InstructionClass.DATA,
-                         freshness=FreshnessClass.LIVE, fidelity=Fidelity.FULL,
-                         representation_loss=RepresentationLoss.NONE, content="c", slot=0)
+    # BOTH seams, adversarially (review at 124dc13: the first validator trusted self-claimed
+    # identity, so a forged `region:session_tape` at slot 0 walked through).
+    kw = dict(alternative_group="g", priority=1, instruction_class=InstructionClass.DATA,
+              freshness=FreshnessClass.LIVE, fidelity=Fidelity.FULL,
+              representation_loss=RepresentationLoss.NONE, content="c")
+    for item, slot in (("region:session_tape", 0), ("region:intent", 0), ("session_tape", 0),
+                       ("future-producer", 0)):
+        try:
+            ContextBlock(block_id="x", item_id=item, slot=slot, **kw)
+            raise AssertionError(f"constructor let {item} sit at zone {slot}")
+        except ValueError:
+            pass
+    for item, slot in (("region:session_tape", 5), ("region:intent", 6)):
+        blk = ContextBlock(block_id="x", item_id=item, slot=slot, **kw)
+        try:
+            assert_placement_law((blk,))
+            raise AssertionError(f"seam let {item} sit at zone {slot}")
+        except ValueError:
+            pass
+    tape2 = tuple(ContextBlock(block_id=b, item_id="region:session_tape", slot=TAPE_ZONE, **kw)
+                  for b in ("a", "b"))
     try:
-        assert_placement_law((rogue,))
-        raise AssertionError("the assembly seam must reject a block above the tape")
+        assert_placement_law(tape2)
+        raise AssertionError("two tape-zone blocks must be rejected")
     except ValueError:
         pass
+    # the safe default: a producer that never thought about placement lands in the TAIL
+    assert ContextBlock(block_id="x", item_id="future-producer", **kw).slot == TAIL_ZONE
+
+
+@check
+def the_factory_is_the_only_construction_site():
+    """Structural, not advisory: product code must build blocks ONLY through context_block().
+    An AST scan, because a comment cannot stop the next producer from bypassing the law."""
+    import ast as _ast
+    root = os.path.join(os.path.dirname(__file__), "..", "..", "..", "packages")
+    offenders = []
+    for pkg in ("sliceagent-core", "sliceagent-cli"):
+        base = os.path.join(root, pkg, "src")
+        for dirpath, _dirs, files in os.walk(base):
+            for fn in files:
+                if not fn.endswith(".py"):
+                    continue
+                path = os.path.join(dirpath, fn)
+                tree = _ast.parse(open(path, encoding="utf-8").read())
+                factory = next((n for n in _ast.walk(tree) if isinstance(n, _ast.FunctionDef)
+                                and n.name == "context_block"), None)
+                allowed = set(range(factory.lineno, factory.end_lineno + 1)) if factory else set()
+                for n in _ast.walk(tree):
+                    if (isinstance(n, _ast.Call) and getattr(n.func, "id", "") == "ContextBlock"
+                            and n.lineno not in allowed):
+                        offenders.append(f"{os.path.relpath(path, root)}:{n.lineno}")
+    assert not offenders, (
+        "ContextBlock built outside regions.context_block() — route it through the factory so "
+        f"placement stays derived: {offenders}")
 
 
 @check

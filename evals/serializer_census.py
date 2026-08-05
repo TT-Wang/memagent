@@ -21,10 +21,11 @@ real, not by-construction: message-list overhead is computed analytically (brack
 separators) and nested-value serializations are computed independently, so any change in
 json.dumps behavior or a bad span split breaks the sum.
 
-Token estimates are CALIBRATED per run from the provider's own ledger (meter.in_total / summed
-prompt bytes) — the repo's static _TOKENS_PER_BYTE is a runtime budgeting constant measured 1.63x
-off the billed ratio, which corrupted every dollar attribution while leaving shares intact. A
->10% mismatch between the category sum and meter.in_total marks the run INVALID. Raw char and UTF-8
+Token estimates are CALIBRATED per run from the provider's own ledger (meter.in_total divided by
+the summed prompt bytes) — the repo's static _TOKENS_PER_BYTE is a runtime budgeting constant and
+was measured 1.63x off the billed ratio, which corrupted every dollar attribution while leaving
+shares intact. The calibrated ratio, the static one, and the drift are all reported; a >10%
+mismatch between the category sum and meter.in_total marks the run INVALID. Raw char and UTF-8
 byte counts are always reported alongside.
 
 Also measured per call: whether the seed user message (msg1) is byte-identical to the previous
@@ -256,11 +257,12 @@ def summarize(res: dict, calls: list[dict], *, scenario: str, label: str, wall_s
         rows.append({"call": i, "turn": turn, "first_of_turn": bool(first), "n_msgs": len(call["msgs"]),
                      "n_schemas": call["n_schemas"], "whole_chars": whole, "gap": gap,
                      "msg1_same_as_prev": msg1_same, "parts": parts})
-    # CALIBRATED TOKEN ESTIMATE (2026-08-05 fix): the repo's static byte->token ratio is a RUNTIME
-    # budgeting constant, not a billing one — measured against this very run it was 2.61
-    # chars/token while the provider billed 4.26, inflating every est_tokens by ~1.63x. Shares
-    # were unaffected (uniform scale) but est_tokens x price — the number an optimization
-    # decision reads — was 63% too high. Calibrate from the run's own provider ledger.
+    # CALIBRATED TOKEN ESTIMATE (2026-08-05 fix): the repo's static byte->token ratio is a
+    # RUNTIME budgeting constant, not a billing one — measured against this very run it was
+    # 2.61 chars/token while the provider billed 4.26, inflating every est_tokens by ~1.63x.
+    # Shares were unaffected (uniform scale) but any est_tokens x price was 63% too high, and
+    # that number is exactly what an optimization decision reads. Calibrate from the run's own
+    # provider ledger: total prompt bytes across calls -> in_total tokens.
     prompt_bytes = sum(a["bytes"] for a in totals.values())
     meter_in = int(res.get("in_total") or 0)
     calibrated = (meter_in / prompt_bytes) if (prompt_bytes and meter_in) else None

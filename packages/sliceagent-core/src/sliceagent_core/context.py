@@ -154,7 +154,10 @@ class ContextBlock:
     mandatory: bool = False
     reobservable: bool = False
     order: int = 0
-    slot: int = 0
+    # TAIL by default (placement law): the old default of 0 put any block whose producer never
+    # thought about placement into the HEAD — above the tape, killing the prefix. Forgetting is
+    # now safe; only an item that DECLARES an upper zone can reach one.
+    slot: int = 2
     epistemic_role: EpistemicRole = EpistemicRole.CLAIM
     scope: tuple[str, ...] = ()
     source_refs: tuple[SourceRef, ...] = ()
@@ -172,7 +175,10 @@ class ContextBlock:
         except Exception:  # noqa: BLE001 — no registry available: nothing to enforce
             return
         want = region_zone(self.item_id)
-        if self.slot != want:
+        if self.slot <= 1 and self.slot != want:
+            # the dangerous half: reaching the TAPE zone or the frozen HEAD without declaring it.
+            # Exact equality for every zone is checked at the assembly seam (assert_placement_law),
+            # which is where a full selection is available.
             raise ValueError(
                 f"placement law: block {self.block_id!r} (item {self.item_id!r}) declares slot "
                 f"{self.slot} but its item belongs in zone {want}")
