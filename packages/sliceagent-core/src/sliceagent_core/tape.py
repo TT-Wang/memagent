@@ -219,6 +219,32 @@ def reasoning_entry(artifact_id: str, text: str) -> TapeEntry | None:
     return TapeEntry(kind="reasoning", rendered=rendered, ref=str(artifact_id))
 
 
+# ── P8: findings + knowledge RIDE THE TAPE ────────────────────────────────────────────────────
+# s11 forensics: the volatile tail below the tape re-bills every turn because the tape's growth
+# shifts it — findings and the knowledge memo were the two biggest quasi-stable payers. As tape
+# entries they freeze into the cached prefix; the regions render only what is NOT yet frozen
+# (post-seal: nothing). Kimi gets this for free (its findings live in the transcript); this is
+# the slice's equivalent, still bounded by the epoch fold.
+
+def finding_entry(line: str) -> TapeEntry | None:
+    body = str(line or "").strip()
+    if not body:
+        return None
+    h = _h(body)
+    return TapeEntry(kind="finding", rendered=f"[finding @{h}]\n{body}\n",
+                     post_hash=h)
+
+
+def knowledge_entry(text: str) -> TapeEntry | None:
+    body = str(text or "").strip()
+    if not body:
+        return None
+    return TapeEntry(
+        kind="knowledge", post_hash=_h(body),
+        rendered=("[knowledge — cross-session candidates recalled for the CURRENT task; leads, "
+                  "not current-world proof]\n" + body + "\n[end knowledge]\n"))
+
+
 def digest_entry(rendered_digest: str, artifact_id: str = "") -> TapeEntry:
     """The sealed artifact's spine_digest string, appended VERBATIM (R1: one render, and it
     inherits the seal path's redaction)."""
@@ -446,6 +472,27 @@ def tape_seal_update(s, tools, rows, *, session_id: str, artifact_id: str, task_
         re_ = reasoning_entry(artifact_id, redact_text(str(assistant_reasoning)))
         if re_ is not None:
             _append(re_)
+
+    # P8: freeze NEW findings (text-hash registry — a refresh re-appends the same text and must
+    # NOT duplicate; edited text is a NEW entry, chronologically honest) and the knowledge memo
+    # (once per hash change — R6b keys it by stable task, so once per topic in practice).
+    cont = s.continuity
+    frozen = getattr(cont, "tape_finding_hashes", None)
+    if frozen is None:
+        cont.tape_finding_hashes = frozen = []
+    from .regions import render_findings
+    for f in list(getattr(s, "findings", ()) or ()):
+        line = render_findings([f], getattr(s, "finding_source", None))
+        fe = finding_entry(redact_text(line))
+        if fe is not None and fe.post_hash not in frozen:
+            _append(fe)
+            frozen.append(fe.post_hash)
+    k_text = str(getattr(cont, "last_knowledge_render", "") or "")
+    if k_text:
+        ke = knowledge_entry(redact_text(k_text))
+        if ke is not None and ke.post_hash != getattr(cont, "tape_knowledge_hash", ""):
+            _append(ke)
+            cont.tape_knowledge_hash = ke.post_hash
 
     if journal_path:
         try:

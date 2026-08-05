@@ -581,6 +581,9 @@ def make_build_slice(state, tools, retriever, memory, task: str, session_id: str
             _paths = sorted(set(s.edited_files) | set(s.active_files)) or None   # PFC: carried file sets
             lessons_memo[memo_goal] = render_memory(pages.lookup(memo_goal, kind="memory-lessons", k=6, paths=_paths))
         lessons_memo.setdefault(memo_goal, "")
+        # P8: the seal freezes this memo onto the tape (once per hash change); the region then
+        # self-suppresses. Stored here because the memo lives in the build closure, not on s.
+        s.continuity.last_knowledge_render = lessons_memo[memo_goal]
         # OPEN FILES under the tape: locator lines ONLY — build_artifacts (the full-body
         # renderer) is NOT called on the product path anymore. It used to run first and be
         # overwritten by the locator snapshot, re-reading and formatting every selected file

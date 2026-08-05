@@ -223,6 +223,11 @@ class ContinuityState:
     # (path -> hash/content) backing the per-seal honesty net; both survive ordinary seals.
     session_tape: list = field(default_factory=list)
     tape_files: dict = field(default_factory=dict)
+    # P8: findings/knowledge frozen onto the tape — the registries that keep the freeze
+    # idempotent (finding text-hashes; the knowledge memo's last frozen hash + its build render).
+    tape_finding_hashes: list = field(default_factory=list)
+    tape_knowledge_hash: str = ""
+    last_knowledge_render: str = ""
     recovery_child_report_count: int = 0
 
     def reset(self) -> None:

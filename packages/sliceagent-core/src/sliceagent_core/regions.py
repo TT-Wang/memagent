@@ -268,6 +268,31 @@ def render_findings(findings: list[str], sources: dict | None = None) -> str:
     )
 
 
+
+def _unfrozen_findings(s, cap: int) -> list:
+    """P8: findings already frozen onto the tape render there (cached prefix); the region shows
+    only what the tape does not yet hold — post-seal, nothing."""
+    rows = list(getattr(s, "findings", ()) or ())[-cap:]
+    frozen = set(getattr(getattr(s, "continuity", None), "tape_finding_hashes", ()) or ())
+    if not frozen:
+        return rows
+    from .tape import _h
+    src = getattr(s, "finding_source", None)
+    return [f for f in rows if _h(render_findings([f], src).strip()) not in frozen]
+
+
+def _knowledge_frozen(s, memory_text: str) -> bool:
+    """P8: the knowledge memo renders as a region only until the seal freezes it."""
+    if not memory_text:
+        return False
+    cont = getattr(s, "continuity", None)
+    frozen_hash = str(getattr(cont, "tape_knowledge_hash", "") or "")
+    if not frozen_hash:
+        return False
+    from .tape import _h
+    return _h(str(memory_text).strip()) == frozen_hash
+
+
 def render_world(world: dict) -> str:
     """The agent's durable WORLD MODEL — a maintained key→value scratchpad (maze map, inventory,
     system state, plan). Long/multiline values render as their own block; short ones as bullets.
@@ -915,7 +940,7 @@ REGIONS: tuple[RegionSpec, ...] = (
     # REPO MAP moved to the BYTE-STABLE system prefix (make_build_slice) so it's a prompt-cache PREFIX
     # shared across every turn + subagent, instead of full-price in the volatile user slice. (Region removed.)
     RegionSpec("skills",         STABLE,   lambda c: (f"# ACTIVE SKILL(S) (loaded instructions — FOLLOW these when addressing the CURRENT REQUEST)\n{render_skills(c['s'].active_skills)}\n\n" if render_skills(c["s"].active_skills) else ""), 2, 65, InstructionClass.TASK_STATE, FreshnessClass.REVISION_BOUND, False, EpistemicRole.PROCEDURE),
-    RegionSpec("memory",         STABLE,   lambda c: (f"# RELEVANT KNOWLEDGE CANDIDATES (selected USER, PROJECT, CRAFT, or legacy leads — not current-world proof; verify when load-bearing)\n{c['memory']}\n\n" if c["memory"] else ""), 2, 20, InstructionClass.DATA, FreshnessClass.HISTORICAL, False, EpistemicRole.CLAIM),
+    RegionSpec("memory",         STABLE,   lambda c: (f"# RELEVANT KNOWLEDGE CANDIDATES (selected USER, PROJECT, CRAFT, or legacy leads — not current-world proof; verify when load-bearing)\n{c['memory']}\n\n" if (c["memory"] and not _knowledge_frozen(c.get("s"), c["memory"])) else ""), 2, 20, InstructionClass.DATA, FreshnessClass.HISTORICAL, False, EpistemicRole.CLAIM),
     # ──────────── TIER 3 · MY STATE — what the agent has established / is doing. ────────────
     # (The SESSION SPINE region AND its session cache retired at graduation — the tape absorbs
     # the digests; the substrate (render_turn_digest, artifact scans) lives on as the seal
@@ -939,7 +964,7 @@ REGIONS: tuple[RegionSpec, ...] = (
     # Under the TAPE the conversation region is retired: user asks live verbatim in the digests,
     # assistant replies as frozen [reply] entries — same bytes, billed once instead of every
     # boundary (census 2026-08-05: this region cost 3.8k chars per boundary at full price).
-    RegionSpec("findings",       VOLATILE, lambda c: (f"# YOUR NOTES FROM PRIOR TOOL CALLS (task-scoped observations and claims to REUSE as leads; OPEN FILES stays ground truth for current contents. Per-note tags mark trust: no tag = observed, '(your note)' = summary, '(UNVERIFIED claim)' = not confirmed)\n{render_findings(c['s'].findings[-c['max_findings']:], c['s'].finding_source)}\n\n" if render_findings(c["s"].findings[-c["max_findings"]:], c["s"].finding_source) else ""), 3, 82, InstructionClass.TASK_STATE, FreshnessClass.REVISION_BOUND, False, EpistemicRole.CLAIM),
+    RegionSpec("findings",       VOLATILE, lambda c: (f"# YOUR NOTES FROM PRIOR TOOL CALLS (task-scoped observations and claims to REUSE as leads; OPEN FILES stays ground truth for current contents. Per-note tags mark trust: no tag = observed, '(your note)' = summary, '(UNVERIFIED claim)' = not confirmed. Earlier notes are frozen as [finding] entries on the SESSION TAPE)\n{render_findings(_unfrozen_findings(c['s'], c['max_findings']), c['s'].finding_source)}\n\n" if render_findings(_unfrozen_findings(c["s"], c["max_findings"]), c["s"].finding_source) else ""), 3, 82, InstructionClass.TASK_STATE, FreshnessClass.REVISION_BOUND, False, EpistemicRole.CLAIM),
     # progress/world carry CLAIM (not the CONTROL_STATE fallback they used to inherit): both are the model's
     # own carried-forward assertions — same epistemic status as findings — never live observation.
     RegionSpec("progress",       VOLATILE, lambda c: (f"# PROGRESS SIGNALS (small task-scoped observations carried across turns; exact detail remains in @sliceagent/history/)\n{render_progress_signals(c['s'].task.progress_signals)}\n\n" if render_progress_signals(c['s'].task.progress_signals) else ""), 3, 35, InstructionClass.TASK_STATE, FreshnessClass.HISTORICAL, False, EpistemicRole.CLAIM),

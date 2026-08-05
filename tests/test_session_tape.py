@@ -444,6 +444,41 @@ def test_skill_activation_between_builds_keeps_tape_prefix(tmp_path, monkeypatch
         "the activated skill must render BELOW the tape"
 
 
+def test_p8_findings_and_knowledge_freeze_onto_the_tape(tmp_path):
+    """P8: findings + the knowledge memo become frozen tape entries; the regions then
+    self-suppress; a REFRESH (same text re-appended) never duplicates; a topic change
+    (new memo hash) freezes a new knowledge entry."""
+    from sliceagent_core.memory_null import NullMemory
+    from sliceagent_core.seed import make_build_slice
+    s, tools = _ws(tmp_path)
+    s.findings.append("core.py: the scheduler retries twice on failure")
+    s.continuity.last_knowledge_render = "- lesson: always pin the fixture"
+    _seal(s, tools, [], ask="first")
+    tape = s.continuity.session_tape
+    assert sum(1 for e in tape if e.kind == "finding") == 1
+    assert sum(1 for e in tape if e.kind == "knowledge") == 1
+    stream = tape_render(tape)
+    assert "scheduler retries twice" in stream and "pin the fixture" in stream
+    # refresh semantics: same text re-appended (pfc moves it to the end) — NO duplicate
+    s.findings.remove("core.py: the scheduler retries twice on failure")
+    s.findings.append("core.py: the scheduler retries twice on failure")
+    _seal(s, tools, [], n=2, ask="second")
+    assert sum(1 for e in tape if e.kind == "finding") == 1
+    assert sum(1 for e in tape if e.kind == "knowledge") == 1     # same memo hash: no re-freeze
+    # regions self-suppress what the tape holds
+    user = make_build_slice(s, tools, None, NullMemory(), "third ask")()[1]["content"]
+    assert "YOUR NOTES FROM PRIOR TOOL CALLS" not in user, "frozen finding must not re-render"
+    assert stream.count("scheduler retries twice") == 1
+    # an EDITED finding is a NEW entry (chronologically honest)
+    s.findings.append("core.py: the scheduler retries THREE times after the fix")
+    _seal(s, tools, [], n=3, ask="third")
+    assert sum(1 for e in tape if e.kind == "finding") == 2
+    # topic change: new memo -> one new knowledge entry
+    s.continuity.last_knowledge_render = "- lesson: the OTHER topic's candidates"
+    _seal(s, tools, [], n=4, ask="fourth")
+    assert sum(1 for e in tape if e.kind == "knowledge") == 2
+
+
 def test_workspace_rebase_carries_tape():
     from sliceagent_core.memory_null import NullMemory
     from sliceagent_core.session import Session, rebase_session_for_workspace
