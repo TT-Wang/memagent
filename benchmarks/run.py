@@ -89,6 +89,9 @@ class _Tap:
         cached = u.get("input_cache_read", 0) or u.get("cached_tokens", 0) or 0
         self.calls.append({"in": u.get("prompt_tokens", 0), "out": u.get("completion_tokens", 0),
                            "cached": cached, "wall": time.time() - t0})
+        rc = getattr(r, "reasoning_content", None)
+        if rc:
+            self.last_reasoning = rc          # newest wins; read at seal by the carry arm
         return r
 
     def complete(self, messages, tools):
@@ -195,11 +198,18 @@ def run(scn, memory_mode="real"):
             _reply = ""
             if getattr(state, "conversation", None):
                 _reply = str(state.conversation[-1].get("assistant") or "")
+            # A/B arm (out-lane research): AGENT_REASONING_CARRY=1 freezes a capped tail of the
+            # turn's final reasoning onto the tape — cached-in up, out (re-derivation) hopefully
+            # down. Off by default; the live A/B decides graduation.
+            _reasoning = ""
+            if os.environ.get("AGENT_REASONING_CARRY", "").strip() == "1":
+                _reasoning = str(getattr(tap, "last_reasoning", "") or "")
+                tap.last_reasoning = ""
             info = tape_seal_update(
                 state, tools, recorder.rows, session_id=session_id,
                 artifact_id=f"turn-{i + 1:03d}", task_id=scn["name"],
                 status="completed" if result.stop_reason == "end_turn" else str(result.stop_reason),
-                user_request=p, assistant_reply=_reply,
+                user_request=p, assistant_reply=_reply, assistant_reasoning=_reasoning,
                 # every live run records its stream — evals/tape_replay.py can then re-run
                 # future compaction/representation policies against REAL recorded seals
                 journal_path=os.path.join(workdir, ".tape-journal.jsonl"),

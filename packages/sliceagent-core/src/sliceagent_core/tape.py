@@ -201,6 +201,24 @@ def reply_entry(artifact_id: str, text: str) -> TapeEntry | None:
     return TapeEntry(kind="reply", rendered=rendered, ref=str(artifact_id)) if rendered else None
 
 
+# Cross-turn reasoning carry (out-lane A/B arm, quality roadmap): Kimi replays ALL prior
+# reasoning as cheap cached input and the model re-derives less expensive output; we discard
+# reasoning at seal. This entry lets an experiment arm freeze a CAPPED tail of the turn's final
+# reasoning onto the tape. Product default: callers pass nothing; the arm decides.
+REASONING_CAP_CHARS = 4000
+
+
+def reasoning_entry(artifact_id: str, text: str) -> TapeEntry | None:
+    body = str(text or "").strip()
+    if not body:
+        return None
+    if len(body) > REASONING_CAP_CHARS:
+        body = "…" + body[-REASONING_CAP_CHARS:]
+    rendered = (f"[reasoning {artifact_id} — your own prior thinking, for continuity; "
+                f"not user-visible]\n{body}\n[end reasoning]\n")
+    return TapeEntry(kind="reasoning", rendered=rendered, ref=str(artifact_id))
+
+
 def digest_entry(rendered_digest: str, artifact_id: str = "") -> TapeEntry:
     """The sealed artifact's spine_digest string, appended VERBATIM (R1: one render, and it
     inherits the seal path's redaction)."""
@@ -345,7 +363,7 @@ class TapeRecorder:
 
 def tape_seal_update(s, tools, rows, *, session_id: str, artifact_id: str, task_id: str,
                      status: str, user_request: str, assistant_reply: str = "",
-                     digest_text: str = "", journal_path: str = "",
+                     assistant_reasoning: str = "", digest_text: str = "", journal_path: str = "",
                      budget: int = TAPE_BUDGET_CHARS) -> dict:
     """THE single producer: append this sealed turn's entries to ``s.continuity.session_tape``.
 
@@ -424,6 +442,10 @@ def tape_seal_update(s, tools, rows, *, session_id: str, artifact_id: str, task_
     rep = reply_entry(artifact_id, redact_text(str(assistant_reply or "")))
     if rep is not None:
         _append(rep)
+    if assistant_reasoning:
+        re_ = reasoning_entry(artifact_id, redact_text(str(assistant_reasoning)))
+        if re_ is not None:
+            _append(re_)
 
     if journal_path:
         try:
