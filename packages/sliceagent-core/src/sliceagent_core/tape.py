@@ -45,17 +45,23 @@ class TapeEntry:
     """One frozen tape entry. `rendered` is written once and never edited; the typed fields are
     the ONLY inputs GC/fold/durability may reason over."""
 
-    kind: str            # "digest" | "base" | "patch" | "external" | "reply" | "epoch"
+    kind: str            # digest | base | patch | external | reply | epoch |
+    #                      finding | knowledge | reasoning
     rendered: str        # frozen model-visible bytes
     path: str = ""       # file-kind entries only
     payload: str = ""    # base: exact redacted body · patch: unified diff · others: ""
     no_nl: bool = False  # the post-state's exact content lacks a trailing newline
     post_hash: str = ""  # base/patch/external: _h() of the post-state exact content
-    ref: str = ""        # digest: artifact_id · epoch: first folded ref (chain anchor)
+    ref: str = ""        # digest: artifact_id · epoch: FIRST folded ref (chain anchor)
+    ref_end: str = ""    # epoch: LAST covered artifact ref — the reconciliation boundary
+    task: str = ""       # finding/knowledge: owning task id (the tape itself is session-scoped,
+    #                      exactly as turn digests always were; ownership is LABELLED so a
+    #                      cross-task reader can tell whose observation it is, and the region
+    #                      suppressors only suppress entries owned by the ACTIVE task)
 
     def to_record(self) -> dict:
         d = {"kind": self.kind, "rendered": self.rendered}
-        for k in ("path", "payload", "post_hash", "ref"):
+        for k in ("path", "payload", "post_hash", "ref", "ref_end", "task"):
             v = getattr(self, k)
             if v:
                 d[k] = v
@@ -68,7 +74,8 @@ class TapeEntry:
         return cls(kind=str(d.get("kind") or ""), rendered=str(d.get("rendered") or ""),
                    path=str(d.get("path") or ""), payload=str(d.get("payload") or ""),
                    no_nl=bool(d.get("no_nl")), post_hash=str(d.get("post_hash") or ""),
-                   ref=str(d.get("ref") or ""))
+                   ref=str(d.get("ref") or ""), ref_end=str(d.get("ref_end") or ""),
+                   task=str(d.get("task") or ""))
 
 
 def _norm(body: str) -> str:
@@ -226,23 +233,41 @@ def reasoning_entry(artifact_id: str, text: str) -> TapeEntry | None:
 # (post-seal: nothing). Kimi gets this for free (its findings live in the transcript); this is
 # the slice's equivalent, still bounded by the epoch fold.
 
-def finding_entry(line: str) -> TapeEntry | None:
-    body = str(line or "").strip()
+def canonical_text(text: str) -> str:
+    """THE identity of a finding/knowledge payload: redacted, stripped. One operation shared by
+    the tape producer and the region suppressors — hashing raw text in one place and redacted
+    text in the other let a redaction-modified finding freeze on the tape AND keep rendering
+    raw in the volatile tail (review Task152 High 1, planted-secret probe)."""
+    from .safety import redact_text
+    return redact_text(str(text or "")).strip()
+
+
+def finding_hash(line: str) -> str:
+    return _h(canonical_text(line))
+
+
+def knowledge_hash(text: str) -> str:
+    return _h(canonical_text(text))
+
+
+def finding_entry(line: str, *, task: str = "") -> TapeEntry | None:
+    body = canonical_text(line)
     if not body:
         return None
     h = _h(body)
-    return TapeEntry(kind="finding", rendered=f"[finding @{h}]\n{body}\n",
-                     post_hash=h)
+    label = f"[finding @{h}" + (f" · task {task}]" if task else "]")
+    return TapeEntry(kind="finding", rendered=f"{label}\n{body}\n", post_hash=h, task=str(task))
 
 
-def knowledge_entry(text: str) -> TapeEntry | None:
-    body = str(text or "").strip()
+def knowledge_entry(text: str, *, task: str = "") -> TapeEntry | None:
+    body = canonical_text(text)
     if not body:
         return None
-    return TapeEntry(
-        kind="knowledge", post_hash=_h(body),
-        rendered=("[knowledge — cross-session candidates recalled for the CURRENT task; leads, "
-                  "not current-world proof]\n" + body + "\n[end knowledge]\n"))
+    label = ("[knowledge — cross-session candidates recalled for"
+             + (f" task {task}" if task else " the current task")
+             + "; leads, not current-world proof]")
+    return TapeEntry(kind="knowledge", post_hash=_h(body), task=str(task),
+                     rendered=f"{label}\n{body}\n[end knowledge]\n")
 
 
 def digest_entry(rendered_digest: str, artifact_id: str = "") -> TapeEntry:
@@ -339,7 +364,7 @@ def compact_tape(tape: list, files: dict, *, budget: int = TAPE_BUDGET_CHARS) ->
             first = span[0].ref
         last = refs[-1] if refs else "…"
         marker = TapeEntry(
-            kind="epoch", ref=first,
+            kind="epoch", ref=first, ref_end=(last if refs else first),
             rendered=(f"[epoch compacted: {first}..{last} — {folded_history} history entries "
                       "removed; re-anchored files follow as fresh bases; the full sealed record "
                       "remains readable via read_file(\"@sliceagent/history/index.md\")]\n"),
@@ -478,21 +503,27 @@ def tape_seal_update(s, tools, rows, *, session_id: str, artifact_id: str, task_
     # (once per hash change — R6b keys it by stable task, so once per topic in practice).
     cont = s.continuity
     frozen = getattr(cont, "tape_finding_hashes", None)
-    if frozen is None:
-        cont.tape_finding_hashes = frozen = []
+    if not isinstance(frozen, set):
+        cont.tape_finding_hashes = frozen = set(frozen or ())
+    k_hashes = getattr(cont, "tape_knowledge_hashes", None)
+    if not isinstance(k_hashes, set):
+        cont.tape_knowledge_hashes = k_hashes = set(k_hashes or ())
+    # The owning task, stamped on the slice that is being sealed — a Slice is per-task, so this
+    # is its identity for suppression purposes (the slice object itself carries no task id).
+    cont.tape_task_id = str(task_id or "")
     from .regions import render_findings
     for f in list(getattr(s, "findings", ()) or ()):
         line = render_findings([f], getattr(s, "finding_source", None))
-        fe = finding_entry(redact_text(line))
-        if fe is not None and fe.post_hash not in frozen:
+        fe = finding_entry(line, task=task_id)
+        if fe is not None and (task_id, fe.post_hash) not in frozen:
             _append(fe)
-            frozen.append(fe.post_hash)
+            frozen.add((task_id, fe.post_hash))
     k_text = str(getattr(cont, "last_knowledge_render", "") or "")
     if k_text:
-        ke = knowledge_entry(redact_text(k_text))
-        if ke is not None and ke.post_hash != getattr(cont, "tape_knowledge_hash", ""):
+        ke = knowledge_entry(k_text, task=task_id)
+        if ke is not None and (task_id, ke.post_hash) not in k_hashes:
             _append(ke)
-            cont.tape_knowledge_hash = ke.post_hash
+            k_hashes.add((task_id, ke.post_hash))
 
     if journal_path:
         try:
@@ -523,6 +554,10 @@ def reconcile_tape_with_digests(tape: list, digest_pairs: list,
     has_epoch = any(e.kind == "epoch" for e in tape)
     added = 0
     seen = [i for i, (aid, _d) in enumerate(digest_pairs) if aid in refs]
+    epoch_end = ""
+    for e in tape:
+        if e.kind == "epoch" and e.ref_end:
+            epoch_end = e.ref_end          # newest marker wins (chain carries forward)
     if has_epoch:
         # EPOCH-AWARE (review Task148 consolidated, blocker 1): an epoch on the tape means this
         # session already compacted deliberate history — everything at or before the newest live
@@ -530,7 +565,16 @@ def reconcile_tape_with_digests(tape: list, digest_pairs: list,
         # (reproduced: epoch(t-1..t-9)+digest(t-10) re-gained t-1..t-9). Only the tail beyond
         # the newest live digest (torn-journal turns) may enter; the folded record stays
         # readable via the history index the epoch marker cites.
-        start = (seen[-1] + 1) if seen else len(digest_pairs)
+        if seen:
+            start = seen[-1] + 1
+        elif epoch_end:
+            # No live digest survived the fold (review Task152 High 4: a fold can keep the epoch
+            # plus non-digest entries and remove every digest). The marker's ref_end names the
+            # LAST covered artifact, so a torn tail after it is still recoverable.
+            idx = [i for i, (aid, _d) in enumerate(digest_pairs) if aid == epoch_end]
+            start = (idx[-1] + 1) if idx else len(digest_pairs)
+        else:
+            start = len(digest_pairs)
         for aid, digest in digest_pairs[start:]:
             if aid not in refs:
                 tape.append(digest_entry(digest, aid))
@@ -567,16 +611,19 @@ def reconcile_tape_with_digests(tape: list, digest_pairs: list,
 
 def hydrate_session_tape(journal_path: str, digest_pairs: list, *,
                          last_reply: tuple | None = None,
-                         budget: int = TAPE_BUDGET_CHARS) -> tuple[list, dict]:
+                         budget: int = TAPE_BUDGET_CHARS) -> tuple[list, dict, set, set]:
     """THE hydration owner (review Task148 consolidated: reconciliation was a second tape
     mutator outside the invariant enforcer — 80 old-session artifacts rendered a 175k tape on
     the FIRST resumed build). One call: journal replay -> epoch-aware digest/reply
     reconciliation -> BOUNDED compaction, so the tape honors its budget contract before it can
-    ever be rendered. Hosts call this; they never mutate tape state directly."""
+    ever be rendered. Hosts call this; they never mutate tape state directly.
+    Returns (tape, files, finding_hashes, knowledge_hashes) — the registries come from the FULL
+    journal so a restart never re-freezes already-frozen findings/knowledge."""
     tape, files = load_session_tape(journal_path, budget=budget)
     reconcile_tape_with_digests(tape, digest_pairs, last_reply=last_reply)
     compact_tape(tape, files, budget=budget)
-    return tape, files
+    f_h, k_h = journal_registries(journal_path)
+    return tape, files, f_h, k_h
 
 
 # ── Durability: append-only JSONL journal ─────────────────────────────────────────────────────
@@ -591,6 +638,30 @@ def tape_journal_append(path: str, entries: list) -> None:
     with open(path, "a", encoding="utf-8") as f:
         for e in entries:
             f.write(json.dumps(e.to_record(), ensure_ascii=False) + "\n")
+
+
+def journal_registries(path: str) -> tuple[set, set]:
+    """(finding_hashes, knowledge_hashes) as (task, hash) pairs over the FULL journal — including
+    entries a fold later removed from the live tape. Rebuilt at hydration so a restart cannot
+    re-freeze content the session already froze (review Task152 High 3: registries were
+    in-memory only, so every restart duplicated every finding)."""
+    f_h: set = set()
+    k_h: set = set()
+    if not os.path.isfile(path):
+        return f_h, k_h
+    for line in open(path, encoding="utf-8"):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            e = TapeEntry.from_record(json.loads(line))
+        except Exception:  # noqa: BLE001 — torn tail ends the scan
+            break
+        if e.kind == "finding":
+            f_h.add((e.task, e.post_hash))
+        elif e.kind == "knowledge":
+            k_h.add((e.task, e.post_hash))
+    return f_h, k_h
 
 
 def load_session_tape(path: str, *, budget: int = TAPE_BUDGET_CHARS) -> tuple[list, dict]:

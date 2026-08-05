@@ -660,7 +660,8 @@ def _hydrate_workspace_tasks(store, session, on_log: Callable[[str], None]) -> N
                 else dict(_newest.structured_body)
             if str(_nbody.get("assistant_provenance") or "") in {"", "final_response"}:
                 _last_reply = (_newest.id, str(_nbody.get("assistant") or ""))
-        session.session_tape, session.tape_files = hydrate_session_tape(
+        (session.session_tape, session.tape_files,
+         session.tape_finding_hashes, session.tape_knowledge_hashes) = hydrate_session_tape(
             os.path.join(_tape_state_dir("tape"), f"{session.session_id}.jsonl"),
             load_session_digests(_task_turns, None), last_reply=_last_reply)
     except Exception as exc:  # noqa: BLE001 — a torn journal must not block startup
@@ -1717,6 +1718,8 @@ def main() -> None:
                               if getattr(sealed_target, "conversation", None) else {})
             sealed_target.continuity.session_tape = list(session.session_tape)
             sealed_target.continuity.tape_files = dict(session.tape_files)
+            sealed_target.continuity.tape_finding_hashes = set(session.tape_finding_hashes)
+            sealed_target.continuity.tape_knowledge_hashes = set(session.tape_knowledge_hashes)
             from sliceagent_core.recovery import state_dir as _tape_state_dir
             tape_seal_update(
                 sealed_target, base_tools, _tape_recorder["rec"].rows,
@@ -1731,6 +1734,8 @@ def main() -> None:
             _tape_recorder["rec"].reset()
             session.session_tape = list(sealed_target.continuity.session_tape)
             session.tape_files = dict(sealed_target.continuity.tape_files)
+            session.tape_finding_hashes = set(sealed_target.continuity.tape_finding_hashes)
+            session.tape_knowledge_hashes = set(sealed_target.continuity.tape_knowledge_hashes)
         session.tasks[active.task_id] = sealed_target
         session.turn_task_id = None
         _pending_seal_records.pop(active.artifact_id, None)

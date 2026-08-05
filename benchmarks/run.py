@@ -130,13 +130,15 @@ def run(scn, memory_mode="real"):
 
     state = Slice(); state.reset(prompts[0])
     tools = LocalToolHost(root=workdir)
-    # PRODUCTION SCHEMA PROFILE (cost review, system-schemas lane): the CLI binds an active-work
-    # provider, which switches schemas() to the lean branch — no legacy semantic-state tools, no
-    # 351-char note prop on every schema. Unbound, the bench carried a 12,809-char/call profile
-    # DIVERGENCE that production never pays (45% of the schema payload). Same snapshot shape as
-    # cli._bind_active_work_host, against the bench's single Slice.
+    # PRODUCTION ACTIVE-WORK PARITY (cost review system-schemas lane + review Task152 High 6):
+    # the CLI binds an active-work provider AND admits every user turn with stable source-event /
+    # logical ids, so a request ROOT exists and update_work can actually run. Binding alone only
+    # narrowed the schema surface while leaving update_work advertised in a state where it errors
+    # ("no active request root") — schema reduction, not parity. `logical_turn` below is set per
+    # turn; the provider reads it at call time.
+    _turn_ids = {"logical": ""}
     if callable(getattr(tools, "bind_active_work", None)):
-        tools.bind_active_work(lambda: (state.active_work, "", 0))
+        tools.bind_active_work(lambda: (state.active_work, _turn_ids["logical"], 0))
     retriever = make_code_index(workdir) if meta.get("use_code_index") else NullRetriever()
     tap = _Tap(_configured_llm())
     if hasattr(tap.inner, "set_cache_key"):
@@ -176,7 +178,10 @@ def run(scn, memory_mode="real"):
     tape_drift = 0; tape_rebased = 0; tape_compactions = 0
     try:
         for i, p in enumerate(prompts):
-            record_user(state, p)
+            _turn_ids["logical"] = f"L{i + 1}"
+            record_user(state, p, source_artifact=f"turn-{i + 1:03d}",
+                        source_event_id=f"ev-{i + 1:03d}", source_text=p,
+                        logical_id=_turn_ids["logical"], workspace_epoch=0)
             n0 = len(tap.calls)
             result = run_turn(build_slice=make_build_slice(state, tools, retriever, memory, p,
                                                            session_id),

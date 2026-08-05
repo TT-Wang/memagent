@@ -225,8 +225,9 @@ class ContinuityState:
     tape_files: dict = field(default_factory=dict)
     # P8: findings/knowledge frozen onto the tape — the registries that keep the freeze
     # idempotent (finding text-hashes; the knowledge memo's last frozen hash + its build render).
-    tape_finding_hashes: list = field(default_factory=list)
-    tape_knowledge_hash: str = ""
+    tape_task_id: str = ""                                  # owner of this slice's frozen entries
+    tape_finding_hashes: set = field(default_factory=set)   # {(task_id, canonical_hash)}
+    tape_knowledge_hashes: set = field(default_factory=set)  # {(task_id, canonical_hash)}
     last_knowledge_render: str = ""
     recovery_child_report_count: int = 0
 

@@ -36,7 +36,16 @@ def setup(root):
             "    return {\"mean\": sum(seq) / len(list(seq)), \"lo\": vals[0], \"hi\": vals[-1]}\n")
     with open(os.path.join(root, "mathlib", "report.py"), "w", encoding="utf-8") as f:
         f.write(
+            "from .seq import normalize\n"
             "from .stats import summary\n"
+            "\n"
+            "\n"
+            "def labels(seq):\n"
+            "    vals = normalize(seq)   # ascending, deduped, NEW list\n"
+            "    if len(vals) == 2:\n"
+            "        return {vals[0]: \"lo\", vals[1]: \"hi\"}\n"
+            "    names = [\"lo\", \"mid\", \"hi\"]\n"
+            "    return {v: names[min(i, 2)] for i, v in enumerate(vals)}\n"
             "\n"
             "\n"
             "def render(seq):\n"

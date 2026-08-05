@@ -269,28 +269,38 @@ def render_findings(findings: list[str], sources: dict | None = None) -> str:
 
 
 
+def _active_task_id(s) -> str:
+    """The task that OWNS this slice's frozen entries — stamped by the seal (a Slice is
+    per-task). A slice that has never sealed owns nothing, so nothing suppresses."""
+    return str(getattr(getattr(s, "continuity", None), "tape_task_id", "") or "")
+
+
 def _unfrozen_findings(s, cap: int) -> list:
     """P8: findings already frozen onto the tape render there (cached prefix); the region shows
-    only what the tape does not yet hold — post-seal, nothing."""
+    only what the tape does not yet hold. Identity is the CANONICAL (redacted) hash — the same
+    operation the producer uses — and suppression is scoped to the ACTIVE task, so another
+    task's frozen entry never hides this task's live note (review Task152 High 1 + High 2)."""
     rows = list(getattr(s, "findings", ()) or ())[-cap:]
-    frozen = set(getattr(getattr(s, "continuity", None), "tape_finding_hashes", ()) or ())
+    frozen = getattr(getattr(s, "continuity", None), "tape_finding_hashes", None) or ()
     if not frozen:
         return rows
-    from .tape import _h
+    from .tape import finding_hash
     src = getattr(s, "finding_source", None)
-    return [f for f in rows if _h(render_findings([f], src).strip()) not in frozen]
+    task = _active_task_id(s)
+    return [f for f in rows
+            if (task, finding_hash(render_findings([f], src))) not in frozen]
 
 
 def _knowledge_frozen(s, memory_text: str) -> bool:
-    """P8: the knowledge memo renders as a region only until the seal freezes it."""
+    """P8: the knowledge memo renders as a region only until the seal freezes it (canonical
+    redacted identity, active-task scoped)."""
     if not memory_text:
         return False
-    cont = getattr(s, "continuity", None)
-    frozen_hash = str(getattr(cont, "tape_knowledge_hash", "") or "")
-    if not frozen_hash:
+    frozen = getattr(getattr(s, "continuity", None), "tape_knowledge_hashes", None) or ()
+    if not frozen:
         return False
-    from .tape import _h
-    return _h(str(memory_text).strip()) == frozen_hash
+    from .tape import knowledge_hash
+    return (_active_task_id(s), knowledge_hash(memory_text)) in frozen
 
 
 def render_world(world: dict) -> str:

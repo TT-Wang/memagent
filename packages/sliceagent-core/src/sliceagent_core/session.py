@@ -85,6 +85,10 @@ class Session:
         # the append-only entry cache + the host-side composition registry; slices get synced views.
         self.session_tape: list = []   # list[tape.TapeEntry] — typed entries, rendered-once bytes
         self.tape_files: dict = {}
+        # P8 freeze registries, {(task_id, canonical_hash)} — rebuilt from the FULL journal at
+        # hydration so restarts never duplicate frozen findings/knowledge.
+        self.tape_finding_hashes: set = set()
+        self.tape_knowledge_hashes: set = set()
         # Monotonic only within this live session. Evidence snapshots use it to prove conversational adjacency
         # across task switches; it is intentionally not durable because snapshots are not durable either.
         self.turn_generation: int = 0
@@ -326,6 +330,8 @@ def rebase_session_for_workspace(current: Session, restored: Session) -> Session
     # paths that don't exist in the target workspace re-anchor loudly via the next seal's honesty net.
     merged.session_tape = list(current.session_tape)
     merged.tape_files = dict(current.tape_files)
+    merged.tape_finding_hashes = set(current.tape_finding_hashes)
+    merged.tape_knowledge_hashes = set(current.tape_knowledge_hashes)
     # Target-local authoritative checkpoints win task-ID collisions. Other open topics remain available as
     # intent/conversation shells and acquire target-local provenance on their next admitted turn.
     merged.tasks = dict(restored.tasks)

@@ -44,31 +44,39 @@ def main() -> None:
     # ---- turns: every edit target is a helper with unseen distant callers
     turn("Read README.md and the mathlib/ package to orient. Then add a module docstring to "
          "mathlib/seq.py describing each helper in one line.",
-         "import mathlib.seq as q; assert q.__doc__ and 'normalize' in q.__doc__", "docstring")
+         "import mathlib.seq as q; d = (q.__doc__ or '').lower(); "
+         "assert all(k in d for k in ('normalize', 'window', 'scale'))",
+         "module docstring covers each helper")
     turn("Add median(seq) to mathlib/stats.py (no imports; even-length averages the middle "
          "pair). Quick check with a couple of calls.",
          "import mathlib.stats as st; assert st.median([3, 1, 2]) == 2 and "
          "st.median([4, 1, 3, 2]) == 2.5", "median")
     turn("normalize() in mathlib/seq.py should also accept tuples and generators, not just "
          "lists. Keep its behavior otherwise.",
-         "import mathlib.seq as q; assert q.normalize((3, 1, 2)) == [1, 2, 3] and "
-         "q.normalize(x for x in [2, 1]) == [1, 2]", "normalize inputs")
+         "import mathlib.seq as q, os; assert q.normalize((3, 1, 2)) == [1, 2, 3] and "
+         "q.normalize(x for x in [2, 1]) == [1, 2]; "
+         "assert any('normalize' in open(os.path.join(r, f), encoding='utf-8').read() "
+         "for r, _d, fs in os.walk('.') for f in fs if 'test' in f and f.endswith('.py'))",
+         "normalize accepts tuples/generators + the requested tests exist")
     turn("Add clamp(seq, lo, hi) to mathlib/seq.py returning a new list with values clamped.",
          "import mathlib.seq as q; assert q.clamp([0, 5, 10], 1, 8) == [1, 5, 8]", "clamp")
     turn("scale(seq, k) currently multiplies; make k=0 return a list of zeros of the SAME "
          "length (it already does — add an explicit test for it plus a docstring note).",
-         "import mathlib.seq as q; assert q.scale([1, 2], 0) == [0, 0]", "scale k=0")
+         "import mathlib.seq as q; assert q.scale([1, 2], 0) == [0, 0]; "
+         "d = (q.scale.__doc__ or '').lower(); assert '0' in d or 'zero' in d",
+         "scale k=0 + the requested docstring note")
     turn("normalize() should drop NaN values (float('nan')) before sorting. Tests.",
          "import mathlib.seq as q; r = q.normalize([2.0, float('nan'), 1.0]); "
          "assert r == [1.0, 2.0]", "normalize NaN")
     turn("Quick one: add VERSION = '0.2' to mathlib/__init__.py.",
-         "import mathlib; assert mathlib.VERSION", "version")
+         "import mathlib; assert mathlib.VERSION == '0.2'", "VERSION is exactly 0.2")
     turn("Add a percentile(seq, p) to mathlib/stats.py (nearest-rank method). Tests.",
-         "import mathlib.stats as st; assert st.percentile([1, 2, 3, 4], 50) in (2, 2.5, 3)",
-         "percentile")
+         "import mathlib.stats as st; assert st.percentile([1, 2, 3, 4], 50) == 2 and "
+         "st.percentile([1, 2, 3, 4], 75) == 3", "percentile nearest-rank exact")
     turn("normalize() is called a lot — micro-optimize it (avoid double iteration if easy) "
          "while keeping the exact same output contract. Show a quick before/after check.",
-         "import mathlib.seq as q; assert q.normalize([2, 1, 2]) == [1, 2]", "normalize perf")
+         "import mathlib.seq as q; assert q.normalize([2, 1, 2]) == [1, 2]; "
+         "assert (q.normalize.__doc__ or '').strip()", "normalize perf keeps contract + doc")
     turn("Add top_k(seq, k) to mathlib/seq.py returning the k largest values, descending.",
          "import mathlib.seq as q; assert q.top_k([1, 3, 2], 2) == [3, 2]", "top_k")
     turn("Write mathlib/cli.py: `python -m mathlib.cli summary 1 2 3` prints the summary dict.",
@@ -76,7 +84,10 @@ def main() -> None:
          "'summary', '1', '2', '3'], capture_output=True, text=True).stdout; "
          "assert 'mean' in out", "cli")
     turn("Final: add CHANGELOG.md with one line per change made this session.",
-         "import os; assert os.path.isfile('CHANGELOG.md')", "changelog")
+         "t = open('CHANGELOG.md', encoding='utf-8').read().lower(); "
+         "assert sum(1 for l in t.splitlines() if l.strip()) >= 8; "
+         "assert 'median' in t and 'clamp' in t and 'percentile' in t",
+         "CHANGELOG has one line per change")
 
     # ---- FROZEN distant behaviors (never mentioned in any prompt)
     REGRESS.extend([
@@ -90,6 +101,8 @@ def main() -> None:
          "stats.summary key names + values (report.py reads these keys)"),
         ("import mathlib.seq as q; assert len(q.scale([1, 2, 3], 2)) == 3 and "
          "q.scale([1, 2, 3], 2) == [2, 4, 6]", "scale preserves length and order"),
+        ("import mathlib.report as rp; assert rp.labels([2, 1, 2]) == {1: 'lo', 2: 'hi'}",
+         "report.labels: normalize order+dedupe feeds a distant label map"),
         ("import mathlib.report as rp; text = rp.render([3, 1, 2]); "
          "assert 'mean=2' in text and 'range=1..3' in text",
          "report.render end-to-end format (the distant caller chain)"),
@@ -133,7 +146,16 @@ def setup(root):
             "    return {\\"mean\\": sum(seq) / len(list(seq)), \\"lo\\": vals[0], \\"hi\\": vals[-1]}\\n")
     with open(os.path.join(root, "mathlib", "report.py"), "w", encoding="utf-8") as f:
         f.write(
+            "from .seq import normalize\\n"
             "from .stats import summary\\n"
+            "\\n"
+            "\\n"
+            "def labels(seq):\\n"
+            "    vals = normalize(seq)   # ascending, deduped, NEW list\\n"
+            "    if len(vals) == 2:\\n"
+            "        return {vals[0]: \\"lo\\", vals[1]: \\"hi\\"}\\n"
+            "    names = [\\"lo\\", \\"mid\\", \\"hi\\"]\\n"
+            "    return {v: names[min(i, 2)] for i, v in enumerate(vals)}\\n"
             "\\n"
             "\\n"
             "def render(seq):\\n"

@@ -390,8 +390,8 @@ def test_hydration_is_bounded_on_first_build(tmp_path):
     from sliceagent_core.tape import TAPE_BUDGET_CHARS, hydrate_session_tape
     pairs = [(f"t-{i:03d}", f"[turn t-{i:03d} · task k · completed]\nask: {'x' * 2400}\n")
              for i in range(1, 81)]
-    tape, files = hydrate_session_tape(str(tmp_path / "none.jsonl"), pairs,
-                                       last_reply=("t-080", "the final answer was B"))
+    tape, files, _fh, _kh = hydrate_session_tape(str(tmp_path / "none.jsonl"), pairs,
+                                                 last_reply=("t-080", "the final answer was B"))
     chars = sum(len(e.rendered) for e in tape)
     assert chars <= TAPE_BUDGET_CHARS, f"first-build tape {chars:,} over budget"
     stream = tape_render(tape)
@@ -465,6 +465,7 @@ def test_p8_findings_and_knowledge_freeze_onto_the_tape(tmp_path):
     _seal(s, tools, [], n=2, ask="second")
     assert sum(1 for e in tape if e.kind == "finding") == 1
     assert sum(1 for e in tape if e.kind == "knowledge") == 1     # same memo hash: no re-freeze
+    assert all(e.task == "k" for e in tape if e.kind in ("finding", "knowledge"))
     # regions self-suppress what the tape holds
     user = make_build_slice(s, tools, None, NullMemory(), "third ask")()[1]["content"]
     assert "YOUR NOTES FROM PRIOR TOOL CALLS" not in user, "frozen finding must not re-render"
@@ -477,6 +478,82 @@ def test_p8_findings_and_knowledge_freeze_onto_the_tape(tmp_path):
     s.continuity.last_knowledge_render = "- lesson: the OTHER topic's candidates"
     _seal(s, tools, [], n=4, ask="fourth")
     assert sum(1 for e in tape if e.kind == "knowledge") == 2
+
+
+def test_p8_canonical_redacted_identity_no_raw_leak(tmp_path):
+    """Task152 High 1: the producer hashed REDACTED text while the suppressors hashed RAW text,
+    so a redaction-modified finding froze on the tape AND kept rendering raw in the tail."""
+    from sliceagent_core.regions import _knowledge_frozen, _unfrozen_findings
+    secret = "sk-1234567890abcdef"
+    s, tools = _ws(tmp_path)
+    s.findings.append(f"config holds {secret} for the staging key")
+    s.continuity.last_knowledge_render = f"- lesson: rotate {secret} monthly"
+    _seal(s, tools, [], ask="freeze it")
+    stream = tape_render(s.continuity.session_tape)
+    assert secret not in stream, "raw secret must never reach the tape"
+    assert _unfrozen_findings(s, 20) == [], "the frozen finding must not re-render raw"
+    assert _knowledge_frozen(s, s.continuity.last_knowledge_render)
+
+
+def test_p8_entries_carry_task_ownership_and_scope_suppression(tmp_path):
+    """Task152 High 2: findings/knowledge are task-scoped state. The tape is session-scoped by
+    construction (turn digests always were), so ownership is TYPED + labelled, and suppression
+    only applies to the owning task — task B never has its own note hidden by task A's freeze."""
+    s, tools = _ws(tmp_path)
+    s.findings.append("A-only: the retry limit is three")
+    tape_seal_update(s, tools, [], session_id="s", artifact_id="t-1", task_id="task-A",
+                     status="completed", user_request="A work")
+    entry = next(e for e in s.continuity.session_tape if e.kind == "finding")
+    assert entry.task == "task-A" and "task task-A" in entry.rendered
+    from sliceagent_core.regions import _unfrozen_findings
+    assert _unfrozen_findings(s, 20) == []                       # owner suppresses
+    # a DIFFERENT task's slice sharing the session registry keeps its own note visible
+    s_b, _ = _ws(tmp_path)
+    s_b.continuity.tape_finding_hashes = set(s.continuity.tape_finding_hashes)
+    s_b.continuity.tape_task_id = "task-B"
+    s_b.findings.append("A-only: the retry limit is three")      # same text, different owner
+    assert _unfrozen_findings(s_b, 20) != [], "task B's own note must still render"
+
+
+def test_p8_registries_survive_restart_no_duplicate_freeze(tmp_path):
+    """Task152 High 3: the dedupe registries were in-memory only, so every restart re-froze
+    every finding. They are now rebuilt from the FULL journal (folded entries included)."""
+    from sliceagent_core.tape import hydrate_session_tape
+    j = str(tmp_path / "state" / "tape.jsonl")
+    s, tools = _ws(tmp_path)
+    s.findings.append("scheduler retries twice")
+    s.continuity.last_knowledge_render = "- lesson: pin the fixture"
+    _seal(s, tools, [], journal_path=j, ask="first")
+    assert sum(1 for e in s.continuity.session_tape if e.kind == "finding") == 1
+    # restart: fresh session state, registries rebuilt from the journal
+    tape2, files2, f_h, k_h = hydrate_session_tape(j, [])
+    s2, tools2 = _ws(tmp_path)
+    s2.continuity.session_tape = tape2
+    s2.continuity.tape_files = files2
+    s2.continuity.tape_finding_hashes = f_h
+    s2.continuity.tape_knowledge_hashes = k_h
+    s2.findings.append("scheduler retries twice")
+    s2.continuity.last_knowledge_render = "- lesson: pin the fixture"
+    _seal(s2, tools2, [], n=2, journal_path=j, ask="after restart")
+    assert sum(1 for e in s2.continuity.session_tape if e.kind == "finding") == 1, "duplicate!"
+    assert sum(1 for e in s2.continuity.session_tape if e.kind == "knowledge") == 1
+
+
+def test_p8_torn_tail_heals_when_no_digest_survived_the_fold():
+    """Task152 High 4: a fold can keep the epoch plus non-digest entries and remove EVERY live
+    digest; the marker's ref_end is the reconciliation boundary that keeps the tail recoverable."""
+    from sliceagent_core.tape import compact_tape, finding_entry, reconcile_tape_with_digests
+    pairs = [(f"t-{i}", f"[turn t-{i} · task k · completed]\nask: {'x' * 200}\n")
+             for i in range(1, 3)]
+    tape = [digest_entry(pairs[0][1], "t-1")]
+    tape += [finding_entry(f"note number {i} " + "y" * 80, task="k") for i in range(20)]
+    compact_tape(tape, {}, budget=700)
+    assert any(e.kind == "epoch" for e in tape)
+    assert [e.ref for e in tape if e.kind == "digest"] == [], "fixture needs zero live digests"
+    added = reconcile_tape_with_digests(tape, pairs)
+    assert added == 1, "the torn tail t-2 must heal"
+    assert [e.ref for e in tape if e.kind == "digest"] == ["t-2"]
+    assert reconcile_tape_with_digests(tape, pairs) == 0          # and stays idempotent
 
 
 def test_workspace_rebase_carries_tape():

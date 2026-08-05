@@ -545,6 +545,10 @@ def make_build_slice(state, tools, retriever, memory, task: str, session_id: str
             # SESSION TAPE sync — same ownership pattern; parking a topic must not fork the tape.
             s.continuity.session_tape = list(state.session_tape)
             s.continuity.tape_files = dict(getattr(state, "tape_files", {}) or {})
+            s.continuity.tape_finding_hashes = set(
+                getattr(state, "tape_finding_hashes", ()) or ())
+            s.continuity.tape_knowledge_hashes = set(
+                getattr(state, "tape_knowledge_hashes", ()) or ())
         current_epoch = int(getattr(state, "workspace_epoch", 0) or 0)
         graph_active = bool(s.active_work.items)
         closure = s.active_work.dependency_closure() if graph_active else ()
