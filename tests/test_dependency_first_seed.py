@@ -1,5 +1,17 @@
 from __future__ import annotations
 
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _legacy_off_path(monkeypatch):
+    """KILL-SWITCH PATH: this module tests the legacy conversation/adjacency machinery, which the
+    tape retires (region renders "", adjacency lane returns ()). Pinned to AGENT_SESSION_TAPE=0
+    since graduation made the tape the default; wave 2 deletes the path and this module's
+    affected tests with it (docs/TAPE-GRADUATION.md)."""
+    monkeypatch.setenv("AGENT_SESSION_TAPE", "0")
+
 from sliceagent.active_work import ResourceRef, WorkDelta, WorkItem
 from sliceagent.memory import NullMemory
 from sliceagent.pfc import Slice, record_user

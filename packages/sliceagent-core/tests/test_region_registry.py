@@ -139,7 +139,7 @@ def golden_layout_snapshot():
         ("task_constraints", STABLE, 0), ("open_files", STABLE, 0), ("related_code", STABLE, 1),
         ("skills", STABLE, 2), ("memory", STABLE, 2),
         # 2026-08-04 Session Spine (docs/SESSION-SPINE-ROADMAP.md P4): frozen sealed-turn digests,
-        # flag-gated (AGENT_SESSION_SPINE=1), renders "" otherwise.
+        # (spine region retired at tape graduation — tag lab-2026-08-05)
         ("session_spine", STABLE, 2),
         # 2026-08-05 Session Tape (docs/SESSION-TAPE-DESIGN.md): the single append-only stream,
         # flag-gated (AGENT_SESSION_TAPE=1), renders "" otherwise; absorbs the spine when active.

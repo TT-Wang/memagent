@@ -285,7 +285,6 @@ def test_region_layout_and_flags(tmp_path, monkeypatch):
     s, tools = _ws(tmp_path)
     _seal(s, tools, [("a.py", (tmp_path / "a.py").read_text(encoding="utf-8"))])
     monkeypatch.setenv("AGENT_SESSION_TAPE", "1")
-    monkeypatch.delenv("AGENT_SESSION_SPINE", raising=False)
     plan = make_build_slice(s, tools, None, NullMemory(), "edit a.py")()
     system, user = plan[0]["content"], plan[1]["content"]
     assert "WORKSPACE FILES VIA THE SESSION TAPE" in system
@@ -295,7 +294,7 @@ def test_region_layout_and_flags(tmp_path, monkeypatch):
     assert "# OPEN FILES (index" in user
     tape_at = user.index("# SESSION TAPE")
     assert user.index("# OPEN FILES") > tape_at
-    monkeypatch.delenv("AGENT_SESSION_TAPE", raising=False)
+    monkeypatch.setenv("AGENT_SESSION_TAPE", "0")   # kill switch — unset now means ON
     off = make_build_slice(s, tools, None, NullMemory(), "edit a.py")()
     assert "# SESSION TAPE" not in off[1]["content"]
     assert "def f():" in off[1]["content"]
@@ -326,7 +325,7 @@ def test_reply_entry_replaces_conversation_region(tmp_path, monkeypatch):
     assert "# RECENT CONVERSATION" not in user
     assert "[reply t-1]" in user
     assert _adjacency_blocks(s) == ()
-    monkeypatch.delenv("AGENT_SESSION_TAPE", raising=False)
+    monkeypatch.setenv("AGENT_SESSION_TAPE", "0")   # kill switch — unset now means ON
     off = make_build_slice(s, tools, None, NullMemory(), "next ask")()
     assert "# RECENT CONVERSATION" in off[1]["content"]
 
