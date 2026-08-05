@@ -95,6 +95,7 @@ s11 法证后新增:**repo map 冻结**(stream 布局下 msg0 变动=整 prompt 
 ## 诚实边界
 
 - CB50 三臂质量口径:三臂同 scorer 同 gold,但 kimi 的 pred 经 wire.jsonl 适配器提取(`evals/contextbench_kimi.py`),提取宽度影响 coverage/precision 的天然权衡,读表时连 redundancy 一起看。
+- **coverage 差距的定性(2026-08-05 尾部 A/B)**:对 kimi 的 file-cov 差距 ~0.05–0.11 带内且单跑方差占大头(尾 8 题原样重跑 0.344→0.593);"exhaustive ask" 杠杆被预注册门否决(cov 仅 +0.07,precision 0.693→0.222、对照组同毁、成本 3.3×、峰值反超 kimi)——**不主张 coverage 领先,主张 precision 全维显著 + coverage 同带**。数据:`evals/contextbench/subset-{base-r2,exhaustive}/`。
 - s7×50(全琐碎轮)tape $0.0301 vs kimi $0.0261(+15%):验证纪律地板;owner 判定该场景非真实世界,仅作峰值仪表。
 - s11 成本仍 +70% vs kimi(r3):fresh 车道已收敛,out 车道 2.7× 为残差大头,结构收敛留 P8。
 - 中轮 mini s1 无参照档(当时未存逐轮账本)。
