@@ -338,6 +338,17 @@ def test_seeded_secret_absent_from_tape(tmp_path):
     assert secret not in tape_render(s.continuity.session_tape)
 
 
+def test_offline_replay_mechanics_gate():
+    """The fast lane (evals/tape_replay.py): s11-shaped 52-turn stream over real file bodies —
+    fold policy, budget bound, thrash and boundary-bill shape, no live model. This is the
+    per-iteration gate; the live scenario runs once at graduation time only."""
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "evals"))
+    from tape_replay import GATES, replay
+    r = replay()
+    for name, fn in GATES:
+        assert fn(r), (name, r)
+
+
 def test_workspace_rebase_carries_tape_and_spine():
     from sliceagent_core.memory_null import NullMemory
     from sliceagent_core.session import Session, rebase_session_for_workspace

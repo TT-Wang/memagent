@@ -196,6 +196,9 @@ def run(scn, memory_mode="real"):
                     artifact_id=f"turn-{i + 1:03d}", task_id=scn["name"],
                     status="completed" if result.stop_reason == "end_turn" else str(result.stop_reason),
                     user_request=p, assistant_reply=_reply,
+                    # every live run records its stream — evals/tape_replay.py can then re-run
+                    # future compaction/representation policies against REAL recorded seals
+                    journal_path=os.path.join(workdir, ".tape-journal.jsonl"),
                 )
                 recorder.reset()
                 tape_drift += info["drift"]; tape_rebased += len(info["rebased"])
