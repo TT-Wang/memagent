@@ -311,9 +311,14 @@ def main() -> int:
                     help="convergence arm: 'exhaustive' asks for a COMPLETE location list")
     ap.add_argument("--work", default=os.path.expanduser("~/.cache/contextbench-repos"))
     ap.add_argument("--out", default=os.path.join(_REPO, "evals", "contextbench", "run1"))
+    ap.add_argument("--instances", default="",
+                    help="comma-separated instance_id suffixes; when set, run only matching tasks")
     a = ap.parse_args()
 
     tasks = _load_tasks(a.data, a.n, a.language)
+    if a.instances:
+        wanted = [s.strip() for s in a.instances.split(",") if s.strip()]
+        tasks = [t for t in tasks if any(t["instance_id"].endswith(w) for w in wanted)]
     os.makedirs(a.out, exist_ok=True); os.makedirs(a.work, exist_ok=True)
     raw_path = os.path.join(a.out, "raw.jsonl")
     done = set()

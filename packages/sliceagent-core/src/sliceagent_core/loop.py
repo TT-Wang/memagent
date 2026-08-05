@@ -2287,7 +2287,11 @@ def run_turn(*, build_slice, llm, tools, scheduler: ToolScheduler | None = None,
                     # and retirement is never silently stranded — it returns unacked on leftover_steers.
                     leftovers = _sweep_leftovers()
                     dispatch(TurnEnd(stop, steps, _turn_usage()))   # the ONE clean-exit event
-                    return TurnResult(stop, steps, total, leftover_steers=leftovers)
+                    # message carries the final answer on the CLEAN path too — the interrupted path always
+                    # set it while clean turns left it None, so callers reading result.message (bench
+                    # ledgers, one-shot wrappers) silently recorded "" for every successful turn.
+                    return TurnResult(stop, steps, total, message=candidate or "",
+                                      leftover_steers=leftovers)
 
                 # tool_use: accumulate the assistant turn (with tool_calls), run, accumulate the tool results
                 if candidate:
