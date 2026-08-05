@@ -157,10 +157,8 @@ def run(scn, memory_mode="real"):
     # SESSION TAPE recorder (unconditional since wave 2): collects the turn's successful file-tool rows
     # so the seal can append host-authored bases/patches (SESSION-TAPE-DESIGN §2). Inert otherwise.
     from sliceagent.tape import TapeRecorder, tape_seal_update
-    tape_on = True   # unconditional since wave 2 (kill switch retired; tag lab-2026-08-05)
     recorder = TapeRecorder(tools)
-    if tape_on:
-        sinks.append(recorder.sink)
+    sinks.append(recorder.sink)
     # State reduction is authoritative, not a best-effort observer. A reducer failure must fail the eval.
     dispatch = make_dispatcher(*sinks, required=(slice_sink(state),))
 
@@ -185,34 +183,23 @@ def run(scn, memory_mode="real"):
                                        os.environ.get("AGENT_MODEL", "deepseek-v4-flash"))})
             # Match the real host lifecycle: semantic state carries; detailed calls/trajectory counters do not.
             state.seal()
-            if tape_on:
-                # SESSION TAPE seal update (digest + bases + patches + honesty net), ONE renderer
-                # family for every producer; the recorder resets per turn.
-                _reply = ""
-                if getattr(state, "conversation", None):
-                    _reply = str(state.conversation[-1].get("assistant") or "")
-                info = tape_seal_update(
-                    state, tools, recorder.rows, session_id=session_id,
-                    artifact_id=f"turn-{i + 1:03d}", task_id=scn["name"],
-                    status="completed" if result.stop_reason == "end_turn" else str(result.stop_reason),
-                    user_request=p, assistant_reply=_reply,
-                    # every live run records its stream — evals/tape_replay.py can then re-run
-                    # future compaction/representation policies against REAL recorded seals
-                    journal_path=os.path.join(workdir, ".tape-journal.jsonl"),
-                )
-                recorder.reset()
-                tape_drift += info["drift"]; tape_rebased += len(info["rebased"])
-                tape_compactions += info.get("epoch_folds", 0)   # EVENTS only; gc entry counts are not events
-            else:
-                # (Unreachable since wave 2 — kept only until the tape_on constant folds away:
-                # cache through the ONE renderer — parity with the CLI host. (The spine REGION died
-                # at graduation; historical spine arm: git tag lab-2026-08-05.)
-                from sliceagent.spine import render_turn_digest as _digest
-                state.continuity.session_spine.append(_digest(
-                    artifact_id=f"turn-{i + 1:03d}", session_id=session_id, task_id=scn["name"],
-                    status="completed" if result.stop_reason == "end_turn" else str(result.stop_reason),
-                    user_request=p,
-                ))
+            # SESSION TAPE seal update (digest + bases + patches + honesty net), ONE renderer
+            # family for every producer; the recorder resets per turn.
+            _reply = ""
+            if getattr(state, "conversation", None):
+                _reply = str(state.conversation[-1].get("assistant") or "")
+            info = tape_seal_update(
+                state, tools, recorder.rows, session_id=session_id,
+                artifact_id=f"turn-{i + 1:03d}", task_id=scn["name"],
+                status="completed" if result.stop_reason == "end_turn" else str(result.stop_reason),
+                user_request=p, assistant_reply=_reply,
+                # every live run records its stream — evals/tape_replay.py can then re-run
+                # future compaction/representation policies against REAL recorded seals
+                journal_path=os.path.join(workdir, ".tape-journal.jsonl"),
+            )
+            recorder.reset()
+            tape_drift += info["drift"]; tape_rebased += len(info["rebased"])
+            tape_compactions += info.get("epoch_folds", 0)   # EVENTS only; gc entry counts are not events
             if result.stop_reason != "end_turn":
                 err = f"turn {i + 1} stopped abnormally: {result.stop_reason}"
                 break
@@ -233,12 +220,11 @@ def run(scn, memory_mode="real"):
     # result — the exact defect this gate exists to make impossible to miss again.
     liveness = {"memory_mode": memory_mode, "episodes_written": None,
                 "recalls": None, "re_reads": None}
-    if tape_on:
-        liveness.update(tape_entries=len(state.continuity.session_tape),
-                        tape_drift=tape_drift, tape_rebased=tape_rebased,
-                        tape_compactions=tape_compactions,
-                        tape_chars=sum(len(getattr(e, "rendered", e))
-                                       for e in state.continuity.session_tape))
+    liveness.update(tape_entries=len(state.continuity.session_tape),
+                    tape_drift=tape_drift, tape_rebased=tape_rebased,
+                    tape_compactions=tape_compactions,
+                    tape_chars=sum(len(getattr(e, "rendered", e))
+                                   for e in state.continuity.session_tape))
     if memory_mode == "real":
         eps = ()
         try:

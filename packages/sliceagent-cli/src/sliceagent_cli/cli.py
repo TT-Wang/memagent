@@ -595,17 +595,16 @@ def _hydrate_workspace_tasks(store, session, on_log: Callable[[str], None]) -> N
             store.coordinator.artifacts.list_all(), session.session_id)
     except Exception as exc:  # noqa: BLE001 — a torn artifact must not block startup
         on_log(f"session spine scan failed ({type(exc).__name__}: {exc})")
-    if True:
-        # SESSION TAPE hydration (review P1: restart used to come back with an empty tape and a
-        # stale registry): replay the append-only journal; every base/patch re-verifies its
-        # post_hash and a stale path degrades to read-before-edit via the composition contract.
-        try:
-            from sliceagent_core.recovery import state_dir as _tape_state_dir
-            from sliceagent_core.tape import load_session_tape
-            session.session_tape, session.tape_files = load_session_tape(
-                os.path.join(_tape_state_dir("tape"), f"{session.session_id}.jsonl"))
-        except Exception as exc:  # noqa: BLE001 — a torn journal must not block startup
-            on_log(f"session tape replay failed ({type(exc).__name__}: {exc})")
+    # SESSION TAPE hydration (review P1: restart used to come back with an empty tape and a
+    # stale registry): replay the append-only journal; every base/patch re-verifies its
+    # post_hash and a stale path degrades to read-before-edit via the composition contract.
+    try:
+        from sliceagent_core.recovery import state_dir as _tape_state_dir
+        from sliceagent_core.tape import load_session_tape
+        session.session_tape, session.tape_files = load_session_tape(
+            os.path.join(_tape_state_dir("tape"), f"{session.session_id}.jsonl"))
+    except Exception as exc:  # noqa: BLE001 — a torn journal must not block startup
+        on_log(f"session tape replay failed ({type(exc).__name__}: {exc})")
     # Reconstruct the standing constant-size receipt view from immutable artifacts rather than duplicating it
     # into the semantic task checkpoint.  This keeps it available after restart without making it another
     # writable work-state owner.
@@ -2013,8 +2012,7 @@ def main() -> None:
     # so the seal can append true-diff patches. Rebound per workspace handoff with `tools`, since
     # a rebinding target has its own host and read seam. Inert when the flag is off.
     from sliceagent_core.tape import TapeRecorder, tape_seal_update
-    _tape_on = True   # unconditional since wave 2 (kill switch retired; tag lab-2026-08-05)
-    _tape_recorder = {"rec": TapeRecorder(base_tools) if _tape_on else None}
+    _tape_recorder = {"rec": TapeRecorder(base_tools)}   # unconditional since wave 2
 
     def _make_workspace_dispatch_for(dispatch_root, dispatch_episodic, dispatch_monitor):
         sinks = []
