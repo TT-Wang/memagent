@@ -79,6 +79,15 @@ spine 曲线封顶 33.6%(P5 verdict)、locators 经济性 −22%(oflocators verd
 4. **禁混装**:删除与新功能永不同提交;每个提交信息写明"删什么、为何现在能删、在哪个 tag 可找回"。
 5. 工作树时刻 `git status` 干净;跑批产物要么入库要么在 scratchpad,不留未跟踪残渣。
 
+## E. 执行记录(2026-08-05)
+
+- 波一执行于 `tape-graduation-w1`(4 提交,净 −315 行);毕业门 G1/G2a/G2b/G3/G4 绿。
+- **波二提前执行**:owner 决策("just proceed wave 2, no need to wait for the test, we will test
+  altogether")豁免了"一个发布周期"等待——kill switch 与 off 路径本体、conversation/adjacency/
+  cache_manifest 机器、及其测试面一次删除;G2c(s11 活确认)与最终验证合并收口。
+- 存活确认:pfc.py 的 conversation 环(tape 的输入基底)、MAX_CONVERSATION/reserve_keep(环修剪)、
+  spine 基底(digest 渲染/loader)、locator 渲染器(tape 索引)。
+
 ## D. 执行触发
 
 r8(G1)与 s11 typed r4(G2)数据落地 → 按 A 判门 → 全绿即依 B/C 执行波一。
