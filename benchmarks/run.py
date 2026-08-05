@@ -154,11 +154,10 @@ def run(scn, memory_mode="real"):
         tools.registry.register(make_search_history_tool(memory, session_id))
     else:
         memory = NullMemory()
-    # SESSION TAPE recorder (AGENT_SESSION_TAPE=1): collects the turn's successful file-tool rows
+    # SESSION TAPE recorder (unconditional since wave 2): collects the turn's successful file-tool rows
     # so the seal can append host-authored bases/patches (SESSION-TAPE-DESIGN §2). Inert otherwise.
     from sliceagent.tape import TapeRecorder, tape_seal_update
-    from sliceagent_core.regions import tape_on as _tape_on_fn
-    tape_on = _tape_on_fn()   # tape is the DEFAULT architecture; =0 is the kill switch
+    tape_on = True   # unconditional since wave 2 (kill switch retired; tag lab-2026-08-05)
     recorder = TapeRecorder(tools)
     if tape_on:
         sinks.append(recorder.sink)
@@ -205,7 +204,7 @@ def run(scn, memory_mode="real"):
                 tape_drift += info["drift"]; tape_rebased += len(info["rebased"])
                 tape_compactions += info.get("epoch_folds", 0)   # EVENTS only; gc entry counts are not events
             else:
-                # Kill-switch path (AGENT_SESSION_TAPE=0): digests still accumulate on the session
+                # (Unreachable since wave 2 — kept only until the tape_on constant folds away:
                 # cache through the ONE renderer — parity with the CLI host. (The spine REGION died
                 # at graduation; historical spine arm: git tag lab-2026-08-05.)
                 from sliceagent.spine import render_turn_digest as _digest

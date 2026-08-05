@@ -595,8 +595,7 @@ def _hydrate_workspace_tasks(store, session, on_log: Callable[[str], None]) -> N
             store.coordinator.artifacts.list_all(), session.session_id)
     except Exception as exc:  # noqa: BLE001 — a torn artifact must not block startup
         on_log(f"session spine scan failed ({type(exc).__name__}: {exc})")
-    from sliceagent_core.regions import tape_on as _tape_on_fn
-    if _tape_on_fn():
+    if True:
         # SESSION TAPE hydration (review P1: restart used to come back with an empty tape and a
         # stale registry): replay the append-only journal; every base/patch re-verifies its
         # post_hash and a stale path degrades to read-before-edit via the composition contract.
@@ -2009,13 +2008,12 @@ def main() -> None:
         print(f"  · slice monitor: writing to {_monitor_dir()} — view at the persistent server "
               "(run: python -m sliceagent.monitor)")
 
-    # SESSION TAPE recorder (AGENT_SESSION_TAPE=1): snapshots each successful file tool's
+    # SESSION TAPE recorder (unconditional since wave 2): snapshots each successful file tool's
     # post-state at EVENT time — the only moment per-edit deltas are individually observable —
     # so the seal can append true-diff patches. Rebound per workspace handoff with `tools`, since
     # a rebinding target has its own host and read seam. Inert when the flag is off.
     from sliceagent_core.tape import TapeRecorder, tape_seal_update
-    from sliceagent_core.regions import tape_on as _tape_on_fn
-    _tape_on = _tape_on_fn()   # DEFAULT ON since graduation; =0 is the kill switch
+    _tape_on = True   # unconditional since wave 2 (kill switch retired; tag lab-2026-08-05)
     _tape_recorder = {"rec": TapeRecorder(base_tools) if _tape_on else None}
 
     def _make_workspace_dispatch_for(dispatch_root, dispatch_episodic, dispatch_monitor):
