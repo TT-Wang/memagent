@@ -589,28 +589,6 @@ def _hydrate_workspace_tasks(store, session, on_log: Callable[[str], None]) -> N
     # artifacts. Non-empty only when the process continues an existing session id (a fresh launch
     # mints a new id, so its spine honestly starts empty — cross-session carry is the deferred R5
     # workspace_continue work, not silently faked here).
-    # SESSION TAPE hydration (review P1: restart used to come back with an empty tape and a
-    # stale registry): replay the append-only journal; every base/patch re-verifies its
-    # post_hash and a stale path degrades to read-before-edit via the composition contract.
-    try:
-        from sliceagent_core.recovery import state_dir as _tape_state_dir
-        from sliceagent_core.spine import load_session_digests
-        from sliceagent_core.tape import load_session_tape, reconcile_tape_with_digests
-        session.session_tape, session.tape_files = load_session_tape(
-            os.path.join(_tape_state_dir("tape"), f"{session.session_id}.jsonl"))
-        # MIGRATION/REPAIR (reviews Task147 b1 + Task148 b1): earlier-turn asks must survive
-        # BOTH a pre-graduation upgrade (artifacts, no journal) AND a normal restart (which
-        # mints a NEW session id, so a session-scoped scan sees nothing). Scope by TASK
-        # membership — the same artifacts that hydrated the task checkpoints above — and let
-        # reconcile fold them in seal order. Also heals a torn journal tail. The newest sealed
-        # reply re-freezes below, after latest_turns resolves.
-        _task_turns = [a for a in store.coordinator.artifacts.list_all()
-                       if getattr(a, "kind", "") == "turn"
-                       and getattr(a, "task_id", None) in session.tasks]
-        reconcile_tape_with_digests(
-            session.session_tape, load_session_digests(_task_turns, None))
-    except Exception as exc:  # noqa: BLE001 — a torn journal must not block startup
-        on_log(f"session tape replay failed ({type(exc).__name__}: {exc})")
     # Reconstruct the standing constant-size receipt view from immutable artifacts rather than duplicating it
     # into the semantic task checkpoint.  This keeps it available after restart without making it another
     # writable work-state owner.
@@ -663,20 +641,30 @@ def _hydrate_workspace_tasks(store, session, on_log: Callable[[str], None]) -> N
             session.tasks[task_id].conversation = [{
                 "user": request, "assistant": assistant, "artifact_id": artifact.id,
             }]
-    # The newest sealed REPLY re-freezes onto the tape (review Task147 blocker 1: with the
-    # conversation region retired, the rehydrated pair above no longer renders anywhere — the
-    # tape [reply] entry is its render channel now). Idempotent via the artifact ref.
-    if latest_turns:
-        try:
-            from sliceagent_core.tape import reconcile_tape_with_digests as _reconcile_reply
+    # SESSION TAPE hydration — ONE call into the tape's single hydration owner (Task147 b1 +
+    # Task148 b1 + consolidated blocker 1): journal replay, epoch-aware digest reconciliation
+    # scoped by TASK membership (a normal restart mints a new session id), the newest sealed
+    # reply re-frozen as the [reply] entry (its render channel since the conversation region
+    # retired), and BOUNDED compaction before anything can render.
+    try:
+        from sliceagent_core.recovery import state_dir as _tape_state_dir
+        from sliceagent_core.spine import load_session_digests
+        from sliceagent_core.tape import hydrate_session_tape
+        _task_turns = [a for a in store.coordinator.artifacts.list_all()
+                       if getattr(a, "kind", "") == "turn"
+                       and getattr(a, "task_id", None) in session.tasks]
+        _last_reply = None
+        if latest_turns:
             _nk, _newest = max(latest_turns.values(), key=lambda kv: kv[0])
             _nbody = _newest.structured_body if isinstance(_newest.structured_body, dict) \
                 else dict(_newest.structured_body)
             if str(_nbody.get("assistant_provenance") or "") in {"", "final_response"}:
-                _reconcile_reply(session.session_tape, [],
-                                 last_reply=(_newest.id, str(_nbody.get("assistant") or "")))
-        except Exception as exc:  # noqa: BLE001 — migration must not block startup
-            on_log(f"tape reply migration skipped ({type(exc).__name__}: {exc})")
+                _last_reply = (_newest.id, str(_nbody.get("assistant") or ""))
+        session.session_tape, session.tape_files = hydrate_session_tape(
+            os.path.join(_tape_state_dir("tape"), f"{session.session_id}.jsonl"),
+            load_session_digests(_task_turns, None), last_reply=_last_reply)
+    except Exception as exc:  # noqa: BLE001 — a torn journal must not block startup
+        on_log(f"session tape hydration failed ({type(exc).__name__}: {exc})")
     # Uncertain receipts remain visible on their own task, but they do not seize the workspace from a newer
     # active/parked task. Pick the newest resumable checkpoint uniformly.
     candidates = [row for row in restored if row[3] in ("active", "parked", "indeterminate")]

@@ -29,7 +29,7 @@ spine 曲线封顶 33.6%(P5 verdict)、locators 经济性 −22%(oflocators verd
 | 件 | 为何存活 |
 |---|---|
 | `spine.py` 模块(`render_turn_digest` / `load_session_spine` / `_ASK_CAP_CHARS`) | 封存基底:runtime_persistence 的 seal digest 渲染、tape 的 digest 兜底渲染、崩溃恢复扫描都在用。死的是 spine **区**,不是 digest 器件 |
-| `session.session_spine` 属性 + cli:593 水合 + cli:1704 追加 | artifact-truth digest 缓存;tape 的 digest_text 来源链路;恢复对账用 |
+| ~~`session.session_spine` 缓存链~~ | **已在评审响应中删除**(Task148 f5:无消费者路径;artifact 即唯一摘要库,tape 经 load_session_digests 直读)|
 | `render_file_locators`(seed.py) | 已转正:tape 模式的 OPEN FILES 哈希索引渲染器(组合契约现值指针) |
 | `_SPINE_LAYOUT_SLOTS` 的布局思想 | 波一保留(改名 `_TAPE_LAYOUT_SLOTS`,删 "session_spine" 键);三区装配器落地后整体退役 |
 | spine_probe.py | 通用测量仪(label 只是标签),tape 的持续度量工具 |
@@ -87,6 +87,10 @@ spine 曲线封顶 33.6%(P5 verdict)、locators 经济性 −22%(oflocators verd
   cache_manifest 机器、及其测试面一次删除;G2c(s11 活确认)与最终验证合并收口。
 - 存活确认:pfc.py 的 conversation 环(tape 的输入基底)、MAX_CONVERSATION/reserve_keep(环修剪)、
   spine 基底(digest 渲染/loader)、locator 渲染器(tape 索引)。
+
+## H. G2c 数据点(s11 typed r5,2026-08-05 晚)
+
+机制:fresh **524.5k(历次最低)**、folds 3、tape 86.7k 有界、同轮 156/156、曲线 92.2%。质量 47/48 + quiz 4/4(log ring 5 rep 3 过,kimi 同探针也挂 = 行为方差)。两项边缘:peak 81.3k(门 80k,+1.6%)、drift 18(带 8–18)。按评审定位为单数据点;终判归 P-T4/P-T5 多 rep 双 checkout。
 
 ## G. 波三/波四执行记录(2026-08-05)
 

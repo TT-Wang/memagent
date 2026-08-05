@@ -384,6 +384,66 @@ def test_pre_tape_session_migrates_digests_and_last_reply_into_tape(tmp_path):
     assert "request number 1" in stream4 and "Choose option two." in stream4
 
 
+def test_hydration_is_bounded_on_first_build(tmp_path):
+    """Task148 consolidated blocker 1: 80+ old-session artifacts must hydrate to a tape WITHIN
+    budget BEFORE anything renders — waiting for the next seal to compact is too late."""
+    from sliceagent_core.tape import TAPE_BUDGET_CHARS, hydrate_session_tape
+    pairs = [(f"t-{i:03d}", f"[turn t-{i:03d} · task k · completed]\nask: {'x' * 2400}\n")
+             for i in range(1, 81)]
+    tape, files = hydrate_session_tape(str(tmp_path / "none.jsonl"), pairs,
+                                       last_reply=("t-080", "the final answer was B"))
+    chars = sum(len(e.rendered) for e in tape)
+    assert chars <= TAPE_BUDGET_CHARS, f"first-build tape {chars:,} over budget"
+    stream = tape_render(tape)
+    # the deictic antecedent survives bounded repair: newest ask + newest reply visible
+    assert "t-080" in stream and "the final answer was B" in stream
+
+
+def test_hydration_never_resurrects_folded_history(tmp_path):
+    """Task148 consolidated blocker 1b: epoch(t-1..t-9)+digest(t-10) on the tape means t-1..t-9
+    were DELIBERATELY folded — artifact repair must not re-gain them."""
+    from sliceagent_core.tape import TapeEntry, reconcile_tape_with_digests
+    pairs = [(f"t-{i}", f"[turn t-{i} · task k · completed]\nask: request {i}\n")
+             for i in range(1, 11)]
+    tape = [
+        TapeEntry(kind="epoch", ref="t-1",
+                  rendered="[epoch compacted: t-1..t-9 — 9 history entries removed; ...]\n"),
+        digest_entry(pairs[9][1], "t-10"),
+    ]
+    added = reconcile_tape_with_digests(tape, pairs)
+    assert added == 0, f"resurrected {added} folded digests"
+    refs = [e.ref for e in tape if e.kind == "digest"]
+    assert refs == ["t-10"]
+    # torn tail beyond the newest live digest still heals
+    pairs.append(("t-11", "[turn t-11 · task k · completed]\nask: request 11\n"))
+    assert reconcile_tape_with_digests(tape, pairs) == 1
+    assert [e.ref for e in tape if e.kind == "digest"] == ["t-10", "t-11"]
+
+
+def test_skill_activation_between_builds_keeps_tape_prefix(tmp_path, monkeypatch):
+    """Task148 consolidated blocker 2: a successful skill activation mutates active_skills
+    between model calls — NOTHING mutable may sit above the tape, so the rendered prefix up
+    to (and through) the tape must be byte-identical across the activation."""
+    s, tools = _ws(tmp_path)
+    _seal(s, tools, [("a.py", (tmp_path / "a.py").read_text(encoding="utf-8"))],
+          ask="earlier work", assistant_reply="did the earlier work")
+    from sliceagent_core.memory_null import NullMemory
+    from sliceagent_core.seed import make_build_slice
+    build = make_build_slice(s, tools, None, NullMemory(), "current ask")
+    before = build()[1]["content"]
+    s.active_skills.append({"name": "review-checklist", "body": "1. check nulls\n2. check locks"})
+    s.turns += 1                                     # new build epoch (locator snapshot keying)
+    after = make_build_slice(s, tools, None, NullMemory(), "current ask")()[1]["content"]
+    tape_start = before.index("# SESSION TAPE")
+    tape_body = before[tape_start:before.index("[end reply]") + len("[end reply]")]
+    assert tape_body in after, "tape bytes must survive"
+    assert before[:tape_start] == after[:after.index("# SESSION TAPE")], \
+        "bytes ABOVE the tape changed on skill activation"
+    assert "review-checklist" in after
+    assert after.index("review-checklist") > after.index(tape_body) , \
+        "the activated skill must render BELOW the tape"
+
+
 def test_workspace_rebase_carries_tape():
     from sliceagent_core.memory_null import NullMemory
     from sliceagent_core.session import Session, rebase_session_for_workspace

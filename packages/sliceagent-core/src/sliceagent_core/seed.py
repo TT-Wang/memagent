@@ -672,7 +672,6 @@ def make_build_slice(state, tools, retriever, memory, task: str, session_id: str
         logical_blocks = compile_active_context(
             s, build_context_blocks(ctx), source_texts=source_texts,
             current_logical_id=current_logical_id,
-            workspace_epoch=current_epoch,
         )
         return SeedPlan(
             system=_system(), blocks=logical_blocks,

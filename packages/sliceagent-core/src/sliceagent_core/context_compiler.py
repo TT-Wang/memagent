@@ -26,8 +26,6 @@ from .receipts import receipt_summary_parts
 # current-turn tool results; they deliberately do not become a second cross-turn context region.
 # session_tape: the frozen stream must reach BOTH lanes through this one seam; it
 # self-suppresses when empty, so unconditional selection costs nothing.
-_ALWAYS = frozenset({"focus", "reconciliation", "session_tape"})
-_INTENT_FALLBACK = frozenset({"intent", "task_objective", "corrections", "task_constraints"})
 _FILE_KINDS = frozenset({"file", "workspace_file", "path", "workspace", "git"})
 def dependency_resource_paths(graph: WorkGraph, *, workspace_epoch: int | None = None) -> tuple[str, ...]:
     """Workspace paths named by the unresolved dependency closure, stable and deduplicated."""
@@ -199,7 +197,6 @@ def compile_active_context(
     *,
     source_texts: Mapping[str, str] | None = None,
     current_logical_id: str = "",
-    workspace_epoch: int | None = None,
 ) -> tuple[ContextBlock, ...]:
     """Select semantically required blocks, then hand alternatives to elasticity.
 

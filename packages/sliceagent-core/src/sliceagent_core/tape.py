@@ -451,9 +451,22 @@ def reconcile_tape_with_digests(tape: list, digest_pairs: list,
       as a [reply] entry unless one for that artifact already exists.
     Returns the number of entries appended. Idempotent."""
     refs = {e.ref for e in tape if e.kind == "digest" and e.ref}
+    has_epoch = any(e.kind == "epoch" for e in tape)
     added = 0
     seen = [i for i, (aid, _d) in enumerate(digest_pairs) if aid in refs]
-    if not seen:
+    if has_epoch:
+        # EPOCH-AWARE (review Task148 consolidated, blocker 1): an epoch on the tape means this
+        # session already compacted deliberate history — everything at or before the newest live
+        # digest is COVERED (folded or live), and prepending would resurrect what a fold removed
+        # (reproduced: epoch(t-1..t-9)+digest(t-10) re-gained t-1..t-9). Only the tail beyond
+        # the newest live digest (torn-journal turns) may enter; the folded record stays
+        # readable via the history index the epoch marker cites.
+        start = (seen[-1] + 1) if seen else len(digest_pairs)
+        for aid, digest in digest_pairs[start:]:
+            if aid not in refs:
+                tape.append(digest_entry(digest, aid))
+                added += 1
+    elif not seen:
         # no overlap (pre-tape session, or a journal that predates every listed artifact):
         # artifact truth wins — every digest enters, oldest first, BEFORE any journaled entries
         # so chronology holds. One-time prefix re-bill, on the migration turn only.
@@ -481,6 +494,20 @@ def reconcile_tape_with_digests(tape: list, digest_pairs: list,
                 tape.append(rep)
                 added += 1
     return added
+
+
+def hydrate_session_tape(journal_path: str, digest_pairs: list, *,
+                         last_reply: tuple | None = None,
+                         budget: int = TAPE_BUDGET_CHARS) -> tuple[list, dict]:
+    """THE hydration owner (review Task148 consolidated: reconciliation was a second tape
+    mutator outside the invariant enforcer — 80 old-session artifacts rendered a 175k tape on
+    the FIRST resumed build). One call: journal replay -> epoch-aware digest/reply
+    reconciliation -> BOUNDED compaction, so the tape honors its budget contract before it can
+    ever be rendered. Hosts call this; they never mutate tape state directly."""
+    tape, files = load_session_tape(journal_path, budget=budget)
+    reconcile_tape_with_digests(tape, digest_pairs, last_reply=last_reply)
+    compact_tape(tape, files, budget=budget)
+    return tape, files
 
 
 # ── Durability: append-only JSONL journal ─────────────────────────────────────────────────────

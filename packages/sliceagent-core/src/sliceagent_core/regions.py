@@ -1198,12 +1198,19 @@ def _region_provenance(name: str, ctx: dict) -> tuple[EpistemicRole, tuple[str, 
 # A region name NOT declared here lands in the TAIL — it is structurally impossible for new
 # work to sneak above the tape. The invariants are pinned by test_region_registry's
 # three_zone_partition gate.
-_HEAD_REGIONS = frozenset({"skills"})          # revision-bound (skill activation), not per-turn
+# EMPTY by proof, not by accident (review Task148 consolidated, blocker 2): "skills" claimed
+# HEAD residency on its REVISION_BOUND label, but a successful `skill` tool result mutates
+# active_skills BETWEEN model calls (slice_reducer) — reproduced: one activation shifted the
+# tape offset 11 -> 428 and killed the whole prefix. A HEAD candidate needs proof that NO
+# producer can change its bytes within a session; today nothing qualifies. The system message
+# is the real frozen head; msg1 starts at the tape.
+_HEAD_REGIONS: frozenset = frozenset()
 _TAPE_REGION = "session_tape"
 
 # TAIL presentation order (slot numbers preserved from the measured layout: the reading order
 # below the tape — working state first, diagnostics last; 4 stays the reserved blank separator).
 _TAIL_SLOT = {
+    "skills": 2,   # demoted from HEAD (blocker 2): activation mutates it mid-turn
     "memory": 2,
     "intent": 2, "task_objective": 2, "corrections": 2, "task_constraints": 2, "open_files": 2,
     "related_code": 3,

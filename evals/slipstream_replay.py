@@ -57,6 +57,7 @@ REGION_HEADERS = {
     "related_code": "# RELATED CODE",
     "skills": "# ACTIVE SKILL(S)",
     "memory": "# RELEVANT KNOWLEDGE CANDIDATES",
+    # HISTORICAL corpus headings (regions retired at graduation; kept to parse old captures):
     "conversation": "# RECENT CONVERSATION",
     "findings": "# YOUR NOTES FROM PRIOR TOOL CALLS",
     "progress": "# PROGRESS SIGNALS",
