@@ -1,64 +1,186 @@
 """Session Tape — the single append-only frozen stream (docs/SESSION-TAPE-DESIGN.md).
 
-One chronological interleave of typed entries: turn digests (the spine's renderer, reused),
-file BASE versions (full body, rendered once), host-authored PATCHES (the TRUE diff of the
-edit the host itself applied — captured from disk at event time, never replayed from tool
-args), and EXTERNAL notices (a tracked file changed outside the recorded edits). Entries are
-rendered ONCE when appended and are frozen bytes forever; consumers concatenate verbatim
-(R1/R3 discipline, inherited from the spine).
+TYPED CORE (2026-08-05 review rebuild): the tape is a list of TapeEntry values — kind, path and
+payload are STRUCTURED fields, and `rendered` is the frozen model-visible bytes produced ONCE at
+append time. Every consumer that needs meaning (GC, folding, durability, honesty net) reads the
+typed fields; nothing ever re-parses rendered text. The two external reviews at ed0cb69 traced
+every P1 to the old shape's sidecar habits: startswith()/split() over rendered strings corrupted
+paths with spaces, compaction deleted live patches while keeping their base, digests were
+re-rendered from the raw (un-redacted) conversation ring, and nothing was durable.
 
-Composition contract (what the model is told): current content of a tracked file = its latest
-`base` + every later `patch` (unified diffs), in tape order. Each patch carries the
-post-composition hash; the OPEN FILES index shows the CURRENT on-disk hash — string-equal
-means composition is current.
-
-Re-base is REACTIVE only (v1.1, owner decision 2026-08-05): it happens when a fresh base is
-simply the smaller representation (a rewrite whose diff would exceed the body) or when the
-honesty net catches an out-of-band change. There is NO chain-length trigger — the Kimi wire
-audit showed long edit chains compose fine, and error-driven correction (a failed str_replace
--> re-read) plus the per-seal honesty net catch real composition failures without a
-preemptive timer. Dead bytes from re-bases are generational-compaction's job (P8).
+Contracts:
+- ONE producer: tape_seal_update. ONE digest render: the sealed artifact's spine_digest string is
+  appended VERBATIM (callers without an artifact digest get an in-function render from redacted
+  inputs — never live ring text).
+- Composition: current content of a tracked file = its latest [base] + every later [patch] in
+  tape order. The host-side registry (tape_files: path -> {hash, content}) holds the EXACT bytes;
+  rendering normalizes a missing trailing newline for display and annotates it in the header, so
+  byte-exactness never depends on the rendered form.
+- Re-base is REACTIVE only (owner decision 2026-08-05): rendered-size choice per edit, honesty-net
+  drift, and fold re-anchoring. No chain-length trigger (Kimi wire audit: long chains compose).
+- Durability: tape_journal_append writes each sealed turn's new entries as JSONL (append-only,
+  frozen bytes); load_session_tape replays the journal, rebuilds the registry by applying our own
+  deterministic patches, verifies every post_hash, and compacts once to budget. A crash between
+  artifact commit and journal write loses at most that turn's entries; the next seal's honesty
+  net re-anchors loudly.
 """
 from __future__ import annotations
 
 import difflib
 import hashlib
+import json
+import os
+from dataclasses import dataclass
 
 
 def _h(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()[:12]
 
 
+_FILE_KINDS = frozenset({"base", "patch", "external"})
+
+
+@dataclass(frozen=True)
+class TapeEntry:
+    """One frozen tape entry. `rendered` is written once and never edited; the typed fields are
+    the ONLY inputs GC/fold/durability may reason over."""
+
+    kind: str            # "digest" | "base" | "patch" | "external" | "reply" | "epoch"
+    rendered: str        # frozen model-visible bytes
+    path: str = ""       # file-kind entries only
+    payload: str = ""    # base: exact redacted body · patch: unified diff · others: ""
+    no_nl: bool = False  # the post-state's exact content lacks a trailing newline
+    post_hash: str = ""  # base/patch/external: _h() of the post-state exact content
+    ref: str = ""        # digest: artifact_id · epoch: first folded ref (chain anchor)
+
+    def to_record(self) -> dict:
+        d = {"kind": self.kind, "rendered": self.rendered}
+        for k in ("path", "payload", "post_hash", "ref"):
+            v = getattr(self, k)
+            if v:
+                d[k] = v
+        if self.no_nl:
+            d["no_nl"] = True
+        return d
+
+    @classmethod
+    def from_record(cls, d: dict) -> "TapeEntry":
+        return cls(kind=str(d.get("kind") or ""), rendered=str(d.get("rendered") or ""),
+                   path=str(d.get("path") or ""), payload=str(d.get("payload") or ""),
+                   no_nl=bool(d.get("no_nl")), post_hash=str(d.get("post_hash") or ""),
+                   ref=str(d.get("ref") or ""))
+
+
+def _norm(body: str) -> str:
+    """Trailing-newline-normalized view used for diffing/rendering; exact bytes stay in payload."""
+    return body if (not body or body.endswith("\n")) else body + "\n"
+
+
+def _nl_note(body: str) -> str:
+    return " · no trailing newline" if (body and not body.endswith("\n")) else ""
+
+
 def render_tape_base(path: str, body: str) -> str:
-    # UN-numbered (cost review 2026-08-05): cat-n numbering cost 7 chars/line (14-17% of every
-    # base) and fought the composition contract — patches are plain unified diffs, so a numbered
-    # base forces the model to strip numbers before applying hunks. Line references still work:
-    # the header carries the line count and hunks carry @@ offsets.
+    # UN-numbered (cost review 2026-08-05): cat-n numbering cost 7 chars/line and fought the
+    # composition contract (patches are plain unified diffs). Line references still work: the
+    # header carries the line count and hunks carry @@ offsets.
     lines = body.splitlines()
-    return (f"[base {path} @sha256:{_h(body)} · {len(lines)} lines]\n"
-            + body + ("" if body.endswith("\n") else "\n")
+    return (f"[base {path} @sha256:{_h(body)} · {len(lines)} lines{_nl_note(body)}]\n"
+            + _norm(body)
             + f"[end base {path}]\n")
 
 
-def unified_patch(path: str, before: str, after: str) -> str:
-    """The TRUE delta of a host-applied edit, as a deterministic unified diff.
+def base_entry(path: str, body: str) -> TapeEntry:
+    return TapeEntry(kind="base", rendered=render_tape_base(path, body), path=path,
+                     payload=body, no_nl=not body.endswith("\n") if body else False,
+                     post_hash=_h(body))
 
-    n=1 context and constant a/b labels (the wrapper line already names the path once) — on the
-    measured s2 mix the old shape (n=2 + path repeated three times) was up to 72% of a small
-    patch entry."""
+
+def unified_patch(path: str, before: str, after: str) -> str:
+    """The TRUE delta of a host-applied edit, as a deterministic unified diff over
+    newline-normalized views (n=1, constant a/b labels — the entry header names the path once).
+    Exactness for no-trailing-newline files rides the entry's no_nl flag, not the diff text."""
     return "".join(difflib.unified_diff(
-        before.splitlines(keepends=True), after.splitlines(keepends=True),
+        _norm(before).splitlines(keepends=True), _norm(after).splitlines(keepends=True),
         fromfile="a", tofile="b", n=1,
     ))
 
 
-def render_tape_patch(path: str, diff: str, post_hash: str) -> str:
-    return f"[patch {path} -> @sha256:{post_hash}]\n{diff}\n"
+def render_tape_patch(path: str, diff: str, post_hash: str, *, no_nl: bool = False) -> str:
+    note = " · no trailing newline" if no_nl else ""
+    return f"[patch {path} -> @sha256:{post_hash}{note}]\n{diff}\n"
+
+
+def patch_entry(path: str, before: str, after: str) -> TapeEntry:
+    diff = unified_patch(path, before, after)
+    no_nl = not after.endswith("\n") if after else False
+    return TapeEntry(kind="patch", rendered=render_tape_patch(path, diff, _h(after), no_nl=no_nl),
+                     path=path, payload=diff, no_nl=no_nl, post_hash=_h(after))
+
+
+def apply_unified(before: str, diff_text: str) -> str:
+    """Apply one of OUR deterministic unified diffs (n=1, a/b labels) to `before`'s normalized
+    view. Raises ValueError on any mismatch — callers treat that as a stale journal entry."""
+    src = _norm(before).splitlines(keepends=True)
+    out: list[str] = []
+    pos = 0
+    lines = diff_text.splitlines(keepends=True)
+    i = 0
+    while i < len(lines):
+        ln = lines[i]
+        if ln.startswith(("---", "+++")):
+            i += 1
+            continue
+        if ln.startswith("@@"):
+            try:
+                old_start = int(ln.split("-", 1)[1].split(",")[0].split(" ")[0])
+            except Exception as exc:  # noqa: BLE001
+                raise ValueError(f"bad hunk header: {ln!r}") from exc
+            hunk_pos = old_start - 1
+            out.extend(src[pos:hunk_pos])
+            pos = hunk_pos
+            i += 1
+            while i < len(lines) and not lines[i].startswith("@@"):
+                h = lines[i]
+                if h.startswith(" "):
+                    if pos >= len(src) or src[pos] != h[1:]:
+                        raise ValueError(f"context mismatch at line {pos + 1}")
+                    out.append(src[pos]); pos += 1
+                elif h.startswith("-"):
+                    if pos >= len(src) or src[pos] != h[1:]:
+                        raise ValueError(f"delete mismatch at line {pos + 1}")
+                    pos += 1
+                elif h.startswith("+"):
+                    out.append(h[1:])
+                elif h.strip() == "":
+                    pass                       # trailing separator inside rendered block
+                else:
+                    raise ValueError(f"bad hunk line: {h!r}")
+                i += 1
+            continue
+        i += 1
+    out.extend(src[pos:])
+    return "".join(out)
+
+
+def compose_after(entry: TapeEntry, before: str) -> str:
+    """Post-state exact bytes for a base/patch entry (journal replay)."""
+    if entry.kind == "base":
+        return entry.payload
+    after = apply_unified(before, entry.payload)
+    if entry.no_nl and after.endswith("\n"):
+        after = after[:-1]
+    return after
 
 
 def render_tape_external(path: str, new_hash: str, reason: str) -> str:
     return (f"[external {path} -> @sha256:{new_hash} — {reason}; the entry below re-anchors "
             "to the current on-disk truth]\n")
+
+
+def external_entry(path: str, new_hash: str, reason: str) -> TapeEntry:
+    return TapeEntry(kind="external", rendered=render_tape_external(path, new_hash, reason),
+                     path=path, post_hash=new_hash)
 
 
 # The reply entry replaces the RECENT CONVERSATION region under the tape (census 2026-08-05:
@@ -74,89 +196,97 @@ def render_tape_reply(artifact_id: str, text: str) -> str:
     return f"[reply {artifact_id}]\n{body}\n[end reply]\n" if body else ""
 
 
-# Generational compaction v1 (SESSION-TAPE-DESIGN §3): the bound is a CONTRACT. When the tape
+def reply_entry(artifact_id: str, text: str) -> TapeEntry | None:
+    rendered = render_tape_reply(artifact_id, text)
+    return TapeEntry(kind="reply", rendered=rendered, ref=str(artifact_id)) if rendered else None
+
+
+def digest_entry(rendered_digest: str, artifact_id: str = "") -> TapeEntry:
+    """The sealed artifact's spine_digest string, appended VERBATIM (R1: one render, and it
+    inherits the seal path's redaction)."""
+    return TapeEntry(kind="digest", rendered=rendered_digest, ref=str(artifact_id))
+
+
+def tape_render(tape: list) -> str:
+    """The model-visible stream: rendered frozen bytes, concatenated verbatim."""
+    return "".join(e.rendered for e in tape)
+
+
+def tape_chars(tape: list) -> int:
+    return sum(len(e.rendered) for e in tape)
+
+
+# Generational compaction (SESSION-TAPE-DESIGN §3): the bound is a CONTRACT. When the tape
 # exceeds the budget, dead file history (entries superseded by a later base) is garbage-collected
-# first; if still over, the oldest span folds into one epoch marker with a locator. Each
-# compaction mutates frozen bytes and therefore breaks the provider prefix ONCE — deliberately,
-# rarely, and counted (liveness reports it; the byte probe attributes it).
-TAPE_BUDGET_CHARS = int(__import__("os").environ.get("AGENT_TAPE_BUDGET", "") or 120_000)
+# first; if still over, the oldest span folds into one epoch marker. Every file with ANY entry in
+# the folded span is RE-ANCHORED: one fresh base rendered from the registry's CURRENT composed
+# content replaces that file's whole chain (review P1: the old fold kept a stale base and deleted
+# its later patches — base+patch composition then failed and every affected file forced a
+# re-read). Each compaction mutates frozen bytes and therefore breaks the provider prefix ONCE —
+# deliberately, rarely, and counted.
+TAPE_BUDGET_CHARS = int(os.environ.get("AGENT_TAPE_BUDGET", "") or 120_000)
 _FOLD_TARGET = 0.7   # fold DOWN TO this fraction of budget — hysteresis so back-to-back turns
-#                      cannot re-trigger (measured thrash: folds at turns 9 AND 10 of s2 r3,
-#                      each costing a ~55k-char full re-bill of everything below the tape head)
+#                      cannot re-trigger (measured thrash: s2 r3 folds at turns 9 AND 10, each a
+#                      ~55k-char full re-bill of everything below the tape head)
 
 
-def compact_tape(tape: list, *, budget: int = TAPE_BUDGET_CHARS) -> dict:
-    def total() -> int:
-        return sum(len(e) for e in tape)
+def compact_tape(tape: list, files: dict, *, budget: int = TAPE_BUDGET_CHARS) -> dict:
     info = {"gc_removed": 0, "epoch_folds": 0}
-    if total() <= budget:
+    if tape_chars(tape) <= budget:
         return info
-    # pass 1: GC dead file history — for each path keep only entries at/after its LATEST base
+    # pass 1: GC dead file history — typed: drop file-kind entries strictly before their path's
+    # latest base (they are superseded; the latest base + later patches carry the current truth).
     latest_base: dict[str, int] = {}
     for i, e in enumerate(tape):
-        if e.startswith("[base "):
-            latest_base[e.split(" ", 2)[1]] = i
-    dead = set()
-    for i, e in enumerate(tape):
-        for kind in ("[base ", "[patch ", "[external "):
-            if e.startswith(kind):
-                path = e[len(kind):].split(" ", 1)[0]
-                if path in latest_base and i < latest_base[path]:
-                    dead.add(i)
+        if e.kind == "base":
+            latest_base[e.path] = i
+    dead = {i for i, e in enumerate(tape)
+            if e.kind in _FILE_KINDS and e.path in latest_base and i < latest_base[e.path]}
     if dead:
         info["gc_removed"] = len(dead)
         tape[:] = [e for i, e in enumerate(tape) if i not in dead]
-    # pass 2: ONE type-aware fold sized to reach the budget. Only HISTORY entries (digests,
-    # replies, patches, externals, older epoch markers) fold; a file's LIVE base is working
-    # set, never history — s11's real-workload run proved the blind fold swallows live bases,
-    # the composition contract then forces re-reads, and cost + steps bleed out (FAIL@33,
-    # 36 compaction events, fresh 414k). Live bases inside the fold span are CARRIED to the
-    # tape tail instead (their bytes re-bill once — same price as the re-read they prevent,
-    # without spending the model's steps).
-    if total() > budget and len(tape) > 8:
-        latest_base = {}
-        for i, e in enumerate(tape):
-            if e.startswith("[base "):
-                latest_base[e.split(" ", 2)[1]] = i
-        live = set(latest_base.values())
-        overshoot = total() - int(budget * _FOLD_TARGET)
-        running, cut, carried = 0, 0, []
+    # pass 2: ONE fold sized to reach the target. Files touched inside the span are re-anchored
+    # to their registry content; digests/replies/old epochs in the span fold into the marker.
+    if tape_chars(tape) > budget and len(tape) > 8:
+        overshoot = tape_chars(tape) - int(budget * _FOLD_TARGET)
+        running, cut = 0, 0
         while cut < len(tape) - 4 and running < overshoot + 200:
-            if cut in live:
-                carried.append(tape[cut])          # working set: carry, never fold
-            else:
-                running += len(tape[cut])
+            running += len(tape[cut].rendered)
             cut += 1
-        if cut - len(carried) <= 0:
-            # nothing foldable (the working set alone exceeds the target): bail rather than
-            # stack empty markers — the budget simply floors at the live bases + recent history
-            return info
         span = tape[:cut]
-        turns = [e.split(" ", 2)[1] for e in span if e.startswith("[turn ")]
-        first = turns[0] if turns else "start"
-        if span and span[0].startswith("[epoch compacted: "):
-            prev = span[0][len("[epoch compacted: "):].split("..", 1)[0].strip()
-            if prev:
-                first = prev
-        last = turns[-1] if turns else "…"
-        folded = cut - len(carried)
-        marker = (f"[epoch compacted: {first}..{last} — {folded} history entries removed; the "
-                  "full sealed record remains readable via "
-                  "read_file(\"@sliceagent/history/index.md\")]\n")
-        tape[:] = [marker, *carried, *tape[cut:]]
+        affected = sorted({e.path for e in span if e.kind in _FILE_KINDS and e.path})
+        anchors = [base_entry(p, files[p]["content"]) for p in affected if p in files]
+        folded_history = sum(1 for e in span if not (e.kind in _FILE_KINDS and e.path in affected))
+        if folded_history <= 0 and not affected:
+            return info      # nothing foldable: bail rather than stack empty markers
+        refs = [e.ref for e in span if e.kind == "digest" and e.ref]
+        first = refs[0] if refs else "start"
+        if span and span[0].kind == "epoch" and span[0].ref:
+            first = span[0].ref
+        last = refs[-1] if refs else "…"
+        marker = TapeEntry(
+            kind="epoch", ref=first,
+            rendered=(f"[epoch compacted: {first}..{last} — {folded_history} history entries "
+                      "removed; re-anchored files follow as fresh bases; the full sealed record "
+                      "remains readable via read_file(\"@sliceagent/history/index.md\")]\n"),
+        )
+        keep_tail = [e for e in tape[cut:] if not (e.kind in _FILE_KINDS and e.path in affected)]
+        tape[:] = [marker, *anchors, *keep_tail]
         info["epoch_folds"] += 1
     return info
 
 
 class TapeRecorder:
-    """Collects (kind, path, disk-snapshot) at TOOL-EVENT time — the only moment each edit's
-    post-state is individually observable (a seal-time disk read collapses a turn's edits)."""
+    """Collects (path, disk-snapshot) at EDIT tool-event time — the only moment each edit's
+    post-state is individually observable (a seal-time disk read collapses a turn's edits).
+    Reads are NOT recorded: defer-base-until-edit never consumes them, and snapshotting every
+    read cost one full extra disk read per read_file (review note c)."""
 
     _EDITS = frozenset({"str_replace", "edit_file", "append_to_file", "write_file", "create_file"})
 
     def __init__(self, tools):
         self.tools = tools
-        self.rows: list[tuple[str, str, str | None]] = []   # (kind, path, snapshot|None)
+        self.rows: list[tuple[str, str | None]] = []   # (path, post-state snapshot | None)
 
     def _disk(self, path: str) -> str | None:
         try:
@@ -168,13 +298,16 @@ class TapeRecorder:
     def sink(self, event) -> None:
         if type(event).__name__ != "ToolResult" or getattr(event, "status", "") != "succeeded":
             return
-        name = getattr(event, "name", "")
-        args = getattr(event, "args", {}) or {}
-        path = str(args.get("path") or "")
-        if not path:
+        if getattr(event, "name", "") not in self._EDITS:
             return
-        if name == "read_file" or name in self._EDITS:
-            self.rows.append(("read" if name == "read_file" else "edit", path, self._disk(path)))
+        path = str((getattr(event, "args", {}) or {}).get("path") or "")
+        if path:
+            self.rows.append((path, self._disk(path)))
+
+    def rebind(self, tools) -> None:
+        """Point the recorder at a new workspace toolset (workspace handoff)."""
+        self.tools = tools
+        self.rows = []
 
     def reset(self) -> None:
         self.rows = []
@@ -182,13 +315,14 @@ class TapeRecorder:
 
 def tape_seal_update(s, tools, rows, *, session_id: str, artifact_id: str, task_id: str,
                      status: str, user_request: str, assistant_reply: str = "",
+                     digest_text: str = "", journal_path: str = "",
                      budget: int = TAPE_BUDGET_CHARS) -> dict:
-    """Append this sealed turn's entries to ``s.continuity.session_tape``.
+    """THE single producer: append this sealed turn's entries to ``s.continuity.session_tape``.
 
-    ``rows`` = TapeRecorder rows in execution order. Composition state lives in
-    ``s.continuity.tape_files`` (path -> {hash, content}) on the REDACTED lane; because patches
-    are true event-time diffs, replay is an identity and drift can only mean an out-of-band
-    change. Returns liveness: {"entries", "drift", "rebased"}.
+    ``digest_text`` is the sealed artifact's spine_digest — appended verbatim (one render, seal
+    redaction inherited). Callers without one (bench harness) get an in-function render from
+    REDACTED inputs. ``rows`` = TapeRecorder rows in execution order. Returns liveness:
+    {"entries", "drift", "rebased", "gc_removed", "epoch_folds"}.
     """
     from .safety import redact_text
     from .spine import render_turn_digest
@@ -198,45 +332,47 @@ def tape_seal_update(s, tools, rows, *, session_id: str, artifact_id: str, task_
     touched: list[str] = []
     drift = 0
     rebased: list[str] = []
+    new_entries: list[TapeEntry] = []
 
-    def _append_base(path: str, body_r: str) -> None:
-        tape.append(render_tape_base(path, body_r))
+    def _append(entry: TapeEntry) -> None:
+        tape.append(entry)
+        new_entries.append(entry)
+
+    def _anchor(path: str, body_r: str, *, prev: str | None) -> None:
+        """Append the smaller RENDERED representation (review P2: raw-length comparison chose a
+        1.46k base over a 1.24k rendered patch)."""
+        if prev is None:
+            _append(base_entry(path, body_r))
+        else:
+            pe, be = patch_entry(path, prev, body_r), base_entry(path, body_r)
+            if len(pe.rendered) < len(be.rendered):
+                _append(pe)
+            else:
+                rebased.append(path)
+                _append(be)
         files[path] = {"hash": _h(body_r), "content": body_r}
 
-    tape.append(render_turn_digest(
-        artifact_id=artifact_id, session_id=session_id, task_id=task_id,
-        status=status, user_request=user_request,
-    ))
+    if digest_text:
+        _append(digest_entry(digest_text, artifact_id))
+    else:
+        _append(digest_entry(render_turn_digest(
+            artifact_id=artifact_id, session_id=session_id, task_id=task_id,
+            status=status, user_request=redact_text(str(user_request or "")),
+        ), artifact_id))
 
-    for kind, path, snapshot in rows:
+    for path, snapshot in rows:
         if snapshot is None:
             continue
-        if kind == "read":
-            # DEFER-BASE-UNTIL-EDIT (cost review item 6, forced by s10: 40 read-only blobs would
-            # colonize the tape with ~360k chars of bases). Read-only material lives in the
-            # trajectory + the hash index; the tape tracks only files the model AUTHORS. The
-            # composition contract already routes "absent from the tape" to a re-read.
-            continue
         body_r = redact_text(snapshot, code_file=True)
-        if path not in files:
-            _append_base(path, body_r)      # first EDIT of an untracked file -> base = post-state
+        state = files.get(path)
+        if state is not None and state["hash"] == _h(body_r):
             touched.append(path)
-            continue
-        touched.append(path)
-        state = files[path]
-        if state["hash"] == _h(body_r):
             continue                       # idempotent edit / no byte change
-        diff = unified_patch(path, state["content"], body_r)
-        # representation choice, not policy: whichever is smaller carries the new version
-        if len(diff) < len(body_r):
-            state.update(content=body_r, hash=_h(body_r))
-            tape.append(render_tape_patch(path, diff, state["hash"]))
-        else:
-            rebased.append(path)
-            _append_base(path, body_r)
+        touched.append(path)
+        _anchor(path, body_r, prev=None if state is None else state["content"])
 
     # honesty net: every tracked file must match its last recorded state NOW; a mismatch is an
-    # out-of-band change (shell/script/user) — re-anchor loudly.
+    # out-of-band change (shell/script/user) — re-anchor loudly, delta-sized like any edit.
     for path in sorted(files):
         try:
             rd = getattr(tools, "resolve_read", None) or getattr(tools, "locate", None)
@@ -248,26 +384,67 @@ def tape_seal_update(s, tools, rows, *, session_id: str, artifact_id: str, task_
             drift += 1
             reason = ("changed after your last recorded edit this turn (a command/script "
                       "modified it)" if path in touched else "changed outside the recorded edits")
-            tape.append(render_tape_external(path, _h(body_r), reason))
-            # Re-anchor with the SAME size-choice as recorded edits (s11 measured: 18 drifts ×
-            # full-body bases dominated re-anchor bytes; a script's delta is usually small).
-            # Provenance stays loud in the [external] notice; composition stays exact — we hold
-            # the last recorded content, so the diff to disk truth is as sound as a fresh base.
-            state = files[path]
-            diff = unified_patch(path, state["content"], body_r)
-            if len(diff) < len(body_r):
-                state.update(content=body_r, hash=_h(body_r))
-                tape.append(render_tape_patch(path, diff, state["hash"]))
-            else:
-                _append_base(path, body_r)
+            _append(external_entry(path, _h(body_r), reason))
+            _anchor(path, body_r, prev=files[path]["content"])
             if path not in rebased:
                 rebased.append(path)
 
     # the turn's outward answer, frozen last (chronology) — replaces the RECENT CONVERSATION
     # region's per-boundary re-bill; deixis anchors against tape bytes from here on
-    reply_entry = render_tape_reply(artifact_id, redact_text(str(assistant_reply or "")))
-    if reply_entry:
-        tape.append(reply_entry)
+    rep = reply_entry(artifact_id, redact_text(str(assistant_reply or "")))
+    if rep is not None:
+        _append(rep)
 
-    compaction = compact_tape(tape, budget=budget)
+    if journal_path:
+        try:
+            tape_journal_append(journal_path, new_entries)
+        except Exception:  # noqa: BLE001 — durability is best-effort; the live tape is intact and
+            pass           # the next seal's honesty net re-anchors anything a replay would miss
+
+    compaction = compact_tape(tape, files, budget=budget)
     return {"entries": len(tape), "drift": drift, "rebased": rebased, **compaction}
+
+
+# ── Durability: append-only JSONL journal ─────────────────────────────────────────────────────
+# One line per entry, in append order, written at seal time. Compaction NEVER rewrites the
+# journal (it is the full history); load replays every line and compacts once at the end, so a
+# reloaded session sees the same bounded tape a live one would.
+
+def tape_journal_append(path: str, entries: list) -> None:
+    if not entries:
+        return
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "a", encoding="utf-8") as f:
+        for e in entries:
+            f.write(json.dumps(e.to_record(), ensure_ascii=False) + "\n")
+
+
+def load_session_tape(path: str, *, budget: int = TAPE_BUDGET_CHARS) -> tuple[list, dict]:
+    """Rebuild (session_tape, tape_files) from the journal. Every base/patch replays through
+    compose_after and is verified against its post_hash; a mismatching or unappliable entry drops
+    its path from the registry (the composition contract then routes the model to read_file —
+    safe degradation, and the next edit founds a fresh base)."""
+    tape: list[TapeEntry] = []
+    files: dict = {}
+    if not os.path.isfile(path):
+        return tape, files
+    for line in open(path, encoding="utf-8"):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            e = TapeEntry.from_record(json.loads(line))
+        except Exception:  # noqa: BLE001 — a torn tail line (crash mid-write) ends the replay
+            break
+        tape.append(e)
+        if e.kind in ("base", "patch"):
+            try:
+                before = files.get(e.path, {}).get("content", "")
+                after = compose_after(e, before)
+                if _h(after) != e.post_hash:
+                    raise ValueError("post_hash mismatch")
+                files[e.path] = {"hash": e.post_hash, "content": after}
+            except Exception:  # noqa: BLE001
+                files.pop(e.path, None)
+    compact_tape(tape, files, budget=budget)
+    return tape, files

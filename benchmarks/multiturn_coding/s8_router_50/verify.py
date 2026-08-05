@@ -1,6 +1,5 @@
 """Oracle for s8_router_50: exact final table + behavioral resolve() probes incl. redirect chains."""
 import json
-import os
 import subprocess
 import sys
 

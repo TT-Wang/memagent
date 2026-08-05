@@ -1003,7 +1003,7 @@ REGIONS: tuple[RegionSpec, ...] = (
         "[external], absent from the tape, or with a non-matching hash must be read_file'd "
         "before editing. Digest entries are the sealed record of earlier turns, not "
         "current-world truth)\n"
-        + "".join(getattr(c["s"], "session_tape", ()) or ())
+        + "".join(getattr(e, "rendered", e) for e in (getattr(c["s"], "session_tape", ()) or ()))
         + "\n") if (stream_mode() == "tape"
                      and getattr(c["s"], "session_tape", None)) else ""),
         2, 92, InstructionClass.TASK_STATE, FreshnessClass.HISTORICAL, False, EpistemicRole.CLAIM),
@@ -1282,22 +1282,14 @@ def build_context_blocks(ctx: dict) -> tuple[ContextBlock, ...]:
             name, (50, InstructionClass.TASK_STATE, FreshnessClass.DERIVED, False))
         if spine_layout:
             slot = spine_layout_slot(name, slot)
-        # AGENT_SEED_LAYOUT=cache — assembly order becomes a PURE FUNCTION of declared freshness:
-        # REVISION_BOUND(0) -> HISTORICAL/append-ish(1) -> DERIVED(2) -> LIVE(6). No new hand
-        # labels, so nothing new can drift. Motivation (measured, multi-turn matrix 2026-08-04):
-        # the legacy layout leads with `intent` and `open_files`, both freshness=LIVE — they change
-        # every turn, so the provider's longest-common-prefix cache dies at byte ~0 on every
-        # rebuild and each turn's FIRST call repays the whole ~11k seed as cache-miss input
-        # (~91.5% hit rate vs a transcript arm's 99%). Their `tier=stable` is an ATTENTION label,
-        # not a cache one; this flag orders by the field that actually tracks change frequency.
-        # Selection/elasticity are untouched — only the assembly slot changes; within a class,
-        # REGION_ORDER's relative order is preserved. Default stays the attention layout pending
-        # the pre-registered A/B (quality parity gate + fresh-token delta).
-        # (Layout experiment branches removed. Four orderings — cache/v2/v3/m1 — each failed its
-        # pre-registered A/B during the 2026-08-04 sprint: fresh tokens never dropped (the seed
-        # midsection mutates every turn regardless of order) and wholesale reorderings destabilized
-        # constraint-discipline scenarios. The structural successor is the Session Spine
-        # (docs/SESSION-SPINE-DESIGN.md): frozen sealed-turn bytes, not re-rendered projections.)
+        # HISTORY (no live flag — review note d): the AGENT_SEED_LAYOUT experiments (cache/v2/v3/
+        # m1, 2026-08-04) reordered assembly by declared freshness to chase prefix-cache hits.
+        # All four failed their pre-registered A/Bs — fresh tokens never dropped (the seed
+        # midsection mutates every turn regardless of order) and wholesale reorderings
+        # destabilized constraint-discipline scenarios. The branches were deleted; the structural
+        # successor is the frozen stream (Session Spine, then the Session Tape): frozen
+        # sealed-turn BYTES, not re-rendered projections. Kept as a tombstone so the next layout
+        # idea starts from the measured failure, not from scratch.
         if (name == "task_objective"
                 and getattr(getattr(ctx.get("s"), "task", None), "objective_status", "active")
                 == "provisionally_satisfied"):

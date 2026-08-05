@@ -1,8 +1,38 @@
-# Session Tape — the single append-only stream (DRAFT for review)
+# Session Tape — the single append-only stream
 
-Status: DRAFT, owner TT-Wang. Date: 2026-08-05. Successor to Option B
+Status: **IMPLEMENTED** (typed core, 2026-08-05), owner TT-Wang. Successor to Option B
 (`OPENFILES-SUBSUMPTION-DESIGN.md`) and the Session Spine (`SESSION-SPINE-*`).
-No code yet; this document is the P-T0 gate.
+Implementation: `packages/sliceagent-core/src/sliceagent_core/tape.py` · gates in
+`tests/test_session_tape.py`.
+
+**Where the implementation supersedes this draft** (the draft below is kept as the design
+rationale; the code + its docstrings are authoritative — review R2-F8):
+
+- **Typed core**: the tape is `list[TapeEntry]` (kind/path/payload/no_nl/post_hash/ref +
+  frozen `rendered` bytes). Rendered text is never re-parsed; GC/fold/durability reason over
+  the typed fields only.
+- **Defer-base-until-edit**: reads never found bases (the draft's first-read base would let
+  bloat reads colonize the tape — s10 measured ~360k chars). The first EDIT founds the base
+  from its post-state; read-only material lives in the trajectory + hash index.
+- **Patches**: TRUE unified diffs from event-time disk snapshots (difflib n=1, a/b labels),
+  never argument-shaped. No-trailing-newline files stay byte-exact via the entry's `no_nl`
+  flag; rendering annotates instead of lying.
+- **Re-base is reactive only**: rendered-size choice per edit (patch block vs base block),
+  honesty-net drift, and fold re-anchoring. No count/byte chain triggers.
+- **Budget**: 120k chars default (`AGENT_TAPE_BUDGET`), fold-to-0.7× hysteresis (48k + no
+  hysteresis thrashed: s2 r3). Fold RE-ANCHORS every file with entries in the folded span to
+  its registry content as one fresh base — carried-stale-base + dropped-patches broke
+  composition (both external reviews, P1).
+- **Digest**: the sealed artifact's spine_digest string is appended VERBATIM (one render,
+  seal redaction inherited). The conversation region is retired under the tape; the turn's
+  outward answer freezes as a `[reply]` entry capped at 1200 chars (R8 note: deixis beyond
+  the cap resolves via the sealed turn artifact).
+- **Durability**: an append-only JSONL journal per session (`~/.sliceagent/tape/<session>.jsonl`),
+  written at seal; `load_session_tape` replays it (post_hash-verified patch application) and
+  compacts once. Crash between artifact commit and journal write loses at most one turn's
+  entries; the next seal's honesty net re-anchors loudly. (The draft's `safe_record
+  ["tape_entries"]` embedding remains open as a follow-up if artifact-embedded parity is
+  wanted.)
 
 ## 0. The evidence chain that forces this shape
 

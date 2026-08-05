@@ -325,6 +325,13 @@ def rebase_session_for_workspace(current: Session, restored: Session) -> Session
     if current.session_id != restored.session_id:
         raise ValueError("workspace session views do not share the application session_id")
     merged = Session(current.memory, current.session_id)
+    # SESSION-scoped continuity (spine / tape / composition registry) is APP-owned, not a workspace
+    # checkpoint: the frozen record follows the session across a handoff (review P1: the old merge
+    # dropped all three, so a handoff emptied the tape while tape_files kept stale hashes). Tracked
+    # paths that don't exist in the target workspace re-anchor loudly via the next seal's honesty net.
+    merged.session_spine = list(current.session_spine)
+    merged.session_tape = list(current.session_tape)
+    merged.tape_files = dict(current.tape_files)
     # Target-local authoritative checkpoints win task-ID collisions. Other open topics remain available as
     # intent/conversation shells and acquire target-local provenance on their next admitted turn.
     merged.tasks = dict(restored.tasks)

@@ -595,6 +595,17 @@ def _hydrate_workspace_tasks(store, session, on_log: Callable[[str], None]) -> N
             store.coordinator.artifacts.list_all(), session.session_id)
     except Exception as exc:  # noqa: BLE001 — a torn artifact must not block startup
         on_log(f"session spine scan failed ({type(exc).__name__}: {exc})")
+    if os.environ.get("AGENT_SESSION_TAPE", "").strip() == "1":
+        # SESSION TAPE hydration (review P1: restart used to come back with an empty tape and a
+        # stale registry): replay the append-only journal; every base/patch re-verifies its
+        # post_hash and a stale path degrades to read-before-edit via the composition contract.
+        try:
+            from sliceagent_core.recovery import state_dir as _tape_state_dir
+            from sliceagent_core.tape import load_session_tape
+            session.session_tape, session.tape_files = load_session_tape(
+                os.path.join(_tape_state_dir("tape"), f"{session.session_id}.jsonl"))
+        except Exception as exc:  # noqa: BLE001 — a torn journal must not block startup
+            on_log(f"session tape replay failed ({type(exc).__name__}: {exc})")
     # Reconstruct the standing constant-size receipt view from immutable artifacts rather than duplicating it
     # into the semantic task checkpoint.  This keeps it available after restart without making it another
     # writable work-state owner.
@@ -1696,16 +1707,23 @@ def main() -> None:
             # SESSION TAPE (production parity with the bench wiring): digest + true-diff
             # patches + reply freeze at seal; the SESSION owns the cache (same pattern as the
             # spine above; make_build_slice syncs it into whichever task's slice is active).
+            # The digest is the COMMITTED artifact's spine_digest, appended VERBATIM — one
+            # render, seal redaction inherited (review P1: the old call re-rendered from the
+            # raw live ring, so an un-redacted ask could freeze into tape bytes).
             _last_exchange = (sealed_target.conversation[-1]
                               if getattr(sealed_target, "conversation", None) else {})
             sealed_target.continuity.session_tape = list(session.session_tape)
             sealed_target.continuity.tape_files = dict(session.tape_files)
+            from sliceagent_core.recovery import state_dir as _tape_state_dir
             tape_seal_update(
                 sealed_target, base_tools, _tape_recorder["rec"].rows,
                 session_id=session.session_id, artifact_id=artifact_id,
                 task_id=active.task_id, status=stop_reason,
                 user_request=str(_last_exchange.get("user") or ""),
                 assistant_reply=str(_last_exchange.get("assistant") or ""),
+                digest_text=_spine_digest if isinstance(_spine_digest, str) else "",
+                journal_path=os.path.join(_tape_state_dir("tape"),
+                                          f"{session.session_id}.jsonl"),
             )
             _tape_recorder["rec"].reset()
             session.session_tape = list(sealed_target.continuity.session_tape)
@@ -2398,6 +2416,10 @@ def main() -> None:
         base_tools, tools, skills = candidate.base_tools, candidate.tools, candidate.skills
         base_tools._event_ledger = _event_ledger
         _bind_active_work_host(base_tools)
+        if _tape_recorder["rec"] is not None:
+            # The recorder snapshots via the WORKSPACE's read seam — after a handoff it must
+            # point at the target's tools or every snapshot reads the old root (review P1).
+            _tape_recorder["rec"].rebind(base_tools)
         mcp_runtime = candidate.mcp_runtime
         reviewer, episodic, monitor_sink = candidate.reviewer, candidate.episodic, candidate.monitor_sink
         mine_mode, sub_depth = candidate.mine_mode, candidate.subagent_depth
@@ -2581,6 +2603,12 @@ def main() -> None:
             # Rebuild every workspace-owned sink after a handoff. The LiveSink itself is process-owned and is
             # wrapped only to hide the source segment's transport acknowledgement/final commit.
             _live_sinks = []
+            if _tape_recorder["rec"] is not None:
+                # Tape recorder rides EVERY dispatcher that sees ToolResult events — the live
+                # composer builds its own sink list, and leaving the recorder out meant files
+                # edited through the interactive UI never entered the tape (review P1; the
+                # path-asymmetric-wiring bug class).
+                _live_sinks.append(_tape_recorder["rec"].sink)
             if episodic is not None:
                 _live_sinks.append(episodic)
             _live_sinks.append(log_sink(root))

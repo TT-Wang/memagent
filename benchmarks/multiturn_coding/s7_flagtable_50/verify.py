@@ -4,7 +4,6 @@ Subprocess import (never in-process), exact dict comparison. A single missed/mis
 anywhere in the 50 shows up as a diff here.
 """
 import json
-import os
 import subprocess
 import sys
 
