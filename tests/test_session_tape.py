@@ -284,7 +284,6 @@ def test_region_layout_and_flags(tmp_path, monkeypatch):
     from sliceagent_core.seed import make_build_slice
     s, tools = _ws(tmp_path)
     _seal(s, tools, [("a.py", (tmp_path / "a.py").read_text(encoding="utf-8"))])
-    monkeypatch.setenv("AGENT_SESSION_TAPE", "1")
     plan = make_build_slice(s, tools, None, NullMemory(), "edit a.py")()
     system, user = plan[0]["content"], plan[1]["content"]
     assert "WORKSPACE FILES VIA THE SESSION TAPE" in system
@@ -294,16 +293,12 @@ def test_region_layout_and_flags(tmp_path, monkeypatch):
     assert "# OPEN FILES (index" in user
     tape_at = user.index("# SESSION TAPE")
     assert user.index("# OPEN FILES") > tape_at
-    monkeypatch.setenv("AGENT_SESSION_TAPE", "0")   # kill switch — unset now means ON
-    off = make_build_slice(s, tools, None, NullMemory(), "edit a.py")()
-    assert "# SESSION TAPE" not in off[1]["content"]
-    assert "def f():" in off[1]["content"]
+    # (kill-switch off-assertions retired in wave 2 — the tape is unconditional)
 
 
 def test_reply_entry_replaces_conversation_region(tmp_path, monkeypatch):
     """A2: the turn's outward answer freezes into the tape (billed once); the RECENT CONVERSATION
     region and the graph adjacency lane render nothing under the tape."""
-    from sliceagent_core.context_compiler import _adjacency_blocks
     from sliceagent_core.memory_null import NullMemory
     from sliceagent_core.seed import make_build_slice
     s, tools = _ws(tmp_path)
@@ -319,15 +314,11 @@ def test_reply_entry_replaces_conversation_region(tmp_path, monkeypatch):
                      status="completed", user_request="x", assistant_reply="y" * 5000)
     assert any("…[+3800 chars in sealed turn]" in e.rendered
                for e in s.continuity.session_tape)
-    monkeypatch.setenv("AGENT_SESSION_TAPE", "1")
     plan = make_build_slice(s, tools, None, NullMemory(), "next ask")()
     user = plan[1]["content"]
     assert "# RECENT CONVERSATION" not in user
     assert "[reply t-1]" in user
-    assert _adjacency_blocks(s) == ()
-    monkeypatch.setenv("AGENT_SESSION_TAPE", "0")   # kill switch — unset now means ON
-    off = make_build_slice(s, tools, None, NullMemory(), "next ask")()
-    assert "# RECENT CONVERSATION" in off[1]["content"]
+    # (kill-switch off-assertions retired in wave 2 — the tape is unconditional)
 
 
 def test_seeded_secret_absent_from_tape(tmp_path):

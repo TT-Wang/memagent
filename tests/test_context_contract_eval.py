@@ -4,7 +4,6 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
-from types import SimpleNamespace
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -14,7 +13,7 @@ from evals.context_contract_eval import (CASES, audit_fixtures, messages,  # noq
                                          prepared_system, score)
 from sliceagent.memory import NullMemory  # noqa: E402
 from sliceagent.pfc import Slice  # noqa: E402
-from sliceagent.regions import REGION_ORDER, render_cache_manifest  # noqa: E402
+from sliceagent.regions import REGION_ORDER  # noqa: E402
 from sliceagent.seed import make_build_slice  # noqa: E402
 from sliceagent.tools import LocalToolHost  # noqa: E402
 
@@ -96,17 +95,8 @@ def test_real_seed_advertises_contextfs_only_after_the_host_serves_its_canonical
 
 
 def test_slice_regions_use_canonical_unshadowed_context_locators_and_memory_authority():
-    history = render_cache_manifest([
-        SimpleNamespace(handle="4", preview="turn four"),
-        SimpleNamespace(
-            handle="…older",
-            preview='2 earlier — read_file("history/index.md") for the full index',
-        ),
-    ])
-    assert 'read_file("@sliceagent/history/turn-4.md")' in history
-    assert 'read_file("@sliceagent/history/index.md")' in history
-    assert 'read_file("history/' not in history
-
+    # (cache_manifest locator checks retired in wave 2 with the region — tape digests carry the
+    # per-turn locators now, pinned by tests/test_spine_substrate.py)
     memory_renderer = next(row[2] for row in REGION_ORDER if row[0] == "memory")
     memory_region = memory_renderer({"memory": "candidate"})
     assert "RELEVANT KNOWLEDGE CANDIDATES" in memory_region

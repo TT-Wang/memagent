@@ -1,18 +1,5 @@
 from __future__ import annotations
 
-
-import pytest
-
-
-@pytest.fixture(autouse=True)
-def _legacy_off_path(monkeypatch):
-    """KILL-SWITCH PATH: this module tests the legacy conversation/adjacency machinery, which the
-    tape retires (region renders "", adjacency lane returns ()). Pinned to AGENT_SESSION_TAPE=0
-    since graduation made the tape the default; wave 2 deletes the path and this module's
-    affected tests with it (docs/TAPE-GRADUATION.md)."""
-    monkeypatch.setenv("AGENT_SESSION_TAPE", "0")
-
-from sliceagent.active_work import ResourceRef, WorkDelta, WorkItem
 from sliceagent.memory import NullMemory
 from sliceagent.pfc import Slice, record_user
 from sliceagent.seed import make_build_slice
@@ -66,24 +53,3 @@ def test_active_work_without_dependencies_does_not_eagerly_fetch_global_context(
     assert user.count("inspect this project") == 1
 
 
-def test_typed_file_dependency_faults_in_only_that_live_resource(tmp_path):
-    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\nversion='0'\n", encoding="utf-8")
-    (tmp_path / "target.py").write_text("VALUE = 7\n", encoding="utf-8")
-    (tmp_path / "noise.py").write_text("NOISE = 99\n", encoding="utf-8")
-    state = state_with_graph()
-    root = state.active_work.request_roots[0]
-    child = WorkItem(
-        id="inspect-target", root_id=root.id, source_refs=root.source_refs,
-        description="Inspect target.py", status="in_progress",
-        resource_refs=(ResourceRef("workspace_file", "target.py", workspace_epoch=0),),
-    )
-    state.active_work = state.active_work.apply(WorkDelta(expected_revision=1, creates=(child,)))
-    state.active_files = ["noise.py", "target.py"]
-    retriever, memory = Retriever(), Memory()
-    user = make_build_slice(
-        state, LocalToolHost(str(tmp_path)), retriever, memory, state.goal,
-        event_ledger=Ledger(), model_id="test-model",
-    )()[1]["content"]
-    assert "VALUE = 7" in user and "NOISE = 99" not in user
-    assert retriever.queries, "a typed live-file dependency may invoke focused code discovery"
-    assert memory.recalls == [], "file work must not pull unrelated cross-session lessons"

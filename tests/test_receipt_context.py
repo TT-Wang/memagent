@@ -1,23 +1,11 @@
 from __future__ import annotations
 
-
-import pytest
-
-
-@pytest.fixture(autouse=True)
-def _legacy_off_path(monkeypatch):
-    """KILL-SWITCH PATH: this module tests the legacy conversation/adjacency machinery, which the
-    tape retires (region renders "", adjacency lane returns ()). Pinned to AGENT_SESSION_TAPE=0
-    since graduation made the tape the default; wave 2 deletes the path and this module's
-    affected tests with it (docs/TAPE-GRADUATION.md)."""
-    monkeypatch.setenv("AGENT_SESSION_TAPE", "0")
-
 import hashlib
 from dataclasses import asdict
 from types import SimpleNamespace
 
 from sliceagent.active_work import ResourceRef, WorkDelta, WorkItem
-from sliceagent.cli import _hydrate_workspace_tasks, _use_chitchat_fast_path
+from sliceagent.cli import _hydrate_workspace_tasks
 from sliceagent.context_compiler import compile_active_context, dependency_resource_paths
 from sliceagent.events import ToolResult
 from sliceagent.execution import ToolEffect, ToolInvocation, ToolOutcome, ToolStatus
@@ -224,56 +212,3 @@ def test_restart_restores_the_epoch_that_selects_current_workspace_resources(tmp
     ) == ("b-current.py",)
 
 
-def test_latest_sealed_exchange_is_rehydrated_as_the_only_restart_adjacency(tmp_path):
-    state = Slice(); state.reset("task")
-    task_state = slice_to_task_state(state, "task", session_id="session")
-    checkpoint = Checkpoint.create(
-        workspace_id="workspace", session_id="session", task_id="task", generation=1,
-        state=asdict(task_state), order_ns=1,
-    )
-    artifacts = ArtifactStore(str(tmp_path / "core"))
-    older = Artifact.create(
-        kind="turn", workspace_id="workspace", session_id="session", task_id="task",
-        logical_id="older", status="end_turn", brief={"request": "old user"},
-        structured_body={
-            "assistant": "old assistant", "assistant_provenance": "final_response",
-            "meta": {"order_ns": 2},
-        },
-    )
-    latest = Artifact.create(
-        kind="turn", workspace_id="workspace", session_id="session", task_id="task",
-        logical_id="latest", status="end_turn", brief={"request": "Which option should I choose?"},
-        structured_body={
-            "assistant": "Choose option two.", "assistant_provenance": "final_response",
-            "meta": {"order_ns": 3},
-        },
-    )
-    artifacts.put(older); artifacts.put(latest)
-    store = SimpleNamespace(
-        checkpoints=lambda: [checkpoint], coordinator=SimpleNamespace(artifacts=artifacts),
-    )
-    session = Session(NullMemory(), "new-process-session")
-    _hydrate_workspace_tasks(store, session, lambda _message: None)
-
-    assert session.tasks["task"].conversation == [{
-        "user": "Which option should I choose?",
-        "assistant": "Choose option two.",
-        "artifact_id": latest.id,
-    }]
-    assert not _use_chitchat_fast_path("okay", session.tasks["task"]), \
-        "a restart-hydrated assent must reach the model with its paired adjacency"
-    restored = session.tasks["task"]
-    record_user(
-        restored, "yes", source_artifact="current-artifact", source_event_id="current-event",
-        logical_id="current-logical",
-    )
-    compiled = compile_active_context(
-        restored, (), source_texts={"current-event": "yes"},
-        current_logical_id="current-logical",
-    )
-    adjacency = next(
-        item for item in compiled
-        if item.item_id == "active-adjacency" and item.fidelity.value == "full"
-    )
-    assert "> Which option should I choose?" in adjacency.content
-    assert "> Choose option two." in adjacency.content

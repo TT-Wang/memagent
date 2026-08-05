@@ -142,7 +142,7 @@ def golden_layout_snapshot():
         # (spine region retired at tape graduation — tag lab-2026-08-05)
         ("session_spine", STABLE, 2),
         # 2026-08-05 Session Tape (docs/SESSION-TAPE-DESIGN.md): the single append-only stream,
-        # flag-gated (AGENT_SESSION_TAPE=1), renders "" otherwise; absorbs the spine when active.
+        # (unconditional since wave 2; absorbs the spine digests.)
         ("session_tape", STABLE, 2), ("conversation", STABLE, 2),
         ("findings", VOLATILE, 3), ("progress", VOLATILE, 3), ("world", VOLATILE, 3),
         ("threads", VOLATILE, 3), ("cache_manifest", VOLATILE, 3), ("turn_contract", VOLATILE, 6),
