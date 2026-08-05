@@ -235,7 +235,8 @@ def run(scn, memory_mode="real"):
         liveness.update(tape_entries=len(state.continuity.session_tape),
                         tape_drift=tape_drift, tape_rebased=tape_rebased,
                         tape_compactions=tape_compactions,
-                        tape_chars=sum(len(e) for e in state.continuity.session_tape))
+                        tape_chars=sum(len(getattr(e, "rendered", e))
+                                       for e in state.continuity.session_tape))
     if memory_mode == "real":
         eps = ()
         try:
