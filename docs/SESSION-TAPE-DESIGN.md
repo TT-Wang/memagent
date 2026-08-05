@@ -70,7 +70,7 @@ the bound a transcript can never have.
     (base b.py@h0) (patch a.py#2) (patch b.py#1) (turn t3 digest) ...]
 [TAIL — small volatile zone:
     file index (Option B locator lines: path · lines · CURRENT hash · read call),
-    intent family · findings · worktree · paired reserve · current ask last]
+    intent family · findings · worktree · current ask last]
 [trajectory — within-turn, already append-only (verified: gap==1 on every captured pair)]
 ```
 
@@ -113,7 +113,7 @@ bound is explicit and pre-registered, not emergent:
   old base+chain become dead bytes that the next compaction removes. Between compactions they
   still cache-hit (frozen), so re-base itself never breaks the prefix.
 - **Generational compaction (the P8 design, now with a concrete subject)**: when the tape
-  exceeds `TAPE_BUDGET` (pre-registered default: 48k chars), the oldest generation — dead
+  exceeds `TAPE_BUDGET` (shipped default: 120k chars, `AGENT_TAPE_BUDGET`), the oldest generation — dead
   bases/chains, digests of closed topics — collapses into ONE frozen epoch entry holding
   locators to the sealed artifacts. This breaks the prefix ONCE per compaction event, then
   stability resumes. Peak is therefore bounded by head + TAPE_BUDGET + tail.

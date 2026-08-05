@@ -88,6 +88,12 @@ spine 曲线封顶 33.6%(P5 verdict)、locators 经济性 −22%(oflocators verd
 - 存活确认:pfc.py 的 conversation 环(tape 的输入基底)、MAX_CONVERSATION/reserve_keep(环修剪)、
   spine 基底(digest 渲染/loader)、locator 渲染器(tape 索引)。
 
+## G. 波三/波四执行记录(2026-08-05)
+
+- **波三 `ede6a26` 三区装配器**:`region_zone()`(HEAD 冻结 / TAPE 唯一 / TAIL 易变)成为布局第一性;`assembly_slot` 由 zone 推导;`_TAPE_LAYOUT_SLOTS` 退役;`three_zone_partition` 门禁钉分区不变量(恰一 tape、HEAD 必须 REVISION_BOUND、未来区按构造落带下)。三例 fixture 逐字节平价。
+- **波四 `07772e7` P4 单车道**:graph 家具裁剪迁入唯一选择器(`regions._graph_trim_selected`,表驱动、门禁监管);`compile_active_context` 纯生产者;第二选择器死输入删除。平价含 graph-active 例。
+- 清尾:RESERVE_PAIRS/RESERVE_PRIORITY 孤儿常量、过时注释(render_conversation/adjacency 提及)、探针文档行、session_tape 类型注释全部修正。
+
 ## F. 评审响应台账(Task147/Task148,2026-08-05)
 
 两份外部评审 BLOCK,逐项清偿于合并前:

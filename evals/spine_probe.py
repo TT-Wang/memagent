@@ -7,7 +7,7 @@ per consecutive model-call pair, how much of the serialized request survives as 
 stability; CROSS-TURN pairs measure the rebuild — the number the spine exists to fix.
 
 Pre-registered gate (roadmap P5, written before any run):
-  - baseline = the P3-ONLY config (AGENT_SESSION_SPINE=p3: head stability, no spine region),
+  - historical baselines (off / p3 / spine arms) reproduce ONLY at git tag lab-2026-08-05,
     re-measured because the 39-44% figure predates P3
   - spine-on passes only if (a) cross-turn survival >= 80% absolute AND (b) a material delta
     over the P3-only baseline; same-turn >= 96% maintained

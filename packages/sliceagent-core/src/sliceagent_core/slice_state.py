@@ -216,12 +216,12 @@ class ContinuityState:
     # derived from immutable artifacts at startup, never serialized into TaskState, and consumed by the next
     # turn seal.  Normal direct child delivery therefore has no second context path.
     recovery_child_artifact_id: str = ""
-    # Session Tape (docs/SESSION-TAPE-DESIGN.md): the single append-only stream — frozen entry
-    # strings (digests + file bases + host-authored patches + external notices), appended at seal
-    # by tape.tape_seal_update. tape_files is the host-side composition registry (path -> hash/
-    # content/chain accounting) that backs the per-seal honesty net; both survive ordinary seals
-    # like the rest of continuity. Durable persistence of entries is the production follow-up.
-    session_tape: list[str] = field(default_factory=list)
+    # Session Tape (docs/SESSION-TAPE-DESIGN.md): the single append-only stream — typed
+    # tape.TapeEntry values (digest/base/patch/external/reply/epoch; rendered-once frozen bytes),
+    # appended at seal by tape.tape_seal_update, durably journaled per session and replayed at
+    # startup (load_session_tape). tape_files is the host-side composition registry
+    # (path -> hash/content) backing the per-seal honesty net; both survive ordinary seals.
+    session_tape: list = field(default_factory=list)
     tape_files: dict = field(default_factory=dict)
     recovery_child_report_count: int = 0
 

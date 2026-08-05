@@ -83,7 +83,7 @@ class Session:
         self.turn_task_id: str | None = None  # immutable task binding while one model/tool turn runs
         # Session Tape (docs/SESSION-TAPE-DESIGN.md): same ownership pattern — the session holds
         # the append-only entry cache + the host-side composition registry; slices get synced views.
-        self.session_tape: list[str] = []
+        self.session_tape: list = []   # list[tape.TapeEntry] — typed entries, rendered-once bytes
         self.tape_files: dict = {}
         # Monotonic only within this live session. Evidence snapshots use it to prove conversational adjacency
         # across task switches; it is intentionally not durable because snapshots are not durable either.

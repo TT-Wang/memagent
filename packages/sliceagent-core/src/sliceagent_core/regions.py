@@ -41,31 +41,21 @@ MAX_ACTION_LOG = 24      # bounded anti-loop tally (no-transcript: the action_lo
 FULL_FILE_LINES = 1200
 REGION_LINES = 400
 DISCOVERY_K = 6
-MAX_CONVERSATION = 4     # RECENT CONVERSATION ring — the FLOOR: the last N completed user<->assistant exchanges,
-# kept VERBATIM (no per-message truncation). The bound is a COUNT floor + the token-budget reserve below, never a
-# per-message byte cap: the last few turns are the active loop's antecedents ("go with your recommendation" /
-# "save this") and must survive intact so a deictic follow-up resolves against them directly instead of falling to
-# relevance-recall. Peak flexes with recent reply size but stays bounded across SESSION LENGTH (older turns page
-# to @sliceagent/history/ and recall on demand).
-# (render_conversation drops the in-progress turn, so this surfaces the last MAX_CONVERSATION-1 completed turns.)
+# ── CONVERSATION RING BOUND (pfc trimming; the ring is the TAPE's input substrate now — its
+# newest exchange feeds the seal's digest/[reply] entries; nothing renders the ring directly) ──
+MAX_CONVERSATION = 4     # ring COUNT floor: the last N completed exchanges kept verbatim in memory
 
-# ── VERBATIM USER RESERVE (Codex-parity, adapted) ────────────────────────────
+# ── VERBATIM USER RESERVE (Codex-parity, adapted; sizes the RING via reserve_keep) ──────────
 # Codex CLI exempts the newest ~20k tokens of user messages from all compaction. The sliceagent
-# adaptation reserves PAIRED EXCHANGES (user verbatim + its response — adjacency semantics need the
-# pair) under a token budget, SOFT: reserved rows carry RESERVE_PRIORITY so they degrade only as the
-# true last resort, never becoming hard-unfit (a hard exemption inflates the ContextUnfitError floor
+# adaptation widens the conversation RING by paired exchanges under this token budget (pfc
+# trimming consumes reserve_keep); rendering-side reservation retired with the conversation
+# region — on-tape digests/replies are frozen bytes and need no priority band. (Historical note:
 # on small windows — measured risk, see the convergence spec P0.3). The budget prices the WHOLE pair
 # (user + assistant chars), so the widened ring can never inflate the per-turn peak by more than the
 # reserve constant: the bound stays a constant, which is the moat invariant. This closes the
 # mid-distance window: turns 5..~12 whose request roots completed used to leave the prompt entirely.
 USER_RESERVE_TOKENS = 20_000   # ONE knob; chars via execution.tokens_to_chars (shared _TOKENS_PER_BYTE)
-RESERVE_ROWS_CEILING = 12      # hard O(1) cap on the widened ring/adjacency, independent of budget
-RESERVE_PRIORITY = 98          # BASE of the reserved band: above every ordinary DEGRADABLE region
-# (highest non-mandatory region priority is 97; mandatory regions are never degradation candidates).
-# Reserved adjacency pairs ascend from this base with RECENCY (base + reserved-1 - age): a FLAT band
-# would let tie-breaking fall to savings, degrading the LARGEST reserved pair first and inverting the
-# oldest-pages-first invariant the adjacency tests pin. Still soft: every reserved block keeps its
-# locator alternative, so ContextUnfit semantics are preserved.
+RESERVE_ROWS_CEILING = 12      # hard O(1) cap on the widened ring, independent of budget
 
 
 def user_reserve_chars() -> int:

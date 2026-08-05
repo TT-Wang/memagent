@@ -2495,7 +2495,7 @@ def main() -> None:
         if active_state is not None:
             # Keep exactly enough ephemeral adjacency for "what did you just say?" without opening a task
             # artifact or turning social text into durable evidence. The next normal record_user call appends
-            # its in-progress row, so render_conversation naturally treats this pair as the immediate prior turn.
+            # its in-progress row, so the ring's newest completed pair is the immediate prior turn.
             _fold_chitchat_continuity(active_state, text, reply)
         _dispatch(AssistantText(reply))
 
