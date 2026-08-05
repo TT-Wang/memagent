@@ -7,7 +7,6 @@ small embedding hosts compatible without creating a second admission heuristic.
 """
 from __future__ import annotations
 
-import os
 from collections.abc import Iterable, Mapping
 
 from .active_work import SourceMismatchError, WorkGraph, WorkItem
@@ -22,7 +21,7 @@ from .context import (
     reserved_resource_ref,
 )
 from .receipts import receipt_summary_parts
-from .regions import RESERVE_PRIORITY, reserve_keep
+from .regions import RESERVE_PRIORITY, reserve_keep, tape_on
 
 
 # These are host-owned live control surfaces, not optional topical furniture. Child outcomes are ordinary
@@ -231,7 +230,7 @@ def _adjacency_blocks(s, *, order: int = 10_000) -> tuple[ContextBlock, ...]:
     two``, and corrections resolve against the recent conversation directly instead of a transcript.  Historical
     user text is framed as adjacency, never a second current directive.
     """
-    if os.environ.get("AGENT_SESSION_TAPE", "").strip() == "1":
+    if tape_on():
         # Under the tape the adjacency lane is retired with the conversation region: asks live in
         # the digests, replies as frozen [reply] entries — one stream, both lanes (path-symmetry).
         return ()
@@ -246,7 +245,7 @@ def _adjacency_blocks(s, *, order: int = 10_000) -> tuple[ContextBlock, ...]:
     # the known path-asymmetry bug class): keep the newest exchanges up to the reserve budget
     # (floor = the legacy _ADJACENCY_ROUNDS), and mark the within-budget ones RESERVE_PRIORITY
     # so they degrade only as the true last resort — soft, so ContextUnfit semantics survive.
-    if os.environ.get("AGENT_SESSION_SPINE", "").strip() == "1":
+    if False:   # spine R8 reserve trim retired with the spine arm (tag lab-2026-08-05)
         # R8 under the spine: everything older than the paired reserve is already frozen in the
         # SESSION SPINE, so keeping extra verbatim pairs here would duplicate spine bytes. The
         # boundary is spine.RESERVE_PAIRS — the SAME knob the conversation region uses.
@@ -364,7 +363,7 @@ def compile_active_context(
     kept = [block for block in blocks if _region_name(block) in selected]
     # Under the spine layout the live work graph is per-turn content and must render BELOW the
     # frozen spine (slot 2, beside the intent family it replaces); legacy keeps the head slot.
-    _aw_slot = 2 if os.environ.get("AGENT_SESSION_SPINE", "").strip() == "1" else 0
+    _aw_slot = 2 if tape_on() else 0
     kept.append(ContextBlock(
         block_id="active-work:full", item_id="active-work", alternative_group="active-work",
         priority=100, instruction_class=InstructionClass.USER,

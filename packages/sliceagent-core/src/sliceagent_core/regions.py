@@ -172,21 +172,21 @@ def render_threads(refs) -> str:
     return "\n".join(lines)
 
 
-def stream_mode() -> str:
-    """'' | 'spine' | 'tape' — which append-only stream layout is active. Tape WINS when both
-    flags are set (SESSION-TAPE-DESIGN §5: the tape absorbs the spine's digests)."""
-    if os.environ.get("AGENT_SESSION_TAPE", "").strip() == "1":
-        return "tape"
-    if os.environ.get("AGENT_SESSION_SPINE", "").strip() == "1":
-        return "spine"
-    return ""
+def tape_on() -> bool:
+    """The Session Tape IS the architecture (graduated 2026-08-05, docs/TAPE-GRADUATION.md).
+    AGENT_SESSION_TAPE=0 is the operational kill switch for one release cycle (wave 2 retires
+    it); any other value — including unset — runs the tape. The former three-state
+    stream_mode() ('' | 'spine' | 'tape') died with the spine/locators experiment modes;
+    historical arms reproduce at git tag lab-2026-08-05."""
+    return os.environ.get("AGENT_SESSION_TAPE", "").strip() != "0"
+
 
 
 def render_conversation(s) -> str:
     """The RECENT CONVERSATION tier: the last few COMPLETED user<->assistant exchanges (the in-progress
     one is excluded — its user message is the current task). Ends with a pointer to recall the rest."""
     prior = [e for e in s.conversation[:-1] if e.get("user")]
-    if stream_mode():
+    if tape_on():
         # R8: the paired verbatim reserve keeps the most recent COMPLETED exchanges (deixis resolves
         # against assistant text — "go with your recommendation" needs the reply that enumerated the
         # options); the SESSION SPINE subsumes everything older. Boundary = spine.RESERVE_PAIRS,
@@ -970,10 +970,7 @@ REGIONS: tuple[RegionSpec, ...] = (
         "# OPEN FILES (index — path · lines · CURRENT on-disk sha256 · read call. Contents are "
         "NOT here: compose them from the SESSION TAPE (base+patches) when the hashes match, "
         "read_file when they don't)\n"
-        if stream_mode() == "tape" else
-        "# OPEN FILES (locators — contents NOT in context; disk is ground truth; read_file "
-        "before editing; a changed hash means your last read is stale)\n"
-        if os.environ.get("AGENT_OPENFILES_LOCATORS", "").strip() == "1" else
+        if tape_on() else
         "# OPEN FILES (live — your ground truth; edit based on this. Lines are numbered for citation/reference; the leading number is NOT part of the file — never include it in a str_replace old_string)\n"
     ) + c["artifacts"], 0, 95, InstructionClass.DATA, FreshnessClass.LIVE, False, EpistemicRole.OBSERVATION),
     RegionSpec("related_code",   STABLE,   lambda c: (f"\n# RELATED CODE (repo map — relevant files & their definitions; read/grep for the actual code)\n{c['discovery']}\n" if c["discovery"] else ""), 1, 45, InstructionClass.DATA, FreshnessClass.DERIVED, False, EpistemicRole.CLAIM),
@@ -982,14 +979,9 @@ REGIONS: tuple[RegionSpec, ...] = (
     RegionSpec("skills",         STABLE,   lambda c: (f"# ACTIVE SKILL(S) (loaded instructions — FOLLOW these when addressing the CURRENT REQUEST)\n{render_skills(c['s'].active_skills)}\n\n" if render_skills(c["s"].active_skills) else ""), 2, 65, InstructionClass.TASK_STATE, FreshnessClass.REVISION_BOUND, False, EpistemicRole.PROCEDURE),
     RegionSpec("memory",         STABLE,   lambda c: (f"# RELEVANT KNOWLEDGE CANDIDATES (selected USER, PROJECT, CRAFT, or legacy leads — not current-world proof; verify when load-bearing)\n{c['memory']}\n\n" if c["memory"] else ""), 2, 20, InstructionClass.DATA, FreshnessClass.HISTORICAL, False, EpistemicRole.CLAIM),
     # ──────────── TIER 3 · MY STATE — what the agent has established / is doing. ────────────
-    RegionSpec("session_spine",  STABLE,   lambda c: ((
-        "# SESSION SPINE (sealed record of this session's earlier turns — what was ASKED and "
-        "DONE then, not current-world truth; verify against live state before relying on it. "
-        "Frozen; each entry ends with the read_file locator for its full sealed turn)\n"
-        + "".join(getattr(c["s"], "session_spine", ()) or ())
-        + "\n") if (stream_mode() == "spine"
-                     and getattr(c["s"], "session_spine", None)) else ""),
-        2, 92, InstructionClass.TASK_STATE, FreshnessClass.HISTORICAL, False, EpistemicRole.CLAIM),
+    # (The SESSION SPINE region retired at graduation — the tape absorbs its digests; the spine
+    # SUBSTRATE (render_turn_digest / load_session_spine / session.session_spine) lives on as
+    # the seal machinery the tape consumes. Historical spine arm: git tag lab-2026-08-05.)
     # SESSION TAPE (docs/SESSION-TAPE-DESIGN.md): the single append-only stream — digests, file
     # bases, host-authored patches, external notices — frozen bytes concatenated verbatim. The
     # composition contract lives in the header; hashes let the model string-compare its composed
@@ -1004,13 +996,13 @@ REGIONS: tuple[RegionSpec, ...] = (
         "before editing. Digest entries are the sealed record of earlier turns, not "
         "current-world truth)\n"
         + "".join(getattr(e, "rendered", e) for e in (getattr(c["s"], "session_tape", ()) or ()))
-        + "\n") if (stream_mode() == "tape"
+        + "\n") if (tape_on()
                      and getattr(c["s"], "session_tape", None)) else ""),
         2, 92, InstructionClass.TASK_STATE, FreshnessClass.HISTORICAL, False, EpistemicRole.CLAIM),
     # Under the TAPE the conversation region is retired: user asks live verbatim in the digests,
     # assistant replies as frozen [reply] entries — same bytes, billed once instead of every
     # boundary (census 2026-08-05: this region cost 3.8k chars per boundary at full price).
-    RegionSpec("conversation",   STABLE,   lambda c: ("" if stream_mode() == "tape" else (f"# RECENT CONVERSATION (the last few exchanges this session — for continuity; older turns are paged out — read_file(\"@sliceagent/history/turn-N.md\") fetches one, read_file(\"@sliceagent/history/index.md\") lists all)\n{render_conversation(c['s'])}\n\n" if render_conversation(c["s"]) else "")), 2, 80, InstructionClass.USER, FreshnessClass.HISTORICAL, False, EpistemicRole.CLAIM),
+    RegionSpec("conversation",   STABLE,   lambda c: ("" if tape_on() else (f"# RECENT CONVERSATION (the last few exchanges this session — for continuity; older turns are paged out — read_file(\"@sliceagent/history/turn-N.md\") fetches one, read_file(\"@sliceagent/history/index.md\") lists all)\n{render_conversation(c['s'])}\n\n" if render_conversation(c["s"]) else "")), 2, 80, InstructionClass.USER, FreshnessClass.HISTORICAL, False, EpistemicRole.CLAIM),
     RegionSpec("findings",       VOLATILE, lambda c: (f"# YOUR NOTES FROM PRIOR TOOL CALLS (task-scoped observations and claims to REUSE as leads; OPEN FILES stays ground truth for current contents. Per-note tags mark trust: no tag = observed, '(your note)' = summary, '(UNVERIFIED claim)' = not confirmed)\n{render_findings(c['s'].findings[-c['max_findings']:], c['s'].finding_source)}\n\n" if render_findings(c["s"].findings[-c["max_findings"]:], c["s"].finding_source) else ""), 3, 82, InstructionClass.TASK_STATE, FreshnessClass.REVISION_BOUND, False, EpistemicRole.CLAIM),
     # progress/world carry CLAIM (not the CONTROL_STATE fallback they used to inherit): both are the model's
     # own carried-forward assertions — same epistemic status as findings — never live observation.
@@ -1022,7 +1014,7 @@ REGIONS: tuple[RegionSpec, ...] = (
     # each with the exact @sliceagent/history/ read_file call to page it back. Sits beside GHOST INDEX
     # (same "it's paged out, here's the one call to get it"
     # idiom) so the model has a SEEN target to read; an unseen cache is the dead channel. Locators only.
-    RegionSpec("cache_manifest", VOLATILE, lambda c: "" if stream_mode() else (f"\n# PAGED-OUT HISTORY (canonical exact evidence from earlier turns, not current-world truth; read a turn with the shown @sliceagent/history/ locator, read_file(\"@sliceagent/history/index.md\") for the full list, or search_history(\"keywords\") across sessions)\n{c['cache_manifest']}\n" if c.get("cache_manifest") else ""), 3, 30, InstructionClass.DATA, FreshnessClass.HISTORICAL, False, EpistemicRole.LOCATOR),
+    RegionSpec("cache_manifest", VOLATILE, lambda c: "" if tape_on() else (f"\n# PAGED-OUT HISTORY (canonical exact evidence from earlier turns, not current-world truth; read a turn with the shown @sliceagent/history/ locator, read_file(\"@sliceagent/history/index.md\") for the full list, or search_history(\"keywords\") across sessions)\n{c['cache_manifest']}\n" if c.get("cache_manifest") else ""), 3, 30, InstructionClass.DATA, FreshnessClass.HISTORICAL, False, EpistemicRole.LOCATOR),
     # ──────────── TIER 5 · LIVE STATE — what's wrong / where things stand (VOLATILE, high-authority tail). ────────────
     # (The REPEATED/FAILING ACTIONS header + tally regions were deleted 2026-08-03 — render-dead at
     # seed time; the anti-loop advisory rides the message channel, and the surviving action-log FOLD
@@ -1247,10 +1239,9 @@ def _ring_within_reserve(s) -> bool:
 # [SPINE: append-only] [TAIL: per-turn]; only what cannot change between turns may precede the
 # spine. Slot override at BUILD time under the flag — the declared table (and the golden layout
 # snapshot pinning it) stays the legacy truth. Relative reading order below the spine preserved.
-_SPINE_LAYOUT_SLOTS = {
+_TAPE_LAYOUT_SLOTS = {
     "skills": 0,                       # revision-bound (skill activation), not per-turn
-    "session_spine": 1,                # append-only: new bytes only at its end
-    "session_tape": 1,                 # the tape IS the append-only stream (spine absorbed)
+    "session_tape": 1,                 # THE append-only stream: new bytes only at its end
     # memory sits BELOW the spine (R6 remedy B): the lessons memo is rebuilt with every
     # make_build_slice closure, and under a real vault the k=6 lookup re-ranks as episodes
     # accumulate — its bytes are NOT cross-turn stable until snapshot-per-session lands.
@@ -1262,15 +1253,16 @@ _SPINE_LAYOUT_SLOTS = {
 }
 
 
-def spine_layout_slot(name: str, legacy_slot: int) -> int:
-    """Flag-layout slot for a region: mapped, or the legacy slot pushed below the spine (>=2) so a
-    region added later can never silently land in the stable head."""
-    return _SPINE_LAYOUT_SLOTS.get(name, max(legacy_slot, 2))
+def tape_layout_slot(name: str, legacy_slot: int) -> int:
+    """Tape-layout slot for a region: mapped, or the legacy slot pushed below the tape (>=2) so a
+    region added later can never silently land in the stable head. (Retires with the native
+    three-zone assembler.)"""
+    return _TAPE_LAYOUT_SLOTS.get(name, max(legacy_slot, 2))
 
 
 def build_context_blocks(ctx: dict) -> tuple[ContextBlock, ...]:
     """Project every non-empty region into the shared elasticity contract."""
-    spine_layout = bool(stream_mode())
+    spine_layout = tape_on()
     out = []
     for order, (name, _tier, render, slot) in enumerate(REGION_ORDER):
         if not _region_selected_by_source_needs(name, ctx):
@@ -1281,7 +1273,7 @@ def build_context_blocks(ctx: dict) -> tuple[ContextBlock, ...]:
         priority, authority, freshness, mandatory = _REGION_META.get(
             name, (50, InstructionClass.TASK_STATE, FreshnessClass.DERIVED, False))
         if spine_layout:
-            slot = spine_layout_slot(name, slot)
+            slot = tape_layout_slot(name, slot)
         # HISTORY (no live flag — review note d): the AGENT_SEED_LAYOUT experiments (cache/v2/v3/
         # m1, 2026-08-04) reordered assembly by declared freshness to chase prefix-cache hits.
         # All four failed their pre-registered A/Bs — fresh tokens never dropped (the seed

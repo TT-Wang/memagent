@@ -36,7 +36,7 @@ from .regions import (
     render_context_selection,
     render_regions,
     render_threads,
-    stream_mode,
+    tape_on,
 )
 from .safety import wrap_untrusted
 from .sensory_cortex import (
@@ -191,7 +191,7 @@ def build_artifacts(s: Slice, tools, *, full_file_lines: int = FULL_FILE_LINES,
 
 
 def render_file_locators(s: Slice, tools, *, selected_paths=None) -> str:
-    """OPTION B (docs/OPENFILES-SUBSUMPTION-DESIGN.md, AGENT_OPENFILES_LOCATORS=1): render the
+    """The tape's OPEN FILES hash index (born as Option B, graduated with the tape): render the
     open_files region as ONE locator line per resident file — path, line count, turn-start content
     hash, exact copy-paste read call — instead of file bodies. File contents move to
     read-on-demand tool results in the within-turn trajectory (append-only, cache-friendly);
@@ -415,8 +415,7 @@ def make_build_slice(state, tools, retriever, memory, task: str, session_id: str
     # Flag values: "1" = full spine layout; "p3" = HEAD-STABILITY ONLY (this site + the lessons_memo
     # keying below, no spine region) — the P5 attribution baseline, so a head-freeze-alone win can
     # never be booked to the spine (roadmap P5 baseline policy).
-    if gbs and os.environ.get("AGENT_SESSION_SPINE", "").strip() not in ("1", "p3") \
-            and os.environ.get("AGENT_SESSION_TAPE", "").strip() != "1":
+    if gbs and not tape_on():
         # R6a: under the spine, the system prefix must be byte-stable across turns — a live
         # branch/dirty/HEAD line here re-bills every downstream byte on each commit or edit. The
         # worktree region already carries live git state in the volatile tail; this line is the
@@ -475,7 +474,7 @@ def make_build_slice(state, tools, retriever, memory, task: str, session_id: str
         ) else ""
     except Exception:
         repo_map_text = ""
-    if stream_mode() and repo_map_text:
+    if tape_on() and repo_map_text:
         # Frozen-stream layouts (spine/tape): the map lives in msg0, ABOVE the stream — any byte
         # change there re-bills the entire prompt (s11 measured: 3 map refreshes as the model
         # created files = full-prompt cache misses). Freeze the FIRST computed map for the
@@ -518,7 +517,7 @@ def make_build_slice(state, tools, retriever, memory, task: str, session_id: str
     # discipline lives in the byte-stable system prefix; the locator region (Half B) is the visible
     # target. The two halves ship together or not at all — either alone reproduces a measured
     # dead-affordance failure (recalls=0 / the 38% manifest).
-    if os.environ.get("AGENT_SESSION_TAPE", "").strip() == "1":
+    if tape_on():
         # SESSION TAPE composition contract (SESSION-TAPE-DESIGN §2) — supersedes the Option B
         # read-first discipline: reads become the exception (hash mismatch / untracked), not the rule.
         locators_block = (
@@ -553,7 +552,7 @@ def make_build_slice(state, tools, retriever, memory, task: str, session_id: str
         "the locator's hash, never your memory of the edit.\n"
         "4. Never reconstruct file contents from the path, your notes, or earlier turns. A read is "
         "one cheap call; an edit aimed at remembered text wastes a whole step."
-    ) if os.environ.get("AGENT_OPENFILES_LOCATORS", "").strip() == "1" else ""
+    ) if False else ""   # Option B standalone discipline retired with the locators flag (tag lab-2026-08-05)
     system_prefix = (
         SYSTEM_PROMPT.replace("{{MEMORY_MODEL}}", mem_block) + delegation_block
         + env_line + environment_block + workspace_block + conventions_block + repo_map_block
@@ -607,8 +606,7 @@ def make_build_slice(state, tools, retriever, memory, task: str, session_id: str
         # slice. This matters on resume: the parked topic keeps its goal, but the new resume message is what
         # the user is asking for RIGHT NOW.
         goal = getattr(getattr(s, "intent", None), "current_request", "") or task
-        if os.environ.get("AGENT_SESSION_SPINE", "").strip() in ("1", "p3") \
-                or os.environ.get("AGENT_SESSION_TAPE", "").strip() == "1":
+        if tape_on():
             # R6b: keyed by the per-turn request, the KNOWLEDGE region's bytes change every turn
             # while sitting in the head — the memory lookup re-runs and re-renders even when the
             # task is unchanged. Under the spine the memo keys by the STABLE task, so the region's
@@ -640,8 +638,7 @@ def make_build_slice(state, tools, retriever, memory, task: str, session_id: str
         # identity + turn ordinal: a new turn (seal/reset increments s.turns) naturally
         # invalidates; nothing persists across turns. (The interim AGENT_FREEZE_OPEN_FILES
         # full-body freeze was subsumed by this branch and retired 2026-08-05 — review note b.)
-        if os.environ.get("AGENT_OPENFILES_LOCATORS", "").strip() == "1" \
-                or os.environ.get("AGENT_SESSION_TAPE", "").strip() == "1":
+        if tape_on():
             _key = (id(s), int(getattr(s, "turns", 0) or 0))
             _frozen = getattr(make_build_slice, "_frozen_locators", None)
             if _frozen is None:
