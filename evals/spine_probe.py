@@ -20,8 +20,8 @@ single-hash recognition is the P5 fix; the old probe only knew "### " and filed 
 break as "pre-headers".
 
 Usage:
-  AGENT_SESSION_SPINE=1 .venv/bin/python evals/spine_probe.py --scenario s2_taskdag_scheduler \
-      --label spine --out evals/spine_probe_runs
+  .venv/bin/python evals/spine_probe.py --scenario s2_taskdag_scheduler \
+      --label tape --out evals/spine_probe_runs
 """
 from __future__ import annotations
 
@@ -105,12 +105,17 @@ def region_at(ser: str, off: int) -> str:
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--scenario", default="s2_taskdag_scheduler")
-    ap.add_argument("--label", required=True, help="config label recorded in the output (off/p3/spine)")
+    ap.add_argument("--label", required=True,
+                    help="config label; only 'tape' is valid at this pin — historical arms (off/p3/spine) reproduce at git tag lab-2026-08-05")
     ap.add_argument("--out", default=os.path.join(ROOT, "evals", "spine_probe_runs"))
     ap.add_argument("--rep", default="1")
     args = ap.parse_args(argv)
 
-    flag = os.environ.get("AGENT_SESSION_SPINE", "").strip()
+    if args.label != "tape":
+        ap.error(f"label {args.label!r} names a retired arm: the tape is unconditional at this "
+                 "pin, so a run under this label would silently measure tape behavior and "
+                 "contaminate the evidence. Check out git tag lab-2026-08-05 to run it.")
+    flag = "tape-unconditional"
     bench._Tap = _ProbeTap
     scn = bench.load_scenario(args.scenario)
     t0 = time.time()
@@ -193,12 +198,10 @@ def main(argv=None):
         if k in res:
             liveness[k] = res[k]
     invalid = ""
-    if args.label == "spine" and late_calls and spine_seen == 0:
-        invalid = "HARNESS INVALID: spine arm but no SESSION SPINE block in any request"
-    if args.label in ("off", "p3") and spine_seen:
-        invalid = f"HARNESS INVALID: {args.label} arm but SESSION SPINE rendered {spine_seen}x"
-    if args.label == "tape" and late_calls and tape_seen == 0:
+    if late_calls and tape_seen == 0:
         invalid = "HARNESS INVALID: tape arm but no SESSION TAPE block in any request"
+    if spine_seen:
+        invalid = f"HARNESS INVALID: retired SESSION SPINE region rendered {spine_seen}x"
 
     def stats(kind):
         sel = sorted(r["frac"] for r in rows if r["same_turn"] == kind)

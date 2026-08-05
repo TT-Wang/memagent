@@ -541,12 +541,6 @@ def make_build_slice(state, tools, retriever, memory, task: str, session_id: str
     # The tags are for legibility only; do not reorder these lines by tag.
     def build() -> list[dict]:
         s = _active(state)                                             # PFC: resolve the active slice
-        if is_session and isinstance(getattr(state, "session_spine", None), list):
-            # SESSION SPINE sync (R1): the Session owns the authoritative in-memory cache of the
-            # sealed-digest scan (it is SESSION-scoped; slices are task-scoped views that would
-            # drift as topics switch). Synced here — the one seam every lane's build passes
-            # through — so any task's slice renders the same frozen record.
-            s.continuity.session_spine = list(state.session_spine)
         if is_session and isinstance(getattr(state, "session_tape", None), list):
             # SESSION TAPE sync — same ownership pattern; parking a topic must not fork the tape.
             s.continuity.session_tape = list(state.session_tape)
@@ -571,29 +565,29 @@ def make_build_slice(state, tools, retriever, memory, task: str, session_id: str
         # slice. This matters on resume: the parked topic keeps its goal, but the new resume message is what
         # the user is asking for RIGHT NOW.
         goal = getattr(getattr(s, "intent", None), "current_request", "") or task
-        # keyed by the per-turn request, the KNOWLEDGE region's bytes change every turn
-        # while sitting in the head — the memory lookup re-runs and re-renders even when the
-        # task is unchanged. Under the spine the memo keys by the STABLE task, so the region's
-        # bytes hold for the task's duration (snapshot-per-topic, the review's remedy).
-        goal = task or goal
+        # R6b: the KNOWLEDGE lookup keys by the STABLE task label so that region's bytes hold
+        # for the task's duration (per-request keying re-ran the lookup every turn in the head).
+        # SEPARATE variable — the spine-era code overrode `goal` itself, silently flipping the
+        # CURRENT REQUEST rendering authority to the task label whenever the stream layout was
+        # on; latent since 2026-08-04, exposed by default-on (review Task147, blocker 2 root).
+        memo_goal = task or goal
         typed_knowledge_push = callable(getattr(memory, "seed_recall", None))
-        if goal not in lessons_memo and (typed_knowledge_push or not graph_active or needs_memory):
+        if memo_goal not in lessons_memo and (typed_knowledge_push or not graph_active or needs_memory):
             # KNOWLEDGE candidates through the ONE read seam (memory-lessons backend) — no sibling recall.
             # Native L2 applies its own typed admission: a tiny standing USER-preference budget, plus PROJECT
             # and CRAFT records only when they are relevant to this exact request. Snapshot-at-first-recall
             # (memoized by goal) keeps the per-request lookup stable. The knowledge backend owns semantic
             # retrieval/failover; no unscoped Memem tail is appended to the seed.
             _paths = sorted(set(s.edited_files) | set(s.active_files)) or None   # PFC: carried file sets
-            lessons_memo[goal] = render_memory(pages.lookup(goal, kind="memory-lessons", k=6, paths=_paths))
-        lessons_memo.setdefault(goal, "")
-        # the render view budget tracks the LIVE adaptive budget (s.read_budget, grown on refault by
-        # SwapManager); OPEN FILES/RECENT/findings are otherwise UNCAPPED (bound = relevance, not size).
-        read_budget = s.read_budget                                    # PFC: carried adaptive budget
-        artifacts = build_artifacts(
-            s, tools, full_file_lines=FULL_FILE_LINES, read_budget=read_budget,
-            selected_paths=graph_paths,
-        )
-        # OPEN FILES under a frozen-stream layout: locator lines replace file bodies, snapshotted
+            lessons_memo[memo_goal] = render_memory(pages.lookup(memo_goal, kind="memory-lessons", k=6, paths=_paths))
+        lessons_memo.setdefault(memo_goal, "")
+        # OPEN FILES under the tape: locator lines ONLY — build_artifacts (the full-body
+        # renderer) is NOT called on the product path anymore. It used to run first and be
+        # overwritten by the locator snapshot, re-reading and formatting every selected file
+        # body per build for nothing (review Task147 F4: one discarded full-body read per file
+        # per build). The renderer itself survives for the dep-protection/coresidency machinery
+        # and their suites.
+        # Locator lines replace file bodies, snapshotted
         # at turn START. Within a turn the seed is re-projected per call, and every edit used to
         # re-render the edited file, invalidating the provider's prefix cache for everything after
         # it — the measured #1 same-turn break source (two instrumented diagnoses; test_seed.py x9).
@@ -638,7 +632,7 @@ def make_build_slice(state, tools, retriever, memory, task: str, session_id: str
             _focus_path, _extra_roots = tools.focus()   # PFC: carried ToolHost state (set by change_workspace)
             focus_text = render_focus(_focus_path, _extra_roots, home=os.path.expanduser("~"), workspace=tools.root())
         ctx = _slice_context(
-            s, artifacts, discovery, lessons_memo[goal], threads,
+            s, artifacts, discovery, lessons_memo[memo_goal], threads,
             worktree, "", focus_text,  # repo_map rides the cacheable SYSTEM prefix
             open_file_paths=open_file_paths, max_findings=_NO_CAP,
         )

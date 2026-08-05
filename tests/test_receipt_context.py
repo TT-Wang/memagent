@@ -210,5 +210,3 @@ def test_restart_restores_the_epoch_that_selects_current_workspace_resources(tmp
     assert dependency_resource_paths(
         session.active().active_work, workspace_epoch=session.workspace_epoch,
     ) == ("b-current.py",)
-
-

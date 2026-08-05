@@ -81,11 +81,6 @@ class Session:
         self.tasks: dict[str, Slice] = {}     # task_id -> live bounded slice (in-session)
         self.active_id: str | None = None
         self.turn_task_id: str | None = None  # immutable task binding while one model/tool turn runs
-        # SESSION SPINE (R1): the session-scoped cache of sealed-turn digests — the durable truth is
-        # the artifact scan (spine.load_session_spine); the host appends each committed digest here,
-        # and make_build_slice syncs it into whichever task's slice is active. Session-level because
-        # slices are per-task views: parking a topic must not fork the session's frozen record.
-        self.session_spine: list[str] = []
         # Session Tape (docs/SESSION-TAPE-DESIGN.md): same ownership pattern — the session holds
         # the append-only entry cache + the host-side composition registry; slices get synced views.
         self.session_tape: list[str] = []
@@ -329,7 +324,6 @@ def rebase_session_for_workspace(current: Session, restored: Session) -> Session
     # checkpoint: the frozen record follows the session across a handoff (review P1: the old merge
     # dropped all three, so a handoff emptied the tape while tape_files kept stale hashes). Tracked
     # paths that don't exist in the target workspace re-anchor loudly via the next seal's honesty net.
-    merged.session_spine = list(current.session_spine)
     merged.session_tape = list(current.session_tape)
     merged.tape_files = dict(current.tape_files)
     # Target-local authoritative checkpoints win task-ID collisions. Other open topics remain available as

@@ -88,6 +88,18 @@ spine 曲线封顶 33.6%(P5 verdict)、locators 经济性 −22%(oflocators verd
 - 存活确认:pfc.py 的 conversation 环(tape 的输入基底)、MAX_CONVERSATION/reserve_keep(环修剪)、
   spine 基底(digest 渲染/loader)、locator 渲染器(tape 索引)。
 
+## F. 评审响应台账(Task147/Task148,2026-08-05)
+
+两份外部评审 BLOCK,逐项清偿于合并前:
+- **T148-b1 重启丢前情**(正常重启铸新 session id → 会话域扫描空):摘要对账改按**任务成员**取档(`load_session_digests(…, None)` + cli 预过滤),最近 reply 经 latest_turns 重冻为 [reply] 条目;跨会话 fixture 断言"指代后续能见先行词"。
+- **T147/148 规范门红**:此前只跑 pytest 直跑,漏了仓库规范门 `scripts/run_tests.sh`(独立 CHECKS 套件)。四套件修复(memo_goal 分离修根因、projection kwarg、golden 重钉、AST 探针收窄),现 **188/188**;`git diff --check` 清。
+- **T148-h3 请求权威被 task 标签覆写**:R6b 的 memo 键与渲染权威共用变量(spine 时代潜伏)——`memo_goal` 分离,渲染权威恒为 typed current_request。
+- **T148-h4 全文渲染算后即弃**:`build_artifacts` 从产品路径摘除(每 build 每文件一次白读);函数保留给 dep-protection/coresidency 机器。
+- **T148-f5 残余所有权路径**:session_spine 缓存整链删除(artifact 即唯一摘要库);conversation 三处残余分发、_quoted/_ADJACENCY_ROUNDS、slipstream 目录、_ALWAYS 修净。
+- **T148-f6 探针防污染**:spine_probe 拒绝 off/p3/spine 标签(指向 tag),SESSION SPINE 出现即 HARNESS INVALID。
+- **提交边界勘误**:波一 `6534070` 实含测试/评估删除(564 行),提交信息的子系统边界描述不准确;波二为 5 个提交非 4;范围按依赖序可回滚、非单提交独立绿。记档为准,不改写已推历史。
+- **未清偿(有意,最终验证承担)**:P-T4/P-T5 字节+能力门以 `lab-2026-08-05` 为对照的双 checkout 对比(owner sequencing note:门跑完之前"tape 是架构"是结构决定非测得裁决)。
+
 ## D. 执行触发
 
 r8(G1)与 s11 typed r4(G2)数据落地 → 按 A 判门 → 全绿即依 B/C 执行波一。

@@ -312,9 +312,8 @@ def source_needs_gating_survives_on_the_live_admission_producer():
     names = {block.item_id for block in build_context_blocks(_slice_context(
         state, "# unrelated.py\n1: live bytes", discovery="unrelated code",
         memory="unrelated memory", worktree="branch main",
-        cache_manifest='turn 1 → read_file("history/turn-1.md")',
     ))}
-    assert "region:cache_manifest" in names and "region:turn_contract" in names, names
+    assert "region:turn_contract" in names, names
     assert not {
         "region:open_files", "region:related_code", "region:memory",
         "region:world", "region:worktree",

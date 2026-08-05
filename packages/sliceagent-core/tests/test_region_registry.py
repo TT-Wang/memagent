@@ -117,11 +117,15 @@ def side_registries_dispatch_only_on_registered_names():
     # The three main tables are drift-proof by derivation, but these name-keyed surfaces can
     # still half-register a future region — police them by AST so no refactor is needed.
     names = set(NAMES)
-    for fn in (regions_mod._locator_region, regions_mod._region_selected_by_source_needs,
-               regions_mod._region_provenance):
+    # _region_selected_by_source_needs lost its last name-literal dispatch when the conversation
+    # region retired at tape graduation — it now routes purely on contract source_needs, so the
+    # AST probe polices only the surfaces that still key on region names.
+    for fn in (regions_mod._locator_region, regions_mod._region_provenance):
         literals = _name_literals(fn)
         assert literals, f"{fn.__name__}: expected name-literal dispatch, found none (AST probe broke?)"
         assert literals <= names, f"{fn.__name__} dispatches on unregistered: {literals - names}"
+    stray = _name_literals(regions_mod._region_selected_by_source_needs) - names
+    assert not stray, f"_region_selected_by_source_needs dispatches on unregistered: {stray}"
     assert _SEALED_SOURCE_REGIONS <= names, _SEALED_SOURCE_REGIONS - names
 
 
@@ -138,14 +142,12 @@ def golden_layout_snapshot():
         ("intent", STABLE, 0), ("task_objective", STABLE, 0), ("corrections", STABLE, 0),
         ("task_constraints", STABLE, 0), ("open_files", STABLE, 0), ("related_code", STABLE, 1),
         ("skills", STABLE, 2), ("memory", STABLE, 2),
-        # 2026-08-04 Session Spine (docs/SESSION-SPINE-ROADMAP.md P4): frozen sealed-turn digests,
-        # (spine region retired at tape graduation — tag lab-2026-08-05)
-        ("session_spine", STABLE, 2),
-        # 2026-08-05 Session Tape (docs/SESSION-TAPE-DESIGN.md): the single append-only stream,
-        # (unconditional since wave 2; absorbs the spine digests.)
-        ("session_tape", STABLE, 2), ("conversation", STABLE, 2),
+        # 2026-08-05 Session Tape (docs/SESSION-TAPE-DESIGN.md + TAPE-GRADUATION.md): THE single
+        # append-only stream — the spine region, conversation region, and cache_manifest region
+        # retired with their machinery in the graduation waves (tag lab-2026-08-05).
+        ("session_tape", STABLE, 2),
         ("findings", VOLATILE, 3), ("progress", VOLATILE, 3), ("world", VOLATILE, 3),
-        ("threads", VOLATILE, 3), ("cache_manifest", VOLATILE, 3), ("turn_contract", VOLATILE, 6),
+        ("threads", VOLATILE, 3), ("turn_contract", VOLATILE, 6),
         ("focus", VOLATILE, 6), ("worktree", VOLATILE, 6), ("user_report", VOLATILE, 6),
         ("reconciliation", VOLATILE, 6), ("error", VOLATILE, 6),
     )

@@ -216,12 +216,6 @@ class ContinuityState:
     # derived from immutable artifacts at startup, never serialized into TaskState, and consumed by the next
     # turn seal.  Normal direct child delivery therefore has no second context path.
     recovery_child_artifact_id: str = ""
-    # Session Spine (docs/SESSION-SPINE-DESIGN.md, R1): the in-process CACHE of the sealed-turn
-    # digest scan. Each entry is a frozen string rendered exactly once at seal (spine.py's one
-    # renderer); this list is append-only within a session, survives ordinary turn seals like the
-    # rest of continuity, and on resume is rebuilt from the artifact scan (load_session_spine) —
-    # the artifacts are the durable truth, this is only the warm copy the seed renders from.
-    session_spine: list[str] = field(default_factory=list)
     # Session Tape (docs/SESSION-TAPE-DESIGN.md): the single append-only stream — frozen entry
     # strings (digests + file bases + host-authored patches + external notices), appended at seal
     # by tape.tape_seal_update. tape_files is the host-side composition registry (path -> hash/

@@ -589,20 +589,26 @@ def _hydrate_workspace_tasks(store, session, on_log: Callable[[str], None]) -> N
     # artifacts. Non-empty only when the process continues an existing session id (a fresh launch
     # mints a new id, so its spine honestly starts empty — cross-session carry is the deferred R5
     # workspace_continue work, not silently faked here).
-    try:
-        from sliceagent_core.spine import load_session_spine
-        session.session_spine = load_session_spine(
-            store.coordinator.artifacts.list_all(), session.session_id)
-    except Exception as exc:  # noqa: BLE001 — a torn artifact must not block startup
-        on_log(f"session spine scan failed ({type(exc).__name__}: {exc})")
     # SESSION TAPE hydration (review P1: restart used to come back with an empty tape and a
     # stale registry): replay the append-only journal; every base/patch re-verifies its
     # post_hash and a stale path degrades to read-before-edit via the composition contract.
     try:
         from sliceagent_core.recovery import state_dir as _tape_state_dir
-        from sliceagent_core.tape import load_session_tape
+        from sliceagent_core.spine import load_session_digests
+        from sliceagent_core.tape import load_session_tape, reconcile_tape_with_digests
         session.session_tape, session.tape_files = load_session_tape(
             os.path.join(_tape_state_dir("tape"), f"{session.session_id}.jsonl"))
+        # MIGRATION/REPAIR (reviews Task147 b1 + Task148 b1): earlier-turn asks must survive
+        # BOTH a pre-graduation upgrade (artifacts, no journal) AND a normal restart (which
+        # mints a NEW session id, so a session-scoped scan sees nothing). Scope by TASK
+        # membership — the same artifacts that hydrated the task checkpoints above — and let
+        # reconcile fold them in seal order. Also heals a torn journal tail. The newest sealed
+        # reply re-freezes below, after latest_turns resolves.
+        _task_turns = [a for a in store.coordinator.artifacts.list_all()
+                       if getattr(a, "kind", "") == "turn"
+                       and getattr(a, "task_id", None) in session.tasks]
+        reconcile_tape_with_digests(
+            session.session_tape, load_session_digests(_task_turns, None))
     except Exception as exc:  # noqa: BLE001 — a torn journal must not block startup
         on_log(f"session tape replay failed ({type(exc).__name__}: {exc})")
     # Reconstruct the standing constant-size receipt view from immutable artifacts rather than duplicating it
@@ -657,6 +663,20 @@ def _hydrate_workspace_tasks(store, session, on_log: Callable[[str], None]) -> N
             session.tasks[task_id].conversation = [{
                 "user": request, "assistant": assistant, "artifact_id": artifact.id,
             }]
+    # The newest sealed REPLY re-freezes onto the tape (review Task147 blocker 1: with the
+    # conversation region retired, the rehydrated pair above no longer renders anywhere — the
+    # tape [reply] entry is its render channel now). Idempotent via the artifact ref.
+    if latest_turns:
+        try:
+            from sliceagent_core.tape import reconcile_tape_with_digests as _reconcile_reply
+            _nk, _newest = max(latest_turns.values(), key=lambda kv: kv[0])
+            _nbody = _newest.structured_body if isinstance(_newest.structured_body, dict) \
+                else dict(_newest.structured_body)
+            if str(_nbody.get("assistant_provenance") or "") in {"", "final_response"}:
+                _reconcile_reply(session.session_tape, [],
+                                 last_reply=(_newest.id, str(_nbody.get("assistant") or "")))
+        except Exception as exc:  # noqa: BLE001 — migration must not block startup
+            on_log(f"tape reply migration skipped ({type(exc).__name__}: {exc})")
     # Uncertain receipts remain visible on their own task, but they do not seize the workspace from a newer
     # active/parked task. Pick the newest resumable checkpoint uniformly.
     candidates = [row for row in restored if row[3] in ("active", "parked", "indeterminate")]
@@ -1694,14 +1714,10 @@ def main() -> None:
             copy.deepcopy(receipt_projection) if isinstance(receipt_projection, dict) else None
         )
         sealed_target.continuity.last_receipt_artifact_id = artifact_id
-        # SESSION SPINE (R1): append the digest the seal just froze, from the COMMITTED artifact —
-        # the spine only ever grows from durable truth, never from a pre-seal projection. The
-        # SESSION owns the cache (make_build_slice syncs it into the active slice per turn);
-        # unconditional, because the flag gates rendering only.
+        # The COMMITTED artifact's digest feeds the tape verbatim below (one render, durable
+        # truth). The old session_spine cache retired with its region (review Task148 f5 —
+        # artifacts are the sole digest store; migration scans them directly).
         _spine_digest = sealed_body.get("spine_digest")
-        if isinstance(_spine_digest, str) and _spine_digest:
-            session.session_spine.append(_spine_digest)
-            sealed_target.continuity.session_spine = list(session.session_spine)
         if _tape_recorder["rec"] is not None:
             # SESSION TAPE (production parity with the bench wiring): digest + true-diff
             # patches + reply freeze at seal; the SESSION owns the cache (same pattern as the

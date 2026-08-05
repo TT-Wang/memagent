@@ -323,7 +323,7 @@ class Slice:
         "io": ("work", "io"), "hot": ("work", "hot"),
         "read_budget": ("work", "read_budget"), "read_ceiling": ("work", "read_ceiling"),
         "conversation": ("continuity", "conversation"),
-        "session_spine": ("continuity", "session_spine"), "turns": ("continuity", "turns"),
+        "turns": ("continuity", "turns"),
         "session_tape": ("continuity", "session_tape"), "tape_files": ("continuity", "tape_files"),
         "since_edit": ("runtime", "since_edit"), "turn_actions": ("runtime", "turn_actions"),
         "explore_mode": ("runtime", "explore_mode"),

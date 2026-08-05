@@ -62,7 +62,6 @@ REGION_HEADERS = {
     "progress": "# PROGRESS SIGNALS",
     "world": "# WORLD MODEL",
     "threads": "# OTHER OPEN THREADS",
-    "cache_manifest": "# PAGED-OUT HISTORY",
     "action_header": "# REPEATED/FAILING ACTIONS",
     "evidence_result": "# AUTHORITATIVE EVIDENCE RESULT",
     "evidence_detail": "# MATCHED EVIDENCE DETAIL",
@@ -208,7 +207,7 @@ def semantic_equivalent(llm, a, b) -> bool:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--regions", default="conversation,findings,progress,world,cache_manifest",
+    ap.add_argument("--regions", default="findings,progress,world",
                     help="comma list, or 'all' (mandatory user-authority regions always skipped)")
     ap.add_argument("--sample", type=int, default=20, help="turns per region (deterministic order)")
     ap.add_argument("--semantic", action="store_true", help="LLM tier on exact mismatches")

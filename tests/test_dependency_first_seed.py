@@ -51,5 +51,3 @@ def test_active_work_without_dependencies_does_not_eagerly_fetch_global_context(
     assert "# REPO MAP" not in system
     assert "# RELATED CODE" not in user and "# RELEVANT MEMORY" not in user
     assert user.count("inspect this project") == 1
-
-

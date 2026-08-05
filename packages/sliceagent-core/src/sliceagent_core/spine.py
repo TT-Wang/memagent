@@ -110,3 +110,25 @@ def load_session_spine(artifacts: Iterable, session_id: str) -> list[str]:
             rows.append((artifact_order_key(artifact), digest))
     rows.sort(key=lambda r: r[0])
     return [digest for _, digest in rows]
+
+
+def load_session_digests(artifacts: Iterable, session_id: str | None) -> list[tuple[str, str]]:
+    """(artifact_id, digest) pairs in seal order — the TYPED form of the scan, so tape
+    reconciliation (pre-tape/torn-journal migration) never re-parses digest strings for ids.
+    ``session_id=None`` skips the session filter: a NORMAL restart mints a fresh session id
+    (review Task148 blocker 1), so restart migration scopes by TASK membership instead — the
+    caller passes the pre-filtered artifact list that hydrated its task checkpoints."""
+    from .persistence import artifact_order_key
+
+    rows = []
+    for artifact in artifacts:
+        if str(getattr(artifact, "kind", "")) != "turn":
+            continue
+        if session_id is not None and str(getattr(artifact, "session_id", "")) != str(session_id):
+            continue
+        body = getattr(artifact, "structured_body", None)
+        digest = body.get("spine_digest") if isinstance(body, Mapping) else None
+        if isinstance(digest, str) and digest:
+            rows.append((artifact_order_key(artifact), str(artifact.id), digest))
+    rows.sort(key=lambda r: r[0])
+    return [(aid, digest) for _, aid, digest in rows]

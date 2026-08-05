@@ -339,15 +339,58 @@ def test_offline_replay_mechanics_gate():
         assert fn(r), (name, r)
 
 
-def test_workspace_rebase_carries_tape_and_spine():
+def test_pre_tape_session_migrates_digests_and_last_reply_into_tape(tmp_path):
+    """Review Task147 blocker 1: a session whose artifacts PREDATE any tape journal must resume
+    with its earlier asks and its newest reply visible on the tape — the regions that used to
+    render them are retired."""
+    from sliceagent_core.tape import reconcile_tape_with_digests
+    pairs = [(f"t-{i}", f"[turn t-{i} · task k · completed]\nask: request number {i}\n")
+             for i in range(1, 5)]
+    # (a) no journal at all -> empty tape -> every digest enters + the newest reply freezes
+    tape, files = load_session_tape(str(tmp_path / "missing.jsonl"))
+    assert tape == [] and files == {}
+    added = reconcile_tape_with_digests(tape, pairs, last_reply=("t-4", "final answer was B"))
+    assert added == 5
+    stream = tape_render(tape)
+    assert "request number 1" in stream and "request number 4" in stream
+    assert "final answer was B" in stream
+    # idempotent: a second hydration adds nothing
+    assert reconcile_tape_with_digests(tape, pairs, last_reply=("t-4", "final answer was B")) == 0
+    # (b) mid-life upgrade: journal knows t-3.. only -> older asks PREPEND in seal order
+    tape2 = [digest_entry(pairs[2][1], "t-3"), digest_entry(pairs[3][1], "t-4")]
+    reconcile_tape_with_digests(tape2, pairs)
+    assert [e.ref for e in tape2 if e.kind == "digest"] == ["t-1", "t-2", "t-3", "t-4"]
+    # (c) fold-compacted gaps stay compacted: t-2 missing BETWEEN seen ids is never resurrected
+    tape3 = [digest_entry(pairs[0][1], "t-1"), digest_entry(pairs[2][1], "t-3")]
+    reconcile_tape_with_digests(tape3, pairs)
+    refs = [e.ref for e in tape3 if e.kind == "digest"]
+    assert "t-2" not in refs and refs[-1] == "t-4"      # torn tail t-4 healed, gap respected
+    # (d) NORMAL restart mints a NEW session id (Task148 b1): the scan scopes by TASK membership
+    # with session filtering OFF, so the old session's antecedents still migrate.
+    from sliceagent_core.spine import load_session_digests
+
+    class _Art:
+        def __init__(self, id, digest):
+            self.id, self.kind, self.session_id = id, "turn", "OLD-session"
+            self.structured_body = {"spine_digest": digest, "meta": {"order_ns": int(id[-1])}}
+            self.timestamp = ""
+    arts = [_Art("t-2", pairs[1][1]), _Art("t-1", pairs[0][1])]
+    assert load_session_digests(arts, "NEW-session") == []       # session-scoped scan sees nothing
+    cross = load_session_digests(arts, None)                     # task-scoped restart path
+    assert [aid for aid, _ in cross] == ["t-1", "t-2"]
+    tape4: list = []
+    reconcile_tape_with_digests(tape4, cross, last_reply=("t-2", "Choose option two."))
+    stream4 = tape_render(tape4)
+    assert "request number 1" in stream4 and "Choose option two." in stream4
+
+
+def test_workspace_rebase_carries_tape():
     from sliceagent_core.memory_null import NullMemory
     from sliceagent_core.session import Session, rebase_session_for_workspace
     cur = Session(NullMemory(), "sess-1")
-    cur.session_spine = ["[turn t-1 · task k · completed]\nask: x\n"]
-    cur.session_tape = [digest_entry(cur.session_spine[0], "t-1")]
+    cur.session_tape = [digest_entry("[turn t-1 · task k · completed]\nask: x\n", "t-1")]
     cur.tape_files = {"a.py": {"hash": "abc", "content": "x\n"}}
     restored = Session(NullMemory(), "sess-1")
     merged = rebase_session_for_workspace(cur, restored)
-    assert merged.session_spine == cur.session_spine
     assert merged.session_tape == cur.session_tape
     assert merged.tape_files == cur.tape_files

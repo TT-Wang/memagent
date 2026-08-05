@@ -435,6 +435,54 @@ def tape_seal_update(s, tools, rows, *, session_id: str, artifact_id: str, task_
     return {"entries": len(tape), "drift": drift, "rebased": rebased, **compaction}
 
 
+def reconcile_tape_with_digests(tape: list, digest_pairs: list,
+                                *, last_reply: tuple | None = None) -> int:
+    """Migration/repair seam (review Task147 blocker 1): fold ARTIFACT-TRUTH digests into the
+    tape at hydration. A pre-graduation session has sealed artifacts but no tape journal — the
+    spine region that used to render those digests is retired, so without this the session
+    resumes with its earlier-turn asks invisible. Also covers a torn journal (crash between
+    artifact commit and journal write: the missing tail turns re-enter here).
+
+    ``digest_pairs`` = spine.load_session_digests output, seal order. Rules:
+    - empty tape -> every digest appends (chronological);
+    - non-empty tape -> only pairs NEWER than the newest artifact already represented append
+      (never resurrect digests a fold deliberately compacted away);
+    - ``last_reply`` = (artifact_id, text): the newest sealed turn's outward answer re-freezes
+      as a [reply] entry unless one for that artifact already exists.
+    Returns the number of entries appended. Idempotent."""
+    refs = {e.ref for e in tape if e.kind == "digest" and e.ref}
+    added = 0
+    seen = [i for i, (aid, _d) in enumerate(digest_pairs) if aid in refs]
+    if not seen:
+        # no overlap (pre-tape session, or a journal that predates every listed artifact):
+        # artifact truth wins — every digest enters, oldest first, BEFORE any journaled entries
+        # so chronology holds. One-time prefix re-bill, on the migration turn only.
+        fresh = [digest_entry(d, aid) for aid, d in digest_pairs if aid not in refs]
+        tape[:0] = fresh
+        added += len(fresh)
+    else:
+        first, last = seen[0], seen[-1]
+        # pre-journal history (session upgraded mid-life): PREPEND, keeping seal order
+        prepend = [digest_entry(d, aid) for aid, d in digest_pairs[:first] if aid not in refs]
+        tape[:0] = prepend
+        added += len(prepend)
+        # gaps BETWEEN seen ids are digests a fold deliberately compacted — never resurrected.
+        # tail beyond the newest seen id = torn-journal turns: APPEND.
+        for aid, digest in digest_pairs[last + 1:]:
+            if aid not in refs:
+                tape.append(digest_entry(digest, aid))
+                added += 1
+    if last_reply:
+        aid, text = last_reply
+        has_reply = any(e.kind == "reply" and e.ref == str(aid) for e in tape)
+        if not has_reply and str(text or "").strip():
+            rep = reply_entry(str(aid), str(text))
+            if rep is not None:
+                tape.append(rep)
+                added += 1
+    return added
+
+
 # ── Durability: append-only JSONL journal ─────────────────────────────────────────────────────
 # One line per entry, in append order, written at seal time. Compaction NEVER rewrites the
 # journal (it is the full history); load replays every line and compacts once at the end, so a

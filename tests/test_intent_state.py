@@ -463,8 +463,10 @@ def raw_historical_requests_do_not_accumulate_in_seed():
     assert "# USER INSTRUCTIONS" not in user
     assert "unique-old-request-0" not in user, "old raw messages must not remain resident context"
     assert "unique-old-request-10" not in user, "beyond the reserve ceiling must page out"
-    # The current request and the reserve-bounded recent ring remain available.
-    assert "unique-old-request-29" in user and "unique-old-request-25" in user
+    # The current request remains available. (Recent COMPLETED exchanges render via the tape's
+    # digest/[reply] entries at seal time since graduation — pinned by tests/test_session_tape.py;
+    # this sealless construction has only the live request resident.)
+    assert "unique-old-request-29" in user
 
 
 @check

@@ -24,10 +24,9 @@ from .receipts import receipt_summary_parts
 
 # These are host-owned live control surfaces, not optional topical furniture. Child outcomes are ordinary
 # current-turn tool results; they deliberately do not become a second cross-turn context region.
-# session_spine: frozen sealed-turn bytes are the session's durable record and must reach BOTH lanes
-# through this one seam (SESSION-SPINE-ROADMAP P4); the region self-suppresses when the flag is off
-# or the spine is empty, so unconditional selection costs nothing outside the spine layout.
-_ALWAYS = frozenset({"focus", "reconciliation", "session_spine", "session_tape"})
+# session_tape: the frozen stream must reach BOTH lanes through this one seam; it
+# self-suppresses when empty, so unconditional selection costs nothing.
+_ALWAYS = frozenset({"focus", "reconciliation", "session_tape"})
 _INTENT_FALLBACK = frozenset({"intent", "task_objective", "corrections", "task_constraints"})
 _FILE_KINDS = frozenset({"file", "workspace_file", "path", "workspace", "git"})
 def _region_name(block: ContextBlock) -> str:
@@ -144,17 +143,11 @@ def render_active_work(
     )
 
 
-def _quoted(value: object) -> str:
-    """Keep every prior-exchange line visible as quoted data, including blank lines."""
-    return "\n".join("> " + line for line in str(value or "").split("\n"))
-
-
 # The last N COMPLETED exchanges kept resident verbatim. This is a bounded CONSTANT, not a transcript: it is
 # O(1) in session length (older turns page to history/ and recall by address), so it does not reintroduce the
 # accumulation the slice exists to prevent. One antecedent resolves a bare "yes"; three cover the real reach of
 # deictic intent ("combine the last two", "like the fetch function") without a relevance-recall round-trip
 # (which fires ~0 on coding turns, so a too-tight window silently mis-resolves rather than recalling).
-_ADJACENCY_ROUNDS = 3
 
 
 # (_adjacency_blocks retired in wave 2 with the conversation machinery — asks live in

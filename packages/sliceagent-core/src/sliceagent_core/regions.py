@@ -927,9 +927,9 @@ REGIONS: tuple[RegionSpec, ...] = (
     RegionSpec("skills",         STABLE,   lambda c: (f"# ACTIVE SKILL(S) (loaded instructions — FOLLOW these when addressing the CURRENT REQUEST)\n{render_skills(c['s'].active_skills)}\n\n" if render_skills(c["s"].active_skills) else ""), 2, 65, InstructionClass.TASK_STATE, FreshnessClass.REVISION_BOUND, False, EpistemicRole.PROCEDURE),
     RegionSpec("memory",         STABLE,   lambda c: (f"# RELEVANT KNOWLEDGE CANDIDATES (selected USER, PROJECT, CRAFT, or legacy leads — not current-world proof; verify when load-bearing)\n{c['memory']}\n\n" if c["memory"] else ""), 2, 20, InstructionClass.DATA, FreshnessClass.HISTORICAL, False, EpistemicRole.CLAIM),
     # ──────────── TIER 3 · MY STATE — what the agent has established / is doing. ────────────
-    # (The SESSION SPINE region retired at graduation — the tape absorbs its digests; the spine
-    # SUBSTRATE (render_turn_digest / load_session_spine / session.session_spine) lives on as
-    # the seal machinery the tape consumes. Historical spine arm: git tag lab-2026-08-05.)
+    # (The SESSION SPINE region AND its session cache retired at graduation — the tape absorbs
+    # the digests; the substrate (render_turn_digest, artifact scans) lives on as the seal
+    # machinery the tape consumes. Historical spine arm: git tag lab-2026-08-05.)
     # SESSION TAPE (docs/SESSION-TAPE-DESIGN.md): the single append-only stream — digests, file
     # bases, host-authored patches, external notices — frozen bytes concatenated verbatim. The
     # composition contract lives in the header; hashes let the model string-compare its composed
@@ -1031,13 +1031,6 @@ def _locator_region(name: str, ctx: dict) -> tuple[str, tuple[str, ...], bool] |
         return ("# RELEVANT KNOWLEDGE CANDIDATES (historical leads omitted under pressure; re-query if needed)\n"
                 '- read_file("@sliceagent/memory/index.md") or rebuild the next seed',
                 ("@sliceagent/memory/index.md",), True)
-    if name == "conversation":
-        handles = tuple(
-            f"artifacts/{row.get('artifact_id')}.md" for row in getattr(s, "conversation", ())[:-1]
-            if row.get("artifact_id")
-        ) or ("artifacts/index.md",)
-        return ("# RECENT CONVERSATION (paged under pressure; exact turns remain in the artifact/history view)\n"
-                + "\n".join(f'- read_file("{handle}")' for handle in handles), handles, False)
     if name == "turn_contract":
         contract = getattr(getattr(s, "intent", None), "turn_contract", None)
         handles = tuple(dict.fromkeys(
@@ -1100,12 +1093,6 @@ def _region_selected_by_source_needs(name: str, ctx: dict) -> bool:
         "explicit", "continuation",
     }:
         return True
-    if (name == "conversation" and "sealed_exchange" in needs
-            and not getattr(contract, "evidence_continuation", False)):
-        # The quality projection already contains the exact paired bytes. Duplicate recent pairs gave those
-        # claims accidental extra weight; only a verification continuation keeps RECENT for the assessment
-        # response itself, which is intentionally outside the frozen historical baseline.
-        return False
     selected = set(_SEALED_SOURCE_REGIONS)
     if "historical_observation" in needs:
         selected.update(("findings", "memory"))
@@ -1136,12 +1123,6 @@ def _region_provenance(name: str, ctx: dict) -> tuple[EpistemicRole, tuple[str, 
             ref = ResourceRef(ResourceKind.WORKSPACE_FILE, str(path))
             resources.append(ref)
             sources.append(SourceRef("live_resource", ref.handle))
-    elif name == "conversation":
-        scope = ("session", "task")
-        for row in getattr(s, "conversation", ()) or ():
-            handle = str(row.get("artifact_id") or "") if isinstance(row, dict) else ""
-            if handle:
-                sources.append(SourceRef("artifact", handle))
     elif name == "skills":
         for item in getattr(s, "active_skills", ()) or ():
             handle = str(item.get("name") or "") if isinstance(item, dict) else ""

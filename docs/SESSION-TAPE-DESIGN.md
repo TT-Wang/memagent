@@ -144,8 +144,8 @@ bound is explicit and pre-registered, not emergent:
 | T4 result alias, projection pin, micro-compact, paired reserve, findings | unchanged |
 | Subagents | children keep scoped fresh contexts; no tape inheritance in v1 (spawn snapshot already carries what the child needs) |
 
-Flag: `AGENT_SESSION_TAPE=1`, supersedes `AGENT_SESSION_SPINE`/`AGENT_OPENFILES_LOCATORS`
-(setting those alongside is harmless; tape wins). Default off until the full gate ladder.
+Flag: none — the tape is UNCONDITIONAL since graduation wave 2 (the kill switch and the
+spine/locators flags all retired; historical arms: git tag `lab-2026-08-05`).
 
 ## 6. Pre-registered gates (committed before any run; 13-trap catalogue applies)
 
