@@ -1,3 +1,5 @@
+> **RETIRED (tape graduation, 2026-08-05)** — the standalone locators flag described here was deleted in wave 1 (docs/TAPE-GRADUATION.md). The document remains as the evidence chain; the runnable historical arm lives at git tag `lab-2026-08-05`.
+
 # OPEN FILES Subsumption — Option B Pre-Registered Experiment Design (DRAFT)
 
 Status: DRAFT for owner review (TT-Wang). No code implemented. Date: 2026-08-05.

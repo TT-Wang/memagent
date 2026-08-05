@@ -1,3 +1,5 @@
+> **RETIRED (tape graduation, 2026-08-05)** — the spine region + mode described here was deleted in wave 1 (docs/TAPE-GRADUATION.md). The document remains as the evidence chain; the runnable historical arm lives at git tag `lab-2026-08-05`.
+
 # Session Spine — Integration Map
 
 Synthesis of five subsystem reports (seal-path, conversation-ring, manifest-progress, elasticity, peer-precedent) for the append-only frozen-turn-digest design in `docs/SESSION-SPINE-DESIGN.md`.

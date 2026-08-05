@@ -1,6 +1,7 @@
 """P5 byte gate — instrumented prefix-survival probe (docs/SESSION-SPINE-ROADMAP.md P5).
 
-Runs ONE scripted benchmark scenario under the current AGENT_SESSION_SPINE config and measures,
+Runs ONE scripted benchmark scenario under the current tape config (historical spine/off arms:
+git tag lab-2026-08-05) and measures,
 per consecutive model-call pair, how much of the serialized request survives as a common prefix
 (DeepSeek bills everything after the first changed byte). Same-turn pairs measure within-turn
 stability; CROSS-TURN pairs measure the rebuild — the number the spine exists to fix.
