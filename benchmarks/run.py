@@ -127,6 +127,13 @@ def run(scn, memory_mode="real"):
 
     state = Slice(); state.reset(prompts[0])
     tools = LocalToolHost(root=workdir)
+    # PRODUCTION SCHEMA PROFILE (cost review, system-schemas lane): the CLI binds an active-work
+    # provider, which switches schemas() to the lean branch — no legacy semantic-state tools, no
+    # 351-char note prop on every schema. Unbound, the bench carried a 12,809-char/call profile
+    # DIVERGENCE that production never pays (45% of the schema payload). Same snapshot shape as
+    # cli._bind_active_work_host, against the bench's single Slice.
+    if callable(getattr(tools, "bind_active_work", None)):
+        tools.bind_active_work(lambda: (state.active_work, "", 0))
     retriever = make_code_index(workdir) if meta.get("use_code_index") else NullRetriever()
     tap = _Tap(_configured_llm())
     if hasattr(tap.inner, "set_cache_key"):
