@@ -216,6 +216,33 @@ def test_fold_reanchors_files_instead_of_orphaning_patches():
     assert _h(body_v2) == f_entries[0].post_hash
 
 
+def test_fold_guarantees_net_reduction_on_big_files():
+    """G2 catch (s11 typed r4: 18 folds, tape 166k > 120k budget): re-anchor bases ADD bytes,
+    so a fold sized by span bytes alone can shrink nothing and re-trigger every seal. The cut
+    must grow until the NET effect reaches the target — and repeated compaction must converge
+    (either under budget or a bail, never a marker-stacking loop)."""
+    big = ("line of real code\n" * 400)          # ~7.2k chars per file, s11-shaped
+    files = {f"mod{i}.py": {"hash": _h(big), "content": big} for i in range(5)}
+    tape = []
+    for i in range(1, 9):
+        tape.append(digest_entry(f"[turn t-{i} · task k · completed]\nask: {'x' * 600}\n", f"t-{i}"))
+        p = f"mod{i % 5}.py"
+        tape.append(patch_entry(p, big + f"# v{i}\n", big))   # small patches on big files
+    tape.insert(1, base_entry("mod0.py", big))
+    before_chars = sum(len(e.rendered) for e in tape)
+    budget = int(before_chars * 0.8)
+    info = compact_tape(tape, files, budget=budget)
+    after_chars = sum(len(e.rendered) for e in tape)
+    if info["epoch_folds"]:
+        assert after_chars < before_chars, "a fold must never grow the tape"
+    # convergence: repeated calls either reach steady state or bail — never fold forever
+    folds = 0
+    for _ in range(6):
+        r = compact_tape(tape, files, budget=budget)
+        folds += r["epoch_folds"]
+    assert folds <= 1, f"compaction thrashed ({folds} extra folds at steady state)"
+
+
 def test_compaction_under_budget_untouched_and_epoch_chain():
     files: dict = {}
     tape = _digest_turns(chars=400, n=20)

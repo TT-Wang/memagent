@@ -245,20 +245,50 @@ def compact_tape(tape: list, files: dict, *, budget: int = TAPE_BUDGET_CHARS) ->
     if dead:
         info["gc_removed"] = len(dead)
         tape[:] = [e for i, e in enumerate(tape) if i not in dead]
-    # pass 2: ONE fold sized to reach the target. Files touched inside the span are re-anchored
-    # to their registry content; digests/replies/old epochs in the span fold into the marker.
-    if tape_chars(tape) > budget and len(tape) > 8:
-        overshoot = tape_chars(tape) - int(budget * _FOLD_TARGET)
-        running, cut = 0, 0
-        while cut < len(tape) - 4 and running < overshoot + 200:
-            running += len(tape[cut].rendered)
-            cut += 1
+    # pass 2: ONE fold sized by NET effect. Files touched inside the span are re-anchored to
+    # their registry content as fresh bases — which ADDS bytes — so the cut must grow until
+    # (bytes removed, including the affected files' post-cut entries) minus (marker + anchor
+    # bases) actually reaches the target. The first typed fold sized the cut by span bytes
+    # alone; on s11's real files each fold removed small digests/patches but appended full
+    # fresh bases, never reached budget, and re-folded EVERY seal (18 folds, fresh +42%,
+    # tape 166k > 120k budget — graduation gate G2 catch, 2026-08-05).
+    total = tape_chars(tape)
+    if total > budget and len(tape) > 8:
+        target = int(budget * _FOLD_TARGET)
+        def _anchor_cost(path: str) -> int:
+            # cheap estimate of a fresh base's rendered size (exact render happens once, later)
+            content = files.get(path, {}).get("content", "")
+            return len(content) + 2 * len(path) + 80
+        affected: set[str] = set()
+        removed = 0
+        anchors_cost = 0
+        post_cut_by_path: dict[str, int] = {}
+        for e in tape:
+            if e.kind in _FILE_KINDS and e.path:
+                post_cut_by_path[e.path] = post_cut_by_path.get(e.path, 0) + len(e.rendered)
+        best_cut, best_net = 0, 0
+        for cut in range(1, len(tape) - 3):
+            e = tape[cut - 1]
+            removed += len(e.rendered)
+            if e.kind in _FILE_KINDS and e.path:
+                post_cut_by_path[e.path] -= len(e.rendered)
+                if e.path not in affected:
+                    affected.add(e.path)
+                    anchors_cost += _anchor_cost(e.path)
+            # dropping an affected file's post-cut entries also reclaims their bytes
+            extra = sum(post_cut_by_path[p] for p in affected)
+            net = removed + extra - anchors_cost - 200      # 200 ≈ marker
+            if net > best_net:
+                best_cut, best_net = cut, net
+            if total - net <= target:
+                break
+        if best_net <= 0:
+            return info      # nothing reclaimable (working set alone floors the tape): bail,
+        cut = best_cut       # never stack markers that grow the tape
         span = tape[:cut]
         affected = sorted({e.path for e in span if e.kind in _FILE_KINDS and e.path})
         anchors = [base_entry(p, files[p]["content"]) for p in affected if p in files]
         folded_history = sum(1 for e in span if not (e.kind in _FILE_KINDS and e.path in affected))
-        if folded_history <= 0 and not affected:
-            return info      # nothing foldable: bail rather than stack empty markers
         refs = [e.ref for e in span if e.kind == "digest" and e.ref]
         first = refs[0] if refs else "start"
         if span and span[0].kind == "epoch" and span[0].ref:
