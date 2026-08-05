@@ -29,12 +29,6 @@ from .receipts import receipt_summary_parts
 _ALWAYS = frozenset({"focus", "reconciliation", "session_tape"})
 _INTENT_FALLBACK = frozenset({"intent", "task_objective", "corrections", "task_constraints"})
 _FILE_KINDS = frozenset({"file", "workspace_file", "path", "workspace", "git"})
-def _region_name(block: ContextBlock) -> str:
-    prefix = "region:"
-    item = block.item_id
-    return item[len(prefix):] if item.startswith(prefix) else item
-
-
 def dependency_resource_paths(graph: WorkGraph, *, workspace_epoch: int | None = None) -> tuple[str, ...]:
     """Workspace paths named by the unresolved dependency closure, stable and deduplicated."""
     paths = []
@@ -223,33 +217,11 @@ def compile_active_context(
     if not active_text:
         return blocks
     closure = graph.dependency_closure()
-    resource_kinds = {
-        ref.kind for item in closure for ref in item.resource_refs
-        if workspace_epoch is None or ref.workspace_epoch == workspace_epoch
-    }
-    has_evidence = any(item.evidence_refs for item in closure)
-    missing_prior_source = any(
-        item.kind == "request" and item.logical_id != current_logical_id
-        and any(ref.event_id not in sources for ref in item.source_refs)
-        for item in closure
-    )
 
-    selected = set(_ALWAYS)
-    if any(_region_name(block) == "memory" for block in blocks):
-        selected.add("memory")
-    if resource_kinds & _FILE_KINDS:
-        selected.update(("open_files", "worktree", "related_code"))
-    if "skill" in resource_kinds or getattr(s, "active_skills", None):
-        selected.add("skills")
-    if resource_kinds & {"memory", "history"}:
-        selected.update(("memory",))
-    if has_evidence:
-        selected.add("findings")
-    if missing_prior_source:
-        # Recovery fallback only.  A healthy ledger uses Active Work as the sole semantic owner.
-        selected.update(_INTENT_FALLBACK)
-
-    kept = [block for block in blocks if _region_name(block) in selected]
+    # Wave 4 (P4 one-lane): selection — including the graph furniture trim — happened in
+    # build_context_blocks via regions._graph_trim_selected. This function only PRODUCES the
+    # graph-owned blocks and grafts them onto the already-selected stream.
+    kept = list(blocks)
     # Under the spine layout the live work graph is per-turn content and must render BELOW the
     # frozen spine (slot 2, beside the intent family it replaces); legacy keeps the head slot.
     _aw_slot = 2   # below the tape, beside the intent family (wave 2: unconditional)

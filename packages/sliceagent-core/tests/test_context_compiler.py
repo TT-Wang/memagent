@@ -84,18 +84,26 @@ def test_dependency_paths_are_selected_from_the_active_closure_only():
 
 
 def test_missing_prior_event_keeps_legacy_exact_intent_as_recovery_fallback():
+    # Wave 4 (P4 one-lane): the furniture trim lives in the ONE selector
+    # (regions._graph_trim_selected via _region_selected_by_source_needs); the compiler is a
+    # pure producer and must pass blocks through untouched.
+    from sliceagent_core.regions import _graph_trim_selected
     graph, sources = graph_with_current_dependency()
     sources.pop("event-prior")
     s = Slice(active_work=graph)
+    ctx = {"s": s, "graph_source_texts": sources, "graph_logical_id": "current",
+           "graph_workspace_epoch": None}
+    assert _graph_trim_selected("intent", ctx)          # recovery fallback selects intent family
+    assert _graph_trim_selected("task_objective", ctx)
+    assert not _graph_trim_selected("world", ctx)       # furniture trimmed
     compiled = compile_active_context(
         s,
-        [block("intent"), block("task_objective"), block("world")],
+        [block("intent"), block("task_objective")],
         source_texts=sources,
         current_logical_id="current",
     )
     kept = {item.item_id for item in compiled}
-    assert {"region:intent", "region:task_objective"} <= kept
-    assert "region:world" not in kept
+    assert {"region:intent", "region:task_objective", "active-work"} <= kept
 
 
 def test_record_user_opens_graph_only_at_explicit_application_ledger_seam():

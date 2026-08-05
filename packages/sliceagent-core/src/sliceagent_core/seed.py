@@ -664,6 +664,11 @@ def make_build_slice(state, tools, retriever, memory, task: str, session_id: str
         current_logical_id = str(getattr(logical, "id", "") or "")
         if not current_logical_id and s.active_work.unresolved_roots:
             current_logical_id = s.active_work.unresolved_roots[-1].logical_id
+        # ONE-lane selection inputs (wave 4): the graph trim runs inside build_context_blocks,
+        # so the ledger-derived context reaches it through ctx, not a second selector.
+        ctx["graph_source_texts"] = source_texts
+        ctx["graph_logical_id"] = current_logical_id
+        ctx["graph_workspace_epoch"] = current_epoch
         logical_blocks = compile_active_context(
             s, build_context_blocks(ctx), source_texts=source_texts,
             current_logical_id=current_logical_id,
