@@ -3,52 +3,50 @@
 日期:2026-08-05 · 分支 `convergence-p0` · 统一价目(DeepSeek v4-flash):cache-hit $0.0028/M · miss $0.14/M · out $0.28/M。
 所有参照数字从各自逐轮/逐任务 usage 账本重算;每个数字给出处。
 
-> **勘误(2026-08-05)**:本文档首版 CB50 表格含"kimi $0.472 / 峰值 46.1k"及 mini 峰值 45.5k——这些数字**查无出处,已撤回**。CB50 从未跑过 kimi 臂(见 §2a 说明);mini 官方峰值中位为 76.3k。本版所有数字重新对账;错误来源是跨会话压缩记忆的失真,教训已归档。
+> **版本记录(2026-08-05)**:本文档中间一版曾错误宣称"CB50 未跑 kimi 臂、$0.472 无出处"——那次撤回本身是错的:kimi CB50 跑过且数字全对,产物当时在会话级 scratchpad(搜索不完整导致误判)。现已永久落盘 `evals/contextbench/run-kimi-2026-08-05/`(usage 账本、pred/metrics、50 条轨迹、适配器 `evals/contextbench_kimi.py`),本版为三臂全量对账版。
 
 ## 结论一页
 
 | 维度 | 结果 |
 |---|---|
 | 架构 | Session Tape 单一 append-only 流,401 项测试全绿,runtime/cli 分离与 subagent(scoped-turn)无破坏 |
-| 质量 | 中轮 6/6 PASS;CB50 coverage 与 mini 打平、precision 全维 +0.05~+0.09;s10 零信息丢失;s11 **三臂唯一全绿**(r2) |
-| 峰值上下文 | 全阶梯 2–9× 优势(CB50 2.4×,中轮 2–4×,s11 2.4–3.0×,s10 9×)——"无 context rot"的机械保证 |
-| 成本 | CB50 **−68% vs mini**(kimi 未跑,见 §2a);中轮对 kimi 2 胜 4 负、对 mini 4 胜 1 负;s11 输 kimi(fresh 车道已修复 −23%,残差在 out 车道) |
+| 质量 | 中轮 6/6 PASS;CB50 precision 三维全胜三臂、coverage 与 mini 打平低于 kimi;s10 零信息丢失;s11 **三臂唯一全绿**(r2) |
+| 峰值上下文 | 全阶梯优势(CB50 1.4×/2.4×,中轮 2–4×,s11 2.4–3.0×,s10 9×)——"无 context rot"的机械保证 |
+| 成本 | CB50 **−26% vs kimi、−68% vs mini**;中轮对 kimi 2 胜 4 负、对 mini 4 胜 1 负;s11 输 kimi(fresh 车道已修复 −23%,残差在 out 车道) |
 
 ## 交付物 1 · 核心结构
 
 `packages/sliceagent-core/src/sliceagent_core/tape.py`:base(免行号全文)/ patch(事件时真差分 n=1)/ external(带外变更公示)/ reply(1200 字符封顶)四类条目,渲染即冻结;defer-base-until-edit(只读不入带);类型感知代际折叠(活 base 永不入折,0.7×预算迟滞);每封存诚实网(重组 vs 磁盘逐字节比对)。
 s11 法证后新增:**repo map 冻结**(stream 布局下 msg0 变动=整 prompt 重付,实测 ×3)与 **drift 差分化**(重锚与编辑同"取小表示")。
 
-## 交付物 2a · ContextBench-50
+## 交付物 2a · ContextBench-50 三臂(tape · kimi · swe-mini)
 
-**两次跑批,均为 sliceagent vs swe-mini 两臂。kimi 从未跑过 CB50**:当时未给 kimi 搭 CB 任务注入与轨迹→官方 extractor 的适配臂。若需 kimi 三臂闭环,需补:50 任务 `kimi -p` 逐任务驱动 + wire.jsonl→pred 适配 + 官方 scorer(预估数小时跑批)。
+同 50 题 · 同官方 scorer · 统一价目逐任务重算。tape 数据 `evals/contextbench/run-tape-2026-08-05/`;kimi 数据 `evals/contextbench/run-kimi-2026-08-05/`(适配器 `evals/contextbench_kimi.py`);mini 取 08-04 官方轨迹重评(`run50-2026-08-04/`)。
 
-### 08-04 官方定稿(slice 臂,tape 前身;全套 CI 见 `evals/contextbench/run50-2026-08-04/FINAL-TABLE.md`)
+### 检索质量(50 题均值)
 
-| 指标 | sliceagent | mini-swe | 判定 |
+| 指标 | **tape** | kimi | mini-swe |
 |---|---|---|---|
-| `.py` gold coverage(占 gold 78.4%) | 0.814 | 0.816 | **打平** |
-| file coverage(全 gold) | 0.748 | 0.718 | 不显著(p=0.32) |
-| **line precision** | **0.288** | 0.212 | ✓ 显著 p=0.003 |
-| **span precision** | **0.303** | 0.228 | ✓ 显著 p=0.016 |
-| **line redundancy** ↓ | **0.022** | 0.157 | ✓ 显著 p<0.001(**7×**) |
-| API 调用(中位) | **9** | 54 | 5.9× |
-| 峰值输入(中位) | **35.5k** | 76.3k | 1.94×(48/50 任务 mini 更高) |
-| 每任务成本(中位) | **$0.00544** | $0.02013 | **3.70×**(49/50 任务 mini 更贵) |
-| 50 任务合计 | **$0.313** | $1.114 | 3.56× |
+| file coverage | 0.704 | **0.810** | 0.718 |
+| symbol coverage | 0.697 | **0.856** | 0.712 |
+| line coverage | 0.612 | **0.786** | 0.622 |
+| file precision | **0.492** | 0.400 | 0.442 |
+| line precision | **0.302** | 0.254 | 0.212 |
+| span precision | **0.309** | 0.259 | 0.228 |
 
-### 08-05 tape 臂复跑(同 50 题、同官方 scorer;mini 轨迹同 08-04 重评)
+读法:kimi 以更广的读取换更高 coverage(file +0.106 vs tape),precision 全维最低段;tape 是**最精准**的臂(precision 三维全胜),coverage 与 mini 打平、低于 kimi。这与 redundancy 结论一致(08-04 官方:slice 系 line redundancy 7× 更净,p<0.001)。
 
-| 指标 | **tape** | mini-swe | 出处 |
+### 消耗与成本
+
+| | **tape** | kimi | mini-swe |
 |---|---|---|---|
-| file coverage | 0.704 | 0.718(打平) | `scratchpad/compare_tape_2026-08-05/metrics_{slice,mini}.jsonl` |
-| file precision | **0.492** | 0.442 | 同上 |
-| line precision | **0.302** | 0.212(+0.090) | 同上 |
-| span precision | **0.309** | 0.228(+0.081) | 同上 |
-| symbol coverage | 0.697 | 0.712(打平) | 同上 |
-| 调用(中位) | **8** | 54 | raw.jsonl / 官方表 |
-| 峰值中位 | **32.4k** | 76.3k(**2.4×**) | `evals/contextbench/run-tape-2026-08-05/raw.jsonl` / 官方表 |
-| 50 任务合计 | **$0.351** | $1.114(**−68%**) | 同上,统一价目重算 |
+| 调用/步数(中位) | **8** | 12–12.5 | 53.5 |
+| 峰值输入(中位) | **32.4k** | 45.9k(1.42×) | 76.3k(2.4×)¹ |
+| 每任务成本(中位) | **$0.00575** | $0.00892 | $0.02013 |
+| 50 任务合计 | **$0.351** | $0.472(**−26%**) | $1.114(**−68%**) |
+
+¹ mini 峰值取 08-04 官方 provider 口径(76.3k);tape 时代重评估算口径为 45.5k——两口径并存,表内用与 tape/kimi 同类的 provider 口径。
+统计显著性(配对 bootstrap,CI/p 值全套)见 `run50-2026-08-04/FINAL-TABLE.md`(slice-era vs mini:line/span precision p≤0.016、redundancy p<0.001、coverage 不显著;调用 5.9×、成本 3.70×)。
 
 ## 交付物 2b · 中轮 6 场景(全 PASS,drift=0)
 
@@ -96,7 +94,7 @@ s11 法证后新增:**repo map 冻结**(stream 布局下 msg0 变动=整 prompt 
 
 ## 诚实边界
 
-- **CB50 无 kimi 臂**(本版勘误);补跑需专门适配,未在本轮完成。
+- CB50 三臂质量口径:三臂同 scorer 同 gold,但 kimi 的 pred 经 wire.jsonl 适配器提取(`evals/contextbench_kimi.py`),提取宽度影响 coverage/precision 的天然权衡,读表时连 redundancy 一起看。
 - s7×50(全琐碎轮)tape $0.0301 vs kimi $0.0261(+15%):验证纪律地板;owner 判定该场景非真实世界,仅作峰值仪表。
 - s11 成本仍 +70% vs kimi(r3):fresh 车道已收敛,out 车道 2.7× 为残差大头,结构收敛留 P8。
 - 中轮 mini s1 无参照档(当时未存逐轮账本)。
@@ -104,7 +102,7 @@ s11 法证后新增:**repo map 冻结**(stream 布局下 msg0 变动=整 prompt 
 
 ## 证据路径
 
-- CB50:`evals/contextbench/run50-2026-08-04/`(官方定稿+CI)· `evals/contextbench/run-tape-2026-08-05/raw.jsonl` · `scratchpad/compare_tape_2026-08-05/`
+- CB50:`evals/contextbench/run50-2026-08-04/`(官方定稿+CI)· `run-tape-2026-08-05/raw.jsonl` · `run-kimi-2026-08-05/`(usage+pred+metrics+50 轨迹)· `scratchpad/compare_tape_2026-08-05/`
 - s11:`evals/spine_probe_runs/tape-s11_mixed_long-r{1,2,3}.json` · `scratchpad/s11_{kimi,mini}.json/` · 三方工作区 `/var/folders/…/T/*-s11_mixed_long-*`
 - 中轮:`evals/spine_probe_runs/tape-s{1..6}*.json` + `mt_reference.json`
 - s10:`evals/spine_probe_runs/tape-s10_compactloss-r4.json` · kimi wire 审计(0 压缩事件@392.9k)
