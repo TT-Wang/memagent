@@ -877,9 +877,8 @@ class RegionSpec:
     monkeypatch seam for tests that inject fake regions; completeness for REAL regions is
     enforced by tests/test_region_registry.py, not by strict indexing."""
     name: str
-    tier: str                     # STABLE | VOLATILE — prompt-cache locality (documentation)
     render: Callable[[dict], str]  # ctx -> framed fragment; '' suppresses the region
-    slot: int                     # parts[] grouping; render order = tuple position
+    zone: int                     # THE placement law: 0 HEAD (byte-frozen) | 1 TAPE | 2.. TAIL
     priority: int                 # elasticity degradation rank (lowest degrades first)
     instruction_class: InstructionClass
     freshness: FreshnessClass
@@ -930,27 +929,27 @@ REGIONS: tuple[RegionSpec, ...] = (
     # ACTIVE INTENT — exact standing clauses with typed lifecycle. EMPTY by default, so a greeting/question
     # produces no false contract. There is deliberately no semantic count/character cap here: physical
     # pressure changes representation later, never by silently dropping obligations in this reducer.
-    RegionSpec("intent",         STABLE,   lambda c: (f"# ACTIVE USER INTENT (verbatim user-authored obligations that still govern this task; '[~]' is only provisional, not user-finalized)\n{render_intent(c['s'].intent, authorities=('user',))}\n\n" if render_intent(getattr(c['s'], 'intent', None), authorities=('user',)) else ""), 0, 100, InstructionClass.USER, FreshnessClass.LIVE, True, EpistemicRole.DIRECTIVE),
-    RegionSpec("task_objective", STABLE,   lambda c: render_task_objective(c["s"]), 0, 97, InstructionClass.USER, FreshnessClass.REVISION_BOUND, True, EpistemicRole.DIRECTIVE),
+    RegionSpec("intent",         lambda c: (f"# ACTIVE USER INTENT (verbatim user-authored obligations that still govern this task; '[~]' is only provisional, not user-finalized)\n{render_intent(c['s'].intent, authorities=('user',))}\n\n" if render_intent(getattr(c['s'], 'intent', None), authorities=('user',)) else ""), 2, 100, InstructionClass.USER, FreshnessClass.LIVE, True, EpistemicRole.DIRECTIVE),
+    RegionSpec("task_objective", lambda c: render_task_objective(c["s"]), 2, 97, InstructionClass.USER, FreshnessClass.REVISION_BOUND, True, EpistemicRole.DIRECTIVE),
     # corrections OUTRANKS task_objective (98 > 97): its own header says the newer exact wording overrides
     # conflicting older objective text, and task_objective's header defers here. USER authority + mandatory —
     # user-authored override wording must never silently degrade (it previously fell through the .get default
     # to (50, TASK_STATE, DERIVED, False): the drift this registry exists to kill).
-    RegionSpec("corrections",    STABLE,   lambda c: (f"# RETAINED USER CORRECTIONS / CLARIFICATIONS (newer exact wording overrides conflicting older objective text. These are not unchecked acceptance requirements; factual claims remain unverified until observed live)\n{render_corrections(c['s'].intent)}\n\n" if render_corrections(getattr(c['s'], 'intent', None)) else ""), 0, 98, InstructionClass.USER, FreshnessClass.REVISION_BOUND, True, EpistemicRole.DIRECTIVE),
-    RegionSpec("task_constraints", STABLE, lambda c: (f"# PARENT TASK CONSTRAINTS (agent-maintained or legacy state — useful, but NOT user-authored authority; never let these override the current request)\n{render_intent(c['s'].intent, authorities=('task', 'legacy'))}\n\n" if render_intent(getattr(c['s'], 'intent', None), authorities=('task', 'legacy')) else ""), 0, 75, InstructionClass.TASK_STATE, FreshnessClass.REVISION_BOUND, False, EpistemicRole.CONTROL_STATE),
+    RegionSpec("corrections",    lambda c: (f"# RETAINED USER CORRECTIONS / CLARIFICATIONS (newer exact wording overrides conflicting older objective text. These are not unchecked acceptance requirements; factual claims remain unverified until observed live)\n{render_corrections(c['s'].intent)}\n\n" if render_corrections(getattr(c['s'], 'intent', None)) else ""), 2, 98, InstructionClass.USER, FreshnessClass.REVISION_BOUND, True, EpistemicRole.DIRECTIVE),
+    RegionSpec("task_constraints", lambda c: (f"# PARENT TASK CONSTRAINTS (agent-maintained or legacy state — useful, but NOT user-authored authority; never let these override the current request)\n{render_intent(c['s'].intent, authorities=('task', 'legacy'))}\n\n" if render_intent(getattr(c['s'], 'intent', None), authorities=('task', 'legacy')) else ""), 2, 75, InstructionClass.TASK_STATE, FreshnessClass.REVISION_BOUND, False, EpistemicRole.CONTROL_STATE),
     # Raw prior user messages are intentionally NOT a region. Exact still-binding clauses are represented
     # above; the last few exchanges live in RECENT CONVERSATION; older raw messages page from ContextFS history.
     # ──────────── TIER 2 · GROUND TRUTH — the world, re-derived from durable stores each turn. ────────────
-    RegionSpec("open_files",     STABLE,   lambda c: (
+    RegionSpec("open_files",     lambda c: (
         "# OPEN FILES (index — path · lines · CURRENT on-disk sha256 · read call. Contents are "
         "NOT here: compose them from the SESSION TAPE (base+patches) when the hashes match, "
         "read_file when they don't)\n"
-    ) + c["artifacts"], 0, 95, InstructionClass.DATA, FreshnessClass.LIVE, False, EpistemicRole.OBSERVATION),
-    RegionSpec("related_code",   STABLE,   lambda c: (f"\n# RELATED CODE (repo map — relevant files & their definitions; read/grep for the actual code)\n{c['discovery']}\n" if c["discovery"] else ""), 1, 45, InstructionClass.DATA, FreshnessClass.DERIVED, False, EpistemicRole.CLAIM),
+    ) + c["artifacts"], 2, 95, InstructionClass.DATA, FreshnessClass.LIVE, False, EpistemicRole.OBSERVATION),
+    RegionSpec("related_code",   lambda c: (f"\n# RELATED CODE (repo map — relevant files & their definitions; read/grep for the actual code)\n{c['discovery']}\n" if c["discovery"] else ""), 3, 45, InstructionClass.DATA, FreshnessClass.DERIVED, False, EpistemicRole.CLAIM),
     # REPO MAP moved to the BYTE-STABLE system prefix (make_build_slice) so it's a prompt-cache PREFIX
     # shared across every turn + subagent, instead of full-price in the volatile user slice. (Region removed.)
-    RegionSpec("skills",         STABLE,   lambda c: (f"# ACTIVE SKILL(S) (loaded instructions — FOLLOW these when addressing the CURRENT REQUEST)\n{render_skills(c['s'].active_skills)}\n\n" if render_skills(c["s"].active_skills) else ""), 2, 65, InstructionClass.TASK_STATE, FreshnessClass.REVISION_BOUND, False, EpistemicRole.PROCEDURE),
-    RegionSpec("memory",         STABLE,   lambda c: (f"# RELEVANT KNOWLEDGE CANDIDATES (selected USER, PROJECT, CRAFT, or legacy leads — not current-world proof; verify when load-bearing)\n{c['memory']}\n\n" if (c["memory"] and not _knowledge_frozen(c.get("s"), c["memory"])) else ""), 2, 20, InstructionClass.DATA, FreshnessClass.HISTORICAL, False, EpistemicRole.CLAIM),
+    RegionSpec("skills",         lambda c: (f"# ACTIVE SKILL(S) (loaded instructions — FOLLOW these when addressing the CURRENT REQUEST)\n{render_skills(c['s'].active_skills)}\n\n" if render_skills(c["s"].active_skills) else ""), 2, 65, InstructionClass.TASK_STATE, FreshnessClass.REVISION_BOUND, False, EpistemicRole.PROCEDURE),
+    RegionSpec("memory",         lambda c: (f"# RELEVANT KNOWLEDGE CANDIDATES (selected USER, PROJECT, CRAFT, or legacy leads — not current-world proof; verify when load-bearing)\n{c['memory']}\n\n" if (c["memory"] and not _knowledge_frozen(c.get("s"), c["memory"])) else ""), 2, 20, InstructionClass.DATA, FreshnessClass.HISTORICAL, False, EpistemicRole.CLAIM),
     # ──────────── TIER 3 · MY STATE — what the agent has established / is doing. ────────────
     # (The SESSION SPINE region AND its session cache retired at graduation — the tape absorbs
     # the digests; the substrate (render_turn_digest, artifact scans) lives on as the seal
@@ -959,7 +958,7 @@ REGIONS: tuple[RegionSpec, ...] = (
     # bases, host-authored patches, external notices — frozen bytes concatenated verbatim. The
     # composition contract lives in the header; hashes let the model string-compare its composed
     # version against the OPEN FILES index without re-reading.
-    RegionSpec("session_tape",   STABLE,   lambda c: ((
+    RegionSpec("session_tape",   lambda c: ((
         "# SESSION TAPE (append-only sealed record: turn digests · file base versions · the "
         "patches YOU already applied (recorded by the host exactly as executed). CURRENT content "
         "of a tracked file = its latest [base] + every later [patch], in order; each patch shows "
@@ -970,17 +969,17 @@ REGIONS: tuple[RegionSpec, ...] = (
         "current-world truth)\n"
         + "".join(getattr(e, "rendered", e) for e in (getattr(c["s"], "session_tape", ()) or ()))
         + "\n") if getattr(c["s"], "session_tape", None) else ""),
-        2, 92, InstructionClass.TASK_STATE, FreshnessClass.HISTORICAL, False, EpistemicRole.CLAIM),
+        1, 92, InstructionClass.TASK_STATE, FreshnessClass.HISTORICAL, False, EpistemicRole.CLAIM),
     # Under the TAPE the conversation region is retired: user asks live verbatim in the digests,
     # assistant replies as frozen [reply] entries — same bytes, billed once instead of every
     # boundary (census 2026-08-05: this region cost 3.8k chars per boundary at full price).
-    RegionSpec("findings",       VOLATILE, lambda c: (f"# YOUR NOTES FROM PRIOR TOOL CALLS (task-scoped observations and claims to REUSE as leads; OPEN FILES stays ground truth for current contents. Per-note tags mark trust: no tag = observed, '(your note)' = summary, '(UNVERIFIED claim)' = not confirmed. Earlier notes are frozen as [finding] entries on the SESSION TAPE)\n{render_findings(_unfrozen_findings(c['s'], c['max_findings']), c['s'].finding_source)}\n\n" if render_findings(_unfrozen_findings(c["s"], c["max_findings"]), c["s"].finding_source) else ""), 3, 82, InstructionClass.TASK_STATE, FreshnessClass.REVISION_BOUND, False, EpistemicRole.CLAIM),
+    RegionSpec("findings",       lambda c: (f"# YOUR NOTES FROM PRIOR TOOL CALLS (task-scoped observations and claims to REUSE as leads; OPEN FILES stays ground truth for current contents. Per-note tags mark trust: no tag = observed, '(your note)' = summary, '(UNVERIFIED claim)' = not confirmed. Earlier notes are frozen as [finding] entries on the SESSION TAPE)\n{render_findings(_unfrozen_findings(c['s'], c['max_findings']), c['s'].finding_source)}\n\n" if render_findings(_unfrozen_findings(c["s"], c["max_findings"]), c["s"].finding_source) else ""), 5, 82, InstructionClass.TASK_STATE, FreshnessClass.REVISION_BOUND, False, EpistemicRole.CLAIM),
     # progress/world carry CLAIM (not the CONTROL_STATE fallback they used to inherit): both are the model's
     # own carried-forward assertions — same epistemic status as findings — never live observation.
-    RegionSpec("progress",       VOLATILE, lambda c: (f"# PROGRESS SIGNALS (small task-scoped observations carried across turns; exact detail remains in @sliceagent/history/)\n{render_progress_signals(c['s'].task.progress_signals)}\n\n" if render_progress_signals(c['s'].task.progress_signals) else ""), 3, 35, InstructionClass.TASK_STATE, FreshnessClass.HISTORICAL, False, EpistemicRole.CLAIM),
-    RegionSpec("world",          VOLATILE, lambda c: (f"# WORLD MODEL (durable task state YOU maintain — your map / inventory / progress; update with world_set, it persists across turns until the task changes)\n{render_world(c['s'].world)}\n\n" if c['s'].world else ""), 3, 85, InstructionClass.TASK_STATE, FreshnessClass.REVISION_BOUND, False, EpistemicRole.CLAIM),
+    RegionSpec("progress",       lambda c: (f"# PROGRESS SIGNALS (small task-scoped observations carried across turns; exact detail remains in @sliceagent/history/)\n{render_progress_signals(c['s'].task.progress_signals)}\n\n" if render_progress_signals(c['s'].task.progress_signals) else ""), 5, 35, InstructionClass.TASK_STATE, FreshnessClass.HISTORICAL, False, EpistemicRole.CLAIM),
+    RegionSpec("world",          lambda c: (f"# WORLD MODEL (durable task state YOU maintain — your map / inventory / progress; update with world_set, it persists across turns until the task changes)\n{render_world(c['s'].world)}\n\n" if c['s'].world else ""), 5, 85, InstructionClass.TASK_STATE, FreshnessClass.REVISION_BOUND, False, EpistemicRole.CLAIM),
     # ──────────── TIER 4 · RECALL — paged out of the slice; fetched on demand. ────────────
-    RegionSpec("threads",        VOLATILE, lambda c: (f"# OTHER OPEN THREADS (parked topics — resume one with switch_topic; do NOT mix them into the current task)\n{c['threads']}\n\n" if c["threads"] else ""), 3, 25, InstructionClass.TASK_STATE, FreshnessClass.DERIVED, False, EpistemicRole.LOCATOR),
+    RegionSpec("threads",        lambda c: (f"# OTHER OPEN THREADS (parked topics — resume one with switch_topic; do NOT mix them into the current task)\n{c['threads']}\n\n" if c["threads"] else ""), 5, 25, InstructionClass.TASK_STATE, FreshnessClass.DERIVED, False, EpistemicRole.LOCATOR),
     # PAGED-OUT HISTORY — the cache MANIFEST: earlier turns of THIS session that are NOT in the slice,
     # each with the exact @sliceagent/history/ read_file call to page it back. Sits beside GHOST INDEX
     # (same "it's paged out, here's the one call to get it"
@@ -990,7 +989,7 @@ REGIONS: tuple[RegionSpec, ...] = (
     # seed time; the anti-loop advisory rides the message channel, and the surviving action-log FOLD
     # below serves failure identity/supersession, which that advisory does NOT consume.)
     # (CURRENT REQUEST renders OUTSIDE the fence in build() — see render_current_request above — not here.)
-    RegionSpec("turn_contract",  VOLATILE, lambda c: (
+    RegionSpec("turn_contract",  lambda c: (
         f"# TURN CONTRACT (host-derived grounding and evidence plan for the exact CURRENT REQUEST; this "
         f"guides context selection and does not replace the user's words or your reasonable judgment)\n"
         f"{render_turn_contract(c['s'])}\n\n"
@@ -1002,13 +1001,13 @@ REGIONS: tuple[RegionSpec, ...] = (
     # CURRENT PROJECT — where the agent is working RIGHT NOW (the frame on top of the immutable boundary):
     # the moved relative-path base + auto-granted file-tool reach, otherwise invisible. Rides the salient
     # tail so a follow-up's referent resolves HERE. Self-suppresses for the single-project case.
-    RegionSpec("focus",          VOLATILE, lambda c: (f"# CURRENT PROJECT (where you are working RIGHT NOW — bare relative paths resolve here and your file tools reach here)\n{c['focus']}\n\n" if c.get("focus") else ""), 6, 78, InstructionClass.DATA, FreshnessClass.LIVE, False, EpistemicRole.OBSERVATION),
-    RegionSpec("worktree",       VOLATILE, lambda c: (f"# REPO STATE (LIVE — current branch & changed files, re-read THIS turn; this is the up-to-date git state — trust it over any session-start project facts)\n{c['worktree']}\n\n" if c.get("worktree") else ""), 6, 92, InstructionClass.DATA, FreshnessClass.LIVE, False, EpistemicRole.OBSERVATION),
+    RegionSpec("focus",          lambda c: (f"# CURRENT PROJECT (where you are working RIGHT NOW — bare relative paths resolve here and your file tools reach here)\n{c['focus']}\n\n" if c.get("focus") else ""), 6, 78, InstructionClass.DATA, FreshnessClass.LIVE, False, EpistemicRole.OBSERVATION),
+    RegionSpec("worktree",       lambda c: (f"# REPO STATE (LIVE — current branch & changed files, re-read THIS turn; this is the up-to-date git state — trust it over any session-start project facts)\n{c['worktree']}\n\n" if c.get("worktree") else ""), 6, 92, InstructionClass.DATA, FreshnessClass.LIVE, False, EpistemicRole.OBSERVATION),
     # OPEN USER REPORT rides ABOVE the error (a stale "done" note can't outrank a user's BROKEN report);
     # both are the highest-authority, freshest tail right above NOW.
-    RegionSpec("user_report",    VOLATILE, lambda c: (f"# OPEN USER REPORT (the user reports this is BROKEN — treat it as an UNRESOLVED blocker; do NOT claim it is done or already working until you have VERIFIED the fix against the real artifact, e.g. run/open it and observe success)\n{c['s'].open_report}\n\n" if c["s"].open_report else ""), 6, 99, InstructionClass.USER, FreshnessClass.LIVE, True, EpistemicRole.CLAIM),
-    RegionSpec("reconciliation", VOLATILE, lambda c: render_reconciliation(c["s"]), 6, 100, InstructionClass.TASK_STATE, FreshnessClass.LIVE, True, EpistemicRole.CONTROL_STATE),
-    RegionSpec("error",          VOLATILE, lambda c: (f"# CURRENT ERROR (unresolved — fix this, verbatim)\n{c['s'].last_error}\n\n" if c["s"].last_error else ""), 6, 98, InstructionClass.TASK_STATE, FreshnessClass.LIVE, True, EpistemicRole.OBSERVATION),
+    RegionSpec("user_report",    lambda c: (f"# OPEN USER REPORT (the user reports this is BROKEN — treat it as an UNRESOLVED blocker; do NOT claim it is done or already working until you have VERIFIED the fix against the real artifact, e.g. run/open it and observe success)\n{c['s'].open_report}\n\n" if c["s"].open_report else ""), 6, 99, InstructionClass.USER, FreshnessClass.LIVE, True, EpistemicRole.CLAIM),
+    RegionSpec("reconciliation", lambda c: render_reconciliation(c["s"]), 6, 100, InstructionClass.TASK_STATE, FreshnessClass.LIVE, True, EpistemicRole.CONTROL_STATE),
+    RegionSpec("error",          lambda c: (f"# CURRENT ERROR (unresolved — fix this, verbatim)\n{c['s'].last_error}\n\n" if c["s"].last_error else ""), 6, 98, InstructionClass.TASK_STATE, FreshnessClass.LIVE, True, EpistemicRole.OBSERVATION),
     # (NOW footer renders OUTSIDE the fence as the outermost tail in build() — see render_now above — not here.)
 )
 
@@ -1017,7 +1016,9 @@ REGIONS: tuple[RegionSpec, ...] = (
 # (build_context_blocks, render_context_selection, external tests, the sliceagent.regions shim)
 # keeps working on the identical shapes. Never hand-edit these: edit REGIONS above. The stale
 # _REGION_META["plan"] key died in this merge (no "plan" region exists in the render order).
-REGION_ORDER = tuple((r.name, r.tier, r.render, r.slot) for r in REGIONS)
+REGION_ORDER = tuple((r.name, r.zone, r.render, r.zone) for r in REGIONS)
+# (legacy 4-tuple shape for external readers; positions 1 and 3 are BOTH the zone —
+#  `tier` and `slot` were the same placement decision written twice.)
 _REGION_META = {r.name: (r.priority, r.instruction_class, r.freshness, r.mandatory) for r in REGIONS}
 _REGION_ROLES = {r.name: r.role for r in REGIONS}
 
@@ -1233,50 +1234,54 @@ def _region_provenance(name: str, ctx: dict) -> tuple[EpistemicRole, tuple[str, 
 # A region name NOT declared here lands in the TAIL — it is structurally impossible for new
 # work to sneak above the tape. The invariants are pinned by test_region_registry's
 # three_zone_partition gate.
-# EMPTY by proof, not by accident (review Task148 consolidated, blocker 2): "skills" claimed
-# HEAD residency on its REVISION_BOUND label, but a successful `skill` tool result mutates
-# active_skills BETWEEN model calls (slice_reducer) — reproduced: one activation shifted the
-# tape offset 11 -> 428 and killed the whole prefix. A HEAD candidate needs proof that NO
-# producer can change its bytes within a session; today nothing qualifies. The system message
-# is the real frozen head; msg1 starts at the tape.
-_HEAD_REGIONS: frozenset = frozenset()
+# ── THE PLACEMENT LAW (one field · one resolver · one factory · one validator) ───────────────
+# Prefix caching admits exactly ONE growing region, so position is a TYPE, not a convention:
+#   zone 0 HEAD  — byte-frozen for the session. EMPTY BY PROOF: "skills" claimed it on a
+#                  REVISION_BOUND label, but a `skill` tool result mutates active_skills BETWEEN
+#                  model calls (reproduced: tape offset 11 -> 428, prefix dead). The genuinely
+#                  frozen head is the SYSTEM message, which is not a region at all.
+#   zone 1 TAPE  — the single append-only stream. Exactly one region.
+#   zone 2+ TAIL — per-turn volatile; the number is presentation order inside the tail.
+# Every model-visible block is built by context_block(), which DERIVES its slot from this law;
+# no producer may pass a raw slot. assert_placement_law() enforces it at the assembly seam.
+HEAD_ZONE, TAPE_ZONE, TAIL_ZONE = 0, 1, 2
 _TAPE_REGION = "session_tape"
-
-# TAIL presentation order (slot numbers preserved from the measured layout: the reading order
-# below the tape — working state first, diagnostics last; 4 stays the reserved blank separator).
-_TAIL_SLOT = {
-    "skills": 2,   # demoted from HEAD (blocker 2): activation mutates it mid-turn
-    "memory": 2,
-    "intent": 2, "task_objective": 2, "corrections": 2, "task_constraints": 2, "open_files": 2,
-    "related_code": 3,
-    "findings": 5, "progress": 5, "world": 5, "threads": 5,
-    # turn_contract/focus/worktree/user_report/reconciliation/error keep slot 6 (very tail)
-}
+# Non-region producers (Active Work, the sealed receipt) are first-class under the law: they
+# declare their zone here instead of hardcoding a slot at their construction site.
+_NON_REGION_ZONES = {"active-work": 2, "active-receipt": 5}
 
 
 def region_zone(name: str) -> int:
-    """0 = HEAD (frozen) · 1 = THE TAPE · 2 = TAIL (volatile). Total: every name has a zone."""
-    if name in _HEAD_REGIONS:
-        return 0
-    if name == _TAPE_REGION:
-        return 1
-    return 2
+    """0 HEAD | 1 TAPE | 2+ TAIL. Accepts a bare region name or a "region:NAME" item id. TOTAL:
+    an unknown name lands in the TAIL, so a producer invented next year cannot place itself
+    above the tape by omission."""
+    key = name[len("region:"):] if str(name).startswith("region:") else str(name)
+    for spec in REGIONS:
+        if spec.name == key:
+            return spec.zone
+    return _NON_REGION_ZONES.get(key, TAIL_ZONE)
 
 
-def assembly_slot(name: str, legacy_slot: int) -> int:
-    """Zone-derived assembly position. HEAD=0, TAPE=1, TAIL=declared order or the legacy slot
-    pushed below the tape (>=2) — a region added later can never silently land in the head."""
-    zone = region_zone(name)
-    if zone < 2:
-        return zone
-    return _TAIL_SLOT.get(name, max(legacy_slot, 2))
+def context_block(item: str, **kw) -> ContextBlock:
+    """THE block factory — the one door into the model-visible stream."""
+    if "slot" in kw:
+        raise TypeError("slot is derived from the placement law; pass the item name instead")
+    return ContextBlock(item_id=item, slot=region_zone(item), **kw)
+
+
+def assert_placement_law(blocks) -> None:
+    """Assembly-seam validator: nothing but the tape may sit at or above the tape's zone."""
+    for b in blocks:
+        if b.slot <= TAPE_ZONE and b.item_id != f"region:{_TAPE_REGION}":
+            raise ValueError(
+                f"placement law: block {b.block_id!r} (item {b.item_id!r}) at zone {b.slot} is at "
+                f"or above the TAPE zone; only {_TAPE_REGION} may live there")
 
 
 def build_context_blocks(ctx: dict) -> tuple[ContextBlock, ...]:
     """Project every non-empty region into the shared elasticity contract."""
-    spine_layout = True   # the tape IS the layout (wave 2)
     out = []
-    for order, (name, _tier, render, slot) in enumerate(REGION_ORDER):
+    for order, (name, _zone, render, _z2) in enumerate(REGION_ORDER):
         if not _region_selected_by_source_needs(name, ctx):
             continue
         content = render(ctx)
@@ -1284,8 +1289,6 @@ def build_context_blocks(ctx: dict) -> tuple[ContextBlock, ...]:
             continue
         priority, authority, freshness, mandatory = _REGION_META.get(
             name, (50, InstructionClass.TASK_STATE, FreshnessClass.DERIVED, False))
-        if spine_layout:
-            slot = assembly_slot(name, slot)
         # HISTORY (no live flag — review note d): the AGENT_SEED_LAYOUT experiments (cache/v2/v3/
         # m1, 2026-08-04) reordered assembly by declared freshness to chase prefix-cache hits.
         # All four failed their pre-registered A/Bs — fresh tokens never dropped (the seed
@@ -1306,23 +1309,23 @@ def build_context_blocks(ctx: dict) -> tuple[ContextBlock, ...]:
             )
         group = f"region:{name}"
         role, scope, source_refs, resource_refs = _region_provenance(name, ctx)
-        out.append(ContextBlock(
-            block_id=f"{group}:full", item_id=group, alternative_group=group,
+        out.append(context_block(
+            group, block_id=f"{group}:full", alternative_group=group,
             priority=priority, instruction_class=authority, freshness=freshness,
             fidelity=Fidelity.FULL, representation_loss=RepresentationLoss.NONE,
-            content=content, mandatory=mandatory, order=order, slot=slot,
+            content=content, mandatory=mandatory, order=order,
             epistemic_role=role, scope=scope, source_refs=source_refs,
             resource_refs=resource_refs,
         ))
         locator = None if mandatory else _locator_region(name, ctx)
         if locator is not None and len(locator[0]) < len(content):
             locator_content, handles, reobservable = locator
-            out.append(ContextBlock(
-                block_id=f"{group}:locator", item_id=group, alternative_group=group,
+            out.append(context_block(
+                group, block_id=f"{group}:locator", alternative_group=group,
                 priority=priority, instruction_class=authority, freshness=freshness,
                 fidelity=Fidelity.LOCATOR, representation_loss=RepresentationLoss.POINTER_ONLY,
                 content=locator_content, handles=tuple(handles), reobservable=reobservable,
-                order=order, slot=slot,
+                order=order,
                 epistemic_role=EpistemicRole.LOCATOR, scope=scope,
                 source_refs=tuple(dict.fromkeys((*source_refs, *(
                     SourceRef("locator", str(handle)) for handle in handles
@@ -1335,7 +1338,9 @@ def build_context_blocks(ctx: dict) -> tuple[ContextBlock, ...]:
 
 
 def render_context_selection(selection: ContextSelection) -> str:
-    """Render one selected alternative per region using the existing stable slot layout."""
+    """Render one selected alternative per item, in placement-law order. THE assembly seam:
+    every model-visible block passes here, so the law is validated here."""
+    assert_placement_law(selection.blocks)
     slots: dict[int, str] = {}
     for block in selection.blocks:
         slots[block.slot] = slots.get(block.slot, "") + block.content
@@ -1348,7 +1353,7 @@ def render_context_selection(selection: ContextSelection) -> str:
     # Runtime layouts (AGENT_SEED_LAYOUT) may REASSIGN block slots beyond the declared range —
     # v3 places turn_contract/intent at 8/9 — so the ceiling must come from the blocks actually
     # selected, not from the declared table alone (which capped at 6 and silently dropped them).
-    max_slot = max(entry[3] for entry in REGION_ORDER)
+    max_slot = max(spec.zone for spec in REGIONS)
     if selection.blocks:
         max_slot = max(max_slot, max(block.slot for block in selection.blocks))
     return "\n".join(slots.get(i, "") for i in range(max_slot + 1))

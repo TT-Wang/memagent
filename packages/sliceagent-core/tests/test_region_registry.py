@@ -14,11 +14,11 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from sliceagent_core import regions as regions_mod  # noqa: E402
-from sliceagent_core.context import (ElasticityController, EpistemicRole,  # noqa: E402
+from sliceagent_core.context import (ContextBlock, ElasticityController, EpistemicRole,  # noqa: E402
                                      Fidelity, FreshnessClass, InstructionClass,
                                      RepresentationLoss)
 from sliceagent_core.regions import (_REGION_META, _REGION_ROLES, _SEALED_SOURCE_REGIONS,  # noqa: E402
-                                     REGION_ORDER, REGIONS, STABLE, VOLATILE, RegionSpec)
+                                     REGION_ORDER, REGIONS, RegionSpec)
 
 CHECKS = []
 
@@ -61,9 +61,8 @@ def runtime_get_defaults_are_unreachable_for_real_regions():
 def field_domains():
     for r in REGIONS:
         assert isinstance(r.name, str) and r.name, r
-        assert r.tier in (STABLE, VOLATILE), (r.name, r.tier)
+        assert isinstance(r.zone, int) and r.zone >= 0, (r.name, r.zone)
         assert callable(r.render), r.name
-        assert isinstance(r.slot, int) and 0 <= r.slot, (r.name, r.slot)
         assert isinstance(r.priority, int) and 0 <= r.priority <= 100, (r.name, r.priority)
         assert isinstance(r.instruction_class, InstructionClass), r.name
         assert isinstance(r.freshness, FreshnessClass), r.name
@@ -84,8 +83,8 @@ def derived_views_share_the_same_objects():
     # Consumers depend on the positional 4-tuple shape AND on the raw renderer callables
     # (test_context_contract_eval calls row[2] directly) — never wrap them.
     for spec, entry in zip(REGIONS, REGION_ORDER):
-        name, tier, render, slot = entry
-        assert (spec.name, spec.tier, spec.slot) == (name, tier, slot)
+        name, zone, render, zone2 = entry
+        assert (spec.name, spec.zone, spec.zone) == (name, zone, zone2)
         assert spec.render is render, spec.name
     for spec in REGIONS:
         assert _REGION_META[spec.name] == (spec.priority, spec.instruction_class,
@@ -135,27 +134,51 @@ def side_registries_dispatch_only_on_registered_names():
 
 
 @check
-def three_zone_partition():
-    # Wave 3 (TAPE-GRADUATION): the geometric law as structure. Every region has exactly one
-    # zone; the HEAD is byte-frozen-only; there is exactly ONE tape; and an unknown (future)
-    # region can never land above the tape.
-    from sliceagent_core.regions import (_HEAD_REGIONS, _TAIL_SLOT, assembly_slot, region_zone)
-    zones = {r.name: region_zone(r.name) for r in REGIONS}
-    assert set(zones.values()) <= {0, 1, 2}
-    assert [n for n, z in zones.items() if z == 1] == ["session_tape"], "exactly ONE tape"
-    for name in _HEAD_REGIONS:
-        assert any(r.name == name for r in REGIONS), f"HEAD region {name} unregistered"
-        meta = _REGION_META[name]
-        assert meta[2] == FreshnessClass.REVISION_BOUND, \
-            f"HEAD region {name} must be byte-frozen (REVISION_BOUND), got {meta[2]}"
+def one_placement_law():
+    # "ONE AND ONLY SCHEMA" (2026-08-05): placement is a single declared field (RegionSpec.zone),
+    # resolved by ONE function (region_zone), applied by ONE factory (context_block), enforced at
+    # ONE seam (assert_placement_law). The legacy pair tier+slot and the side table _TAIL_SLOT are
+    # gone — they were the same decision expressed three times and could drift apart.
+    from sliceagent_core.regions import (assert_placement_law, context_block, region_zone,
+                                         HEAD_ZONE, TAPE_ZONE, TAIL_ZONE, _NON_REGION_ZONES)
+    import dataclasses as _dc
+    fields = {f.name for f in _dc.fields(regions_mod.RegionSpec)}
+    assert "zone" in fields, "the placement field must exist"
+    assert not (fields & {"tier", "slot"}), f"legacy placement fields survive: {fields}"
+    zones = {r.name: r.zone for r in REGIONS}
+    assert [n for n, z in zones.items() if z == TAPE_ZONE] == ["session_tape"], "exactly ONE tape"
+    assert [n for n, z in zones.items() if z == HEAD_ZONE] == [], \
+        "the HEAD is empty by proof — nothing has been shown byte-frozen (skills was not)"
+    # every registered name resolves, non-region producers are declared, unknowns fall to TAIL
     for r in REGIONS:
-        slot = assembly_slot(r.name, r.slot)
-        assert slot >= region_zone(r.name), (r.name, slot)
-        if region_zone(r.name) == 2:
-            assert slot >= 2, f"TAIL region {r.name} above the tape"
-    assert region_zone("some_future_region") == 2
-    assert assembly_slot("some_future_region", 0) >= 2, "future regions default BELOW the tape"
-    assert set(_TAIL_SLOT) <= {r.name for r in REGIONS}, "tail table names must be registered"
+        assert region_zone(r.name) == r.zone and region_zone(f"region:{r.name}") == r.zone
+    for item, z in _NON_REGION_ZONES.items():
+        assert region_zone(item) == z >= TAIL_ZONE, item
+    assert region_zone("a-region-invented-next-year") == TAIL_ZONE
+    # the factory refuses a hand-picked slot, and derives the lawful one
+    try:
+        context_block("intent", block_id="x", alternative_group="x", priority=1,
+                      instruction_class=InstructionClass.DATA, freshness=FreshnessClass.LIVE,
+                      fidelity=Fidelity.FULL, representation_loss=RepresentationLoss.NONE,
+                      content="c", slot=0)
+        raise AssertionError("context_block must reject a caller-supplied slot")
+    except TypeError:
+        pass
+    blk = context_block("intent", block_id="x", alternative_group="x", priority=1,
+                        instruction_class=InstructionClass.DATA, freshness=FreshnessClass.LIVE,
+                        fidelity=Fidelity.FULL, representation_loss=RepresentationLoss.NONE,
+                        content="c")
+    assert blk.slot == zones["intent"]
+    # the seam rejects ANY producer above the tape, including one built by hand
+    rogue = ContextBlock(block_id="rogue:full", item_id="rogue", alternative_group="rogue",
+                         priority=1, instruction_class=InstructionClass.DATA,
+                         freshness=FreshnessClass.LIVE, fidelity=Fidelity.FULL,
+                         representation_loss=RepresentationLoss.NONE, content="c", slot=0)
+    try:
+        assert_placement_law((rogue,))
+        raise AssertionError("the assembly seam must reject a block above the tape")
+    except ValueError:
+        pass
 
 
 @check
@@ -167,18 +190,16 @@ def golden_layout_snapshot():
     # action_history (render-dead: constant placeholder), evidence_result/evidence_detail/
     # quality_evidence_result/quality_evidence_detail (producer-dead: the mechanical admission
     # carries no evidence queries and make_evidence_snapshot returns None on the product path).
-    assert tuple((r.name, r.tier, r.slot) for r in REGIONS) == (
-        ("intent", STABLE, 0), ("task_objective", STABLE, 0), ("corrections", STABLE, 0),
-        ("task_constraints", STABLE, 0), ("open_files", STABLE, 0), ("related_code", STABLE, 1),
-        ("skills", STABLE, 2), ("memory", STABLE, 2),
-        # 2026-08-05 Session Tape (docs/SESSION-TAPE-DESIGN.md + TAPE-GRADUATION.md): THE single
-        # append-only stream — the spine region, conversation region, and cache_manifest region
-        # retired with their machinery in the graduation waves (tag lab-2026-08-05).
-        ("session_tape", STABLE, 2),
-        ("findings", VOLATILE, 3), ("progress", VOLATILE, 3), ("world", VOLATILE, 3),
-        ("threads", VOLATILE, 3), ("turn_contract", VOLATILE, 6),
-        ("focus", VOLATILE, 6), ("worktree", VOLATILE, 6), ("user_report", VOLATILE, 6),
-        ("reconciliation", VOLATILE, 6), ("error", VOLATILE, 6),
+    # Byte-for-byte render order is a pure function of (tuple order, ZONE, renderer output).
+    # Adding/reordering/re-zoning a region must be a DELIBERATE diff to this literal.
+    assert tuple((r.name, r.zone) for r in REGIONS) == (
+        ("intent", 2), ("task_objective", 2), ("corrections", 2),
+        ("task_constraints", 2), ("open_files", 2), ("related_code", 3),
+        ("skills", 2), ("memory", 2), ("session_tape", 1),
+        ("findings", 5), ("progress", 5), ("world", 5),
+        ("threads", 5), ("turn_contract", 6), ("focus", 6),
+        ("worktree", 6), ("user_report", 6), ("reconciliation", 6),
+        ("error", 6),
     )
 
 

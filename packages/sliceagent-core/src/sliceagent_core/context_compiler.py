@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 
 from .active_work import SourceMismatchError, WorkGraph, WorkItem
+from .regions import context_block
 from .context import (
     ContextBlock,
     EpistemicRole,
@@ -181,13 +182,13 @@ def _receipt_block(s, *, order: int = 2) -> ContextBlock | None:
         )
     if artifact_id:
         lines.append(f'- exact receipt: read_file("artifacts/{artifact_id}.md")')
-    return ContextBlock(
-        block_id="active-receipt:full", item_id="active-receipt",
+    return context_block(
+        "active-receipt", block_id="active-receipt:full",
         alternative_group="active-receipt", priority=94,
         instruction_class=InstructionClass.DATA,
         freshness=FreshnessClass.REVISION_BOUND, fidelity=Fidelity.FULL,
         representation_loss=RepresentationLoss.NONE, content="\n".join(lines) + "\n\n",
-        order=order, slot=5, epistemic_role=EpistemicRole.OBSERVATION,
+        order=order, epistemic_role=EpistemicRole.OBSERVATION,
         scope=("task", "latest_segment"),
         source_refs=(ContextSourceRef("artifact", artifact_id or "latest-sealed-receipt"),),
     )
@@ -219,15 +220,12 @@ def compile_active_context(
     # build_context_blocks via regions._graph_trim_selected. This function only PRODUCES the
     # graph-owned blocks and grafts them onto the already-selected stream.
     kept = list(blocks)
-    # Under the spine layout the live work graph is per-turn content and must render BELOW the
-    # frozen spine (slot 2, beside the intent family it replaces); legacy keeps the head slot.
-    _aw_slot = 2   # below the tape, beside the intent family (wave 2: unconditional)
-    kept.append(ContextBlock(
-        block_id="active-work:full", item_id="active-work", alternative_group="active-work",
+    kept.append(context_block(
+        "active-work", block_id="active-work:full", alternative_group="active-work",
         priority=100, instruction_class=InstructionClass.USER,
         freshness=FreshnessClass.REVISION_BOUND, fidelity=Fidelity.FULL,
         representation_loss=RepresentationLoss.NONE, content=active_text,
-        mandatory=True, order=-1, slot=_aw_slot, epistemic_role=EpistemicRole.DIRECTIVE,
+        mandatory=True, order=-1, epistemic_role=EpistemicRole.DIRECTIVE,
         scope=("task",),
         source_refs=tuple(ContextSourceRef("user_utterance", ref.event_id)
                           for item in closure for ref in item.source_refs),
