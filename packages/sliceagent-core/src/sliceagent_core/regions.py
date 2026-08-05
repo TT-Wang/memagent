@@ -1075,14 +1075,61 @@ _SEALED_SOURCE_REGIONS = frozenset({
 })
 
 
+# ── ONE-LANE SELECTION (wave 4 / P4): the graph lane's furniture trim lives HERE, beside every
+# other selection rule — compile_active_context is a pure block PRODUCER now. Name-keyed tables
+# sit on the registry side so the AST probe polices them.
+_GRAPH_ALWAYS = frozenset({"focus", "reconciliation", "session_tape", "memory"})
+_INTENT_FALLBACK = frozenset({"intent", "task_objective", "corrections", "task_constraints"})
+_FILE_KINDS = frozenset({"file", "workspace_file", "path", "workspace", "git"})
+
+
+def _graph_trim_selected(name: str, ctx: dict) -> bool:
+    """When the work graph owns the turn's semantics, only regions its dependency closure
+    references render — roomy furniture was a measured confabulation cue (self-audit A/B).
+    Memoized per build via ctx; a no-op when the graph is inactive."""
+    memo = ctx.get("_graph_needs")
+    if memo is None:
+        s = ctx.get("s")
+        graph = getattr(s, "active_work", None)
+        if graph is None or not getattr(graph, "items", None):
+            memo = False                              # inactive: trim nothing
+        else:
+            closure = graph.dependency_closure()
+            epoch = ctx.get("graph_workspace_epoch")
+            resource_kinds = {ref.kind for item in closure for ref in item.resource_refs
+                              if epoch is None or ref.workspace_epoch == epoch}
+            sources = ctx.get("graph_source_texts") or {}
+            lid = str(ctx.get("graph_logical_id") or "")
+            selected = set(_GRAPH_ALWAYS)
+            if resource_kinds & _FILE_KINDS:
+                selected.update(("open_files", "worktree", "related_code"))
+            if "skill" in resource_kinds or getattr(s, "active_skills", None):
+                selected.add("skills")
+            if any(item.evidence_refs for item in closure):
+                selected.add("findings")
+            if any(item.kind == "request" and item.logical_id != lid
+                   and any(ref.event_id not in sources for ref in item.source_refs)
+                   for item in closure):
+                # Recovery fallback only. A healthy ledger uses Active Work as the sole owner.
+                selected.update(_INTENT_FALLBACK)
+            memo = frozenset(selected)
+        ctx["_graph_needs"] = memo
+    return True if memo is False else name in memo
+
+
 def _region_selected_by_source_needs(name: str, ctx: dict) -> bool:
     """Preselect semantic sources before elasticity chooses their physical fidelity.
+
+    ONE lane (wave 4): both the contract-needs gating below AND the graph-lane furniture trim
+    (_graph_trim_selected) apply here — a region renders iff BOTH admit it.
 
     A pure sealed-execution question should not receive every roomy code, plan, note, and diagnostic region;
     that furniture is neither requested nor proof and was a major confabulation cue in the self-audit A/B.
     Mixed/live questions and effectful turns retain the full task slice. This is relevance routing, not a size
     bound: every selected region can still accumulate elastically within the slice.
     """
+    if not _graph_trim_selected(name, ctx):
+        return False
     contract = getattr(getattr(ctx.get("s"), "intent", None), "turn_contract", None)
     if contract is None:
         return True
@@ -1151,25 +1198,46 @@ def _region_provenance(name: str, ctx: dict) -> tuple[EpistemicRole, tuple[str, 
 # [SPINE: append-only] [TAIL: per-turn]; only what cannot change between turns may precede the
 # spine. Slot override at BUILD time under the flag — the declared table (and the golden layout
 # snapshot pinning it) stays the legacy truth. Relative reading order below the spine preserved.
-_TAPE_LAYOUT_SLOTS = {
-    "skills": 0,                       # revision-bound (skill activation), not per-turn
-    "session_tape": 1,                 # THE append-only stream: new bytes only at its end
-    # memory sits BELOW the spine (R6 remedy B): the lessons memo is rebuilt with every
-    # make_build_slice closure, and under a real vault the k=6 lookup re-ranks as episodes
-    # accumulate — its bytes are NOT cross-turn stable until snapshot-per-session lands.
+# ── THE THREE-ZONE LAYOUT (wave 3: the geometric law as structure, not convention) ──
+# Prefix caching admits exactly ONE growing region. The prompt is therefore three zones:
+#   HEAD (zone 0)  — byte-frozen for the session. ONLY a region whose bytes cannot change
+#                    between turns may live here: any churn above the tape re-bills the whole
+#                    stream (the REPO MAP incident: 3 msg0 refreshes = 3 full-prompt re-bills).
+#   TAPE (zone 1)  — the single append-only stream. Exactly one region.
+#   TAIL (zone 2+) — per-turn volatile. Billed once per turn; internal order is presentation.
+# A region name NOT declared here lands in the TAIL — it is structurally impossible for new
+# work to sneak above the tape. The invariants are pinned by test_region_registry's
+# three_zone_partition gate.
+_HEAD_REGIONS = frozenset({"skills"})          # revision-bound (skill activation), not per-turn
+_TAPE_REGION = "session_tape"
+
+# TAIL presentation order (slot numbers preserved from the measured layout: the reading order
+# below the tape — working state first, diagnostics last; 4 stays the reserved blank separator).
+_TAIL_SLOT = {
     "memory": 2,
     "intent": 2, "task_objective": 2, "corrections": 2, "task_constraints": 2, "open_files": 2,
     "related_code": 3,
     "findings": 5, "progress": 5, "world": 5, "threads": 5,
-    # turn_contract/focus/worktree/user_report/reconciliation/error keep slot 6 (tail)
+    # turn_contract/focus/worktree/user_report/reconciliation/error keep slot 6 (very tail)
 }
 
 
-def tape_layout_slot(name: str, legacy_slot: int) -> int:
-    """Tape-layout slot for a region: mapped, or the legacy slot pushed below the tape (>=2) so a
-    region added later can never silently land in the stable head. (Retires with the native
-    three-zone assembler.)"""
-    return _TAPE_LAYOUT_SLOTS.get(name, max(legacy_slot, 2))
+def region_zone(name: str) -> int:
+    """0 = HEAD (frozen) · 1 = THE TAPE · 2 = TAIL (volatile). Total: every name has a zone."""
+    if name in _HEAD_REGIONS:
+        return 0
+    if name == _TAPE_REGION:
+        return 1
+    return 2
+
+
+def assembly_slot(name: str, legacy_slot: int) -> int:
+    """Zone-derived assembly position. HEAD=0, TAPE=1, TAIL=declared order or the legacy slot
+    pushed below the tape (>=2) — a region added later can never silently land in the head."""
+    zone = region_zone(name)
+    if zone < 2:
+        return zone
+    return _TAIL_SLOT.get(name, max(legacy_slot, 2))
 
 
 def build_context_blocks(ctx: dict) -> tuple[ContextBlock, ...]:
@@ -1185,7 +1253,7 @@ def build_context_blocks(ctx: dict) -> tuple[ContextBlock, ...]:
         priority, authority, freshness, mandatory = _REGION_META.get(
             name, (50, InstructionClass.TASK_STATE, FreshnessClass.DERIVED, False))
         if spine_layout:
-            slot = tape_layout_slot(name, slot)
+            slot = assembly_slot(name, slot)
         # HISTORY (no live flag — review note d): the AGENT_SEED_LAYOUT experiments (cache/v2/v3/
         # m1, 2026-08-04) reordered assembly by declared freshness to chase prefix-cache hits.
         # All four failed their pre-registered A/Bs — fresh tokens never dropped (the seed

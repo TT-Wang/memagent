@@ -126,7 +126,36 @@ def side_registries_dispatch_only_on_registered_names():
         assert literals <= names, f"{fn.__name__} dispatches on unregistered: {literals - names}"
     stray = _name_literals(regions_mod._region_selected_by_source_needs) - names
     assert not stray, f"_region_selected_by_source_needs dispatches on unregistered: {stray}"
+    # _graph_trim_selected keys on TABLES, not name-literal comparisons — police the tables
+    # plus its inline selection tuples (kept in sync here; a rename fails this line).
+    assert regions_mod._GRAPH_ALWAYS <= names, regions_mod._GRAPH_ALWAYS - names
+    assert regions_mod._INTENT_FALLBACK <= names, regions_mod._INTENT_FALLBACK - names
+    assert {"open_files", "worktree", "related_code", "skills", "findings"} <= names
     assert _SEALED_SOURCE_REGIONS <= names, _SEALED_SOURCE_REGIONS - names
+
+
+@check
+def three_zone_partition():
+    # Wave 3 (TAPE-GRADUATION): the geometric law as structure. Every region has exactly one
+    # zone; the HEAD is byte-frozen-only; there is exactly ONE tape; and an unknown (future)
+    # region can never land above the tape.
+    from sliceagent_core.regions import (_HEAD_REGIONS, _TAIL_SLOT, assembly_slot, region_zone)
+    zones = {r.name: region_zone(r.name) for r in REGIONS}
+    assert set(zones.values()) <= {0, 1, 2}
+    assert [n for n, z in zones.items() if z == 1] == ["session_tape"], "exactly ONE tape"
+    for name in _HEAD_REGIONS:
+        assert any(r.name == name for r in REGIONS), f"HEAD region {name} unregistered"
+        meta = _REGION_META[name]
+        assert meta[2] == FreshnessClass.REVISION_BOUND, \
+            f"HEAD region {name} must be byte-frozen (REVISION_BOUND), got {meta[2]}"
+    for r in REGIONS:
+        slot = assembly_slot(r.name, r.slot)
+        assert slot >= region_zone(r.name), (r.name, slot)
+        if region_zone(r.name) == 2:
+            assert slot >= 2, f"TAIL region {r.name} above the tape"
+    assert region_zone("some_future_region") == 2
+    assert assembly_slot("some_future_region", 0) >= 2, "future regions default BELOW the tape"
+    assert set(_TAIL_SLOT) <= {r.name for r in REGIONS}, "tail table names must be registered"
 
 
 @check
