@@ -157,7 +157,8 @@ def run(scn, memory_mode="real"):
     # SESSION TAPE recorder (AGENT_SESSION_TAPE=1): collects the turn's successful file-tool rows
     # so the seal can append host-authored bases/patches (SESSION-TAPE-DESIGN §2). Inert otherwise.
     from sliceagent.tape import TapeRecorder, tape_seal_update
-    tape_on = os.environ.get("AGENT_SESSION_TAPE", "").strip() == "1"
+    from sliceagent_core.regions import tape_on as _tape_on_fn
+    tape_on = _tape_on_fn()   # tape is the DEFAULT architecture; =0 is the kill switch
     recorder = TapeRecorder(tools)
     if tape_on:
         sinks.append(recorder.sink)
@@ -204,10 +205,9 @@ def run(scn, memory_mode="real"):
                 tape_drift += info["drift"]; tape_rebased += len(info["rebased"])
                 tape_compactions += info.get("epoch_folds", 0)   # EVENTS only; gc entry counts are not events
             else:
-                # SESSION SPINE parity with the host: the CLI appends each committed turn's digest
-                # (rendered once, at seal) to the session cache. The bench has no artifact store, so
-                # it feeds the SAME renderer (R3: one renderer serves every producer) with bench-local
-                # turn ids; the region renders it only under AGENT_SESSION_SPINE=1.
+                # Kill-switch path (AGENT_SESSION_TAPE=0): digests still accumulate on the session
+                # cache through the ONE renderer — parity with the CLI host. (The spine REGION died
+                # at graduation; historical spine arm: git tag lab-2026-08-05.)
                 from sliceagent.spine import render_turn_digest as _digest
                 state.continuity.session_spine.append(_digest(
                     artifact_id=f"turn-{i + 1:03d}", session_id=session_id, task_id=scn["name"],
