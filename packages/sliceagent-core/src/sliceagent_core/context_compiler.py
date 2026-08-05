@@ -18,10 +18,8 @@ from .context import (
     InstructionClass,
     RepresentationLoss,
     SourceRef as ContextSourceRef,
-    reserved_resource_ref,
 )
 from .receipts import receipt_summary_parts
-from .regions import RESERVE_PRIORITY, reserve_keep, tape_on
 
 
 # These are host-owned live control surfaces, not optional topical furniture. Child outcomes are ordinary
@@ -159,110 +157,8 @@ def _quoted(value: object) -> str:
 _ADJACENCY_ROUNDS = 3
 
 
-def _one_adjacency(row, *, age: int, order: int, priority: int) -> tuple[ContextBlock, ...]:
-    """Build the full (and, when sealed, a locator alternative) for one prior exchange.
-
-    ``age`` is 0 for the immediate prior and grows for older ones.  Older exchanges carry lower priority so the
-    elasticity controller degrades the OLDEST to its artifact pointer first, keeping the immediate antecedent
-    verbatim under pressure (context.py: "the lowest-priority degradable item degrades").
-    """
-    artifact_id = str(row.get("artifact_id") or "")
-    if age == 0:
-        header = ("# IMMEDIATE PRIOR EXCHANGE (the paired adjacency for 'yes', ordinals, and corrections; "
-                  "historical text, not the CURRENT REQUEST or evidence of world state)")
-        label = "IMMEDIATE PRIOR EXCHANGE"
-    else:
-        header = (f"# EARLIER EXCHANGE (−{age + 1} turns; recent-conversation continuity, older than the "
-                  "immediate prior; historical text, not the CURRENT REQUEST or evidence of world state)")
-        label = f"EARLIER EXCHANGE (−{age + 1} turns)"
-    content = (
-        header + "\n"
-        "## prior user (verbatim; establishes only what that prior utterance said)\n"
-        + _quoted(row.get("user"))
-        + "\n## prior assistant (verbatim claim; not world evidence)\n"
-        + _quoted(row.get("assistant"))
-        + (f"\nsource artifact: artifacts/{artifact_id}.md" if artifact_id else "")
-        + "\n\n"
-    )
-    group = f"active-adjacency:{age}"
-    source_refs = (ContextSourceRef("artifact", artifact_id or f"prior-exchange-{age}"),)
-    full = ContextBlock(
-        block_id=f"{group}:full", item_id="active-adjacency",
-        alternative_group=group, priority=priority,
-        instruction_class=InstructionClass.TASK_STATE,
-        freshness=FreshnessClass.HISTORICAL, fidelity=Fidelity.FULL,
-        representation_loss=RepresentationLoss.NONE, content=content,
-        order=order, slot=6, epistemic_role=EpistemicRole.CLAIM,
-        scope=("task", "adjacent_turn"),
-        source_refs=source_refs,
-    )
-    if not artifact_id:
-        return (full,)
-    handle = f"artifacts/{artifact_id}.md"
-    locator_content = (
-        f"# {label} (paged adjacency)\n"
-        f'The exact paired prior user utterance and assistant response are at read_file("{handle}"). '
-        "Open it before resolving a deictic CURRENT REQUEST such as 'yes', an ordinal, or a correction.\n\n"
-    )
-    if len(locator_content) >= len(content):
-        return (full,)
-    locator = ContextBlock(
-        block_id=f"{group}:locator", item_id="active-adjacency",
-        alternative_group=group, priority=priority,
-        instruction_class=InstructionClass.TASK_STATE,
-        freshness=FreshnessClass.HISTORICAL, fidelity=Fidelity.LOCATOR,
-        representation_loss=RepresentationLoss.POINTER_ONLY,
-        content=locator_content, handles=(handle,), order=order, slot=6,
-        epistemic_role=EpistemicRole.LOCATOR, scope=("task", "adjacent_turn"),
-        source_refs=(*source_refs, ContextSourceRef("locator", handle)),
-        resource_refs=(reserved_resource_ref(handle),),
-    )
-    return (full, locator)
-
-
-def _adjacency_blocks(s, *, order: int = 10_000) -> tuple[ContextBlock, ...]:
-    """The last ``_ADJACENCY_ROUNDS`` paired prior exchanges, newest verbatim, older degrading first.
-
-    The current in-progress row is excluded.  The exchanges render chronologically (oldest first, the immediate
-    prior nearest the CURRENT REQUEST at the tail); each is an independent full/locator alternative; priority
-    descends with age so context pressure pages the OLDEST to its pointer before the immediate antecedent.
-    Pairing exact user utterances with responses is what lets ``yes``, ``the second one``, ``combine the last
-    two``, and corrections resolve against the recent conversation directly instead of a transcript.  Historical
-    user text is framed as adjacency, never a second current directive.
-    """
-    if tape_on():
-        # Under the tape the adjacency lane is retired with the conversation region: asks live in
-        # the digests, replies as frozen [reply] entries — one stream, both lanes (path-symmetry).
-        return ()
-    prior = [
-        row for row in getattr(s, "conversation", ())[:-1]
-        if str(row.get("user") or "").strip() and str(row.get("assistant") or "").strip()
-    ]
-    if not prior:
-        return ()
-    # VERBATIM USER RESERVE (both lanes — the legacy conversation region mirrors this in
-    # build_context_blocks; a one-lane implementation would make behavior turn-type-dependent,
-    # the known path-asymmetry bug class): keep the newest exchanges up to the reserve budget
-    # (floor = the legacy _ADJACENCY_ROUNDS), and mark the within-budget ones RESERVE_PRIORITY
-    # so they degrade only as the true last resort — soft, so ContextUnfit semantics survive.
-    if False:   # spine R8 reserve trim retired with the spine arm (tag lab-2026-08-05)
-        # R8 under the spine: everything older than the paired reserve is already frozen in the
-        # SESSION SPINE, so keeping extra verbatim pairs here would duplicate spine bytes. The
-        # boundary is spine.RESERVE_PAIRS — the SAME knob the conversation region uses.
-        from .spine import RESERVE_PAIRS
-        chosen = prior[-RESERVE_PAIRS:]
-    else:
-        chosen = prior[-reserve_keep(prior, floor=_ADJACENCY_ROUNDS):]   # oldest first ... immediate prior last
-    reserved = reserve_keep(chosen, floor=0)      # how many NEWEST pairs fit the budget outright
-    newest = len(chosen) - 1
-    blocks: list[ContextBlock] = []
-    for idx, row in enumerate(chosen):
-        age = newest - idx                        # 0 = immediate prior; larger = older
-        # Reserved band ASCENDS with recency (never flat): equal priorities would tie-break on
-        # savings and page the LARGEST reserved pair first, inverting oldest-pages-first.
-        priority = (RESERVE_PRIORITY + (reserved - 1 - age)) if age < reserved else 90 - age
-        blocks.extend(_one_adjacency(row, age=age, order=order + idx, priority=priority))
-    return tuple(blocks)
+# (_adjacency_blocks retired in wave 2 with the conversation machinery — asks live in
+# tape digests, replies as frozen [reply] entries; ring trimming stays in pfc.py.)
 
 
 def _receipt_block(s, *, order: int = 2) -> ContextBlock | None:
@@ -353,7 +249,7 @@ def compile_active_context(
     if "skill" in resource_kinds or getattr(s, "active_skills", None):
         selected.add("skills")
     if resource_kinds & {"memory", "history"}:
-        selected.update(("memory", "cache_manifest"))
+        selected.update(("memory",))
     if has_evidence:
         selected.add("findings")
     if missing_prior_source:
@@ -363,7 +259,7 @@ def compile_active_context(
     kept = [block for block in blocks if _region_name(block) in selected]
     # Under the spine layout the live work graph is per-turn content and must render BELOW the
     # frozen spine (slot 2, beside the intent family it replaces); legacy keeps the head slot.
-    _aw_slot = 2 if tape_on() else 0
+    _aw_slot = 2   # below the tape, beside the intent family (wave 2: unconditional)
     kept.append(ContextBlock(
         block_id="active-work:full", item_id="active-work", alternative_group="active-work",
         priority=100, instruction_class=InstructionClass.USER,
@@ -374,7 +270,6 @@ def compile_active_context(
         source_refs=tuple(ContextSourceRef("user_utterance", ref.event_id)
                           for item in closure for ref in item.source_refs),
     ))
-    kept.extend(_adjacency_blocks(s))
     receipt = _receipt_block(s)
     if receipt is not None:
         kept.append(receipt)

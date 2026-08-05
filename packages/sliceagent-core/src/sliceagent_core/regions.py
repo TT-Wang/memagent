@@ -11,7 +11,6 @@ from pfc.py/seed.py — they import FROM here (one direction), so there is no im
 """
 from __future__ import annotations
 
-import os
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -107,27 +106,8 @@ _NO_CAP = 1_000_000
 # real definition directly). Kept importable from regions too for the existing call sites here.
 
 
-def render_cache_manifest(refs) -> str:
-    """PAGED-OUT HISTORY body: one locator line per earlier turn of THIS session (NOT in the slice),
-    each ending with the EXACT read_file call to page it back — so reaching back is copy-paste, not a
-    blind guess. This is the TRIGGER the dead recall channel was missing: a cache the model can't see is
-    a cache it never calls (the read-side analogue of REPO MAP advertising file paths). The turns are
-    read-only virtual files under @sliceagent/history/ — the model reaches for read_file far more readily than a
-    bespoke recall tool (measured 2026-07-06). ``refs`` are locator-only PageRefs from
-    PageTable._episodes_thissession (ONE read seam); this is pure formatting. MOAT: locators only —
-    turn/title/breadcrumb, never content; the turn's body is served on demand from the bounded seal."""
-    if not refs:
-        return ""
-    lines = []
-    for r in refs:
-        if r.handle == "…older":
-            preview = str(r.preview).replace(
-                'read_file("history/index.md")', 'read_file("@sliceagent/history/index.md")',
-            )
-            lines.append(f"- {preview}")            # the "+N earlier" tail (no single-turn call)
-        else:
-            lines.append(f'- {r.preview}  → read_file("@sliceagent/history/turn-{r.handle}.md")')
-    return "\n".join(lines)
+# (render_cache_manifest + the PAGED-OUT HISTORY region retired in wave 2 — the tape's
+# epoch markers + digest locators carry the history affordance.)
 
 
 def render_focus(focus, extra_roots, *, home: str = "", workspace: str = "") -> str:
@@ -172,43 +152,13 @@ def render_threads(refs) -> str:
     return "\n".join(lines)
 
 
-def tape_on() -> bool:
-    """The Session Tape IS the architecture (graduated 2026-08-05, docs/TAPE-GRADUATION.md).
-    AGENT_SESSION_TAPE=0 is the operational kill switch for one release cycle (wave 2 retires
-    it); any other value — including unset — runs the tape. The former three-state
-    stream_mode() ('' | 'spine' | 'tape') died with the spine/locators experiment modes;
-    historical arms reproduce at git tag lab-2026-08-05."""
-    return os.environ.get("AGENT_SESSION_TAPE", "").strip() != "0"
+# (tape_on()/the AGENT_SESSION_TAPE kill switch retired in wave 2 — the tape is
+# unconditional; historical off/spine arms: git tag lab-2026-08-05.)
 
 
 
-def render_conversation(s) -> str:
-    """The RECENT CONVERSATION tier: the last few COMPLETED user<->assistant exchanges (the in-progress
-    one is excluded — its user message is the current task). Ends with a pointer to recall the rest."""
-    prior = [e for e in s.conversation[:-1] if e.get("user")]
-    if tape_on():
-        # R8: the paired verbatim reserve keeps the most recent COMPLETED exchanges (deixis resolves
-        # against assistant text — "go with your recommendation" needs the reply that enumerated the
-        # options); the SESSION SPINE subsumes everything older. Boundary = spine.RESERVE_PAIRS,
-        # shared with the graph lane's adjacency blocks so the two lanes cannot drift.
-        from .spine import RESERVE_PAIRS
-        prior = prior[-RESERVE_PAIRS:]
-    if not prior:
-        return ""
-    lines = []
-    for e in prior:
-        lines.extend(("--- recent exchange ---", "user (verbatim):", str(e["user"])))
-        if e.get("assistant"):
-            lines.extend(("assistant (verbatim):", str(e["assistant"])))
-        lines.append("--- end recent exchange ---")
-    older = s.turns - len(prior) - 1  # turns beyond the ring (minus the current in-progress turn)
-    # Self-sufficient locator, no section pointer: the old "listed in PAGED-OUT HISTORY below" could
-    # dangle TODAY (kernel-graph turns render conversation with no manifest section at all), and any
-    # layout reorder flips "below" to false. The locator alone is the recovery path either way.
-    tail = (f"\n(+{older} earlier turn(s) this session not shown — "
-            "read_file(\"@sliceagent/history/turn-N.md\") to view any, "
-            "read_file(\"@sliceagent/history/index.md\") for the list)") if older > 0 else ""
-    return "\n".join(lines) + tail
+# (render_conversation + the RECENT CONVERSATION region retired in wave 2 — the tape's
+# digest+[reply] entries are the conversational record; ring trimming stays in pfc.py.)
 
 
 # I1 PROVENANCE — narration filter. A FINDING must be a durable FACT, never the model's running
@@ -970,8 +920,6 @@ REGIONS: tuple[RegionSpec, ...] = (
         "# OPEN FILES (index — path · lines · CURRENT on-disk sha256 · read call. Contents are "
         "NOT here: compose them from the SESSION TAPE (base+patches) when the hashes match, "
         "read_file when they don't)\n"
-        if tape_on() else
-        "# OPEN FILES (live — your ground truth; edit based on this. Lines are numbered for citation/reference; the leading number is NOT part of the file — never include it in a str_replace old_string)\n"
     ) + c["artifacts"], 0, 95, InstructionClass.DATA, FreshnessClass.LIVE, False, EpistemicRole.OBSERVATION),
     RegionSpec("related_code",   STABLE,   lambda c: (f"\n# RELATED CODE (repo map — relevant files & their definitions; read/grep for the actual code)\n{c['discovery']}\n" if c["discovery"] else ""), 1, 45, InstructionClass.DATA, FreshnessClass.DERIVED, False, EpistemicRole.CLAIM),
     # REPO MAP moved to the BYTE-STABLE system prefix (make_build_slice) so it's a prompt-cache PREFIX
@@ -996,13 +944,11 @@ REGIONS: tuple[RegionSpec, ...] = (
         "before editing. Digest entries are the sealed record of earlier turns, not "
         "current-world truth)\n"
         + "".join(getattr(e, "rendered", e) for e in (getattr(c["s"], "session_tape", ()) or ()))
-        + "\n") if (tape_on()
-                     and getattr(c["s"], "session_tape", None)) else ""),
+        + "\n") if getattr(c["s"], "session_tape", None) else ""),
         2, 92, InstructionClass.TASK_STATE, FreshnessClass.HISTORICAL, False, EpistemicRole.CLAIM),
     # Under the TAPE the conversation region is retired: user asks live verbatim in the digests,
     # assistant replies as frozen [reply] entries — same bytes, billed once instead of every
     # boundary (census 2026-08-05: this region cost 3.8k chars per boundary at full price).
-    RegionSpec("conversation",   STABLE,   lambda c: ("" if tape_on() else (f"# RECENT CONVERSATION (the last few exchanges this session — for continuity; older turns are paged out — read_file(\"@sliceagent/history/turn-N.md\") fetches one, read_file(\"@sliceagent/history/index.md\") lists all)\n{render_conversation(c['s'])}\n\n" if render_conversation(c["s"]) else "")), 2, 80, InstructionClass.USER, FreshnessClass.HISTORICAL, False, EpistemicRole.CLAIM),
     RegionSpec("findings",       VOLATILE, lambda c: (f"# YOUR NOTES FROM PRIOR TOOL CALLS (task-scoped observations and claims to REUSE as leads; OPEN FILES stays ground truth for current contents. Per-note tags mark trust: no tag = observed, '(your note)' = summary, '(UNVERIFIED claim)' = not confirmed)\n{render_findings(c['s'].findings[-c['max_findings']:], c['s'].finding_source)}\n\n" if render_findings(c["s"].findings[-c["max_findings"]:], c["s"].finding_source) else ""), 3, 82, InstructionClass.TASK_STATE, FreshnessClass.REVISION_BOUND, False, EpistemicRole.CLAIM),
     # progress/world carry CLAIM (not the CONTROL_STATE fallback they used to inherit): both are the model's
     # own carried-forward assertions — same epistemic status as findings — never live observation.
@@ -1014,7 +960,6 @@ REGIONS: tuple[RegionSpec, ...] = (
     # each with the exact @sliceagent/history/ read_file call to page it back. Sits beside GHOST INDEX
     # (same "it's paged out, here's the one call to get it"
     # idiom) so the model has a SEEN target to read; an unseen cache is the dead channel. Locators only.
-    RegionSpec("cache_manifest", VOLATILE, lambda c: "" if tape_on() else (f"\n# PAGED-OUT HISTORY (canonical exact evidence from earlier turns, not current-world truth; read a turn with the shown @sliceagent/history/ locator, read_file(\"@sliceagent/history/index.md\") for the full list, or search_history(\"keywords\") across sessions)\n{c['cache_manifest']}\n" if c.get("cache_manifest") else ""), 3, 30, InstructionClass.DATA, FreshnessClass.HISTORICAL, False, EpistemicRole.LOCATOR),
     # ──────────── TIER 5 · LIVE STATE — what's wrong / where things stand (VOLATILE, high-authority tail). ────────────
     # (The REPEATED/FAILING ACTIONS header + tally regions were deleted 2026-08-03 — render-dead at
     # seed time; the anti-loop advisory rides the message channel, and the surviving action-log FOLD
@@ -1118,9 +1063,6 @@ def _locator_region(name: str, ctx: dict) -> tuple[str, tuple[str, ...], bool] |
     if name == "threads":
         return ("# OTHER OPEN THREADS (details omitted under pressure; switch_topic by task id to refine)\n"
                 + str(ctx.get("threads") or ""), ("task-checkpoints",), True)
-    if name == "cache_manifest":
-        return ('# PAGED-OUT HISTORY\n- read_file("@sliceagent/history/index.md") for the full manifest',
-                ("@sliceagent/history/index.md",), False)
     if name == "focus":
         return ("# CURRENT PROJECT (live locator)\n" + str(ctx.get("focus") or ""),
                 ("workspace",), True)
@@ -1132,9 +1074,9 @@ def _locator_region(name: str, ctx: dict) -> tuple[str, tuple[str, ...], bool] |
 
 _SEALED_SOURCE_REGIONS = frozenset({
     # User/task wording needed to judge compliance or response quality.
-    "intent", "task_objective", "corrections", "task_constraints", "conversation",
+    "intent", "task_objective", "corrections", "task_constraints",
     # Exact/archive recovery.
-    "cache_manifest", "turn_contract",
+    "turn_contract",
     # Subject continuity plus explicit user reports/execution uncertainty remain visible.
     "focus", "user_report", "reconciliation",
 })
@@ -1200,10 +1142,6 @@ def _region_provenance(name: str, ctx: dict) -> tuple[EpistemicRole, tuple[str, 
             handle = str(row.get("artifact_id") or "") if isinstance(row, dict) else ""
             if handle:
                 sources.append(SourceRef("artifact", handle))
-    elif name == "cache_manifest":
-        scope = ("session",)
-        ref = reserved_resource_ref("history/index.md")
-        resources.append(ref); sources.append(SourceRef("historical_view", ref.handle))
     elif name == "skills":
         for item in getattr(s, "active_skills", ()) or ():
             handle = str(item.get("name") or "") if isinstance(item, dict) else ""
@@ -1222,14 +1160,7 @@ def _region_provenance(name: str, ctx: dict) -> tuple[EpistemicRole, tuple[str, 
     return role, scope, tuple(dict.fromkeys(sources)), tuple(dict.fromkeys(resources))
 
 
-def _ring_within_reserve(s) -> bool:
-    """True when the WHOLE conversation ring fits the verbatim reserve budget (then the legacy
-    conversation region is soft-reserved; an over-budget ring degrades normally)."""
-    rows = tuple(getattr(s, "conversation", ()) or ())
-    if not rows:
-        return False
-    total = sum(len(str(r.get("user") or "")) + len(str(r.get("assistant") or "")) for r in rows)
-    return total <= user_reserve_chars()
+# (_ring_within_reserve retired in wave 2 with the conversation region.)
 
 
 # SESSION SPINE LAYOUT (P5 byte-gate finding, 2026-08-05): with the legacy slots, the per-turn
@@ -1247,8 +1178,8 @@ _TAPE_LAYOUT_SLOTS = {
     # accumulate — its bytes are NOT cross-turn stable until snapshot-per-session lands.
     "memory": 2,
     "intent": 2, "task_objective": 2, "corrections": 2, "task_constraints": 2, "open_files": 2,
-    "related_code": 3, "conversation": 4,
-    "findings": 5, "progress": 5, "world": 5, "threads": 5, "cache_manifest": 5,
+    "related_code": 3,
+    "findings": 5, "progress": 5, "world": 5, "threads": 5,
     # turn_contract/focus/worktree/user_report/reconciliation/error keep slot 6 (tail)
 }
 
@@ -1262,7 +1193,7 @@ def tape_layout_slot(name: str, legacy_slot: int) -> int:
 
 def build_context_blocks(ctx: dict) -> tuple[ContextBlock, ...]:
     """Project every non-empty region into the shared elasticity contract."""
-    spine_layout = tape_on()
+    spine_layout = True   # the tape IS the layout (wave 2)
     out = []
     for order, (name, _tier, render, slot) in enumerate(REGION_ORDER):
         if not _region_selected_by_source_needs(name, ctx):
@@ -1292,14 +1223,6 @@ def build_context_blocks(ctx: dict) -> tuple[ContextBlock, ...]:
             priority, authority, freshness, mandatory = (
                 28, InstructionClass.TASK_STATE, FreshnessClass.HISTORICAL, False,
             )
-        if name == "conversation" and _ring_within_reserve(ctx.get("s")):
-            # VERBATIM USER RESERVE, legacy (no-graph) lane — mirrors _adjacency_blocks' reserved
-            # priority so behavior is lane-independent (the known path-asymmetry bug class). SOFT:
-            # the locator alternative below stays available as the true last resort. A ring whose
-            # total chars exceed the budget (giant pastes inside the floor) keeps normal priority
-            # and degrades like any region. (Restored 2026-08-04: the layout-branch deletion above
-            # swept this LIVE elevation by accident; test_user_reserve is the guard.)
-            priority = RESERVE_PRIORITY
         group = f"region:{name}"
         role, scope, source_refs, resource_refs = _region_provenance(name, ctx)
         out.append(ContextBlock(

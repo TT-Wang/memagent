@@ -25,22 +25,18 @@ from .regions import (
     _NO_CAP,
     DISCOVERY_K,
     FULL_FILE_LINES,
-    MANIFEST_TURNS,
     MAX_FINDINGS,
     REGION_LINES,
     build_context_blocks,
-    render_cache_manifest,
     render_current_request,
     render_focus,
     render_now,
     render_context_selection,
     render_regions,
     render_threads,
-    tape_on,
 )
 from .safety import wrap_untrusted
 from .sensory_cortex import (
-    git_branch_status,
     git_worktree_state,
     project_conventions,
     project_root,
@@ -285,7 +281,7 @@ def render_subdir_hints(text: str) -> str:
 
 
 def render_slice(s: Slice, artifacts: str, discovery: str = "", memory: str = "", threads: str = "",
-                 worktree: str = "", repo_map: str = "", cache_manifest: str = "",
+                 worktree: str = "", repo_map: str = "",
                  focus: str = "", *, max_findings: int = MAX_FINDINGS) -> str:
     """Assemble the ONE user string (the moat) by iterating REGION_ORDER — the typed-region layout
     in regions.py. Each region renders its own framed fragment and SUPPRESSES itself when empty;
@@ -294,13 +290,13 @@ def render_slice(s: Slice, artifacts: str, discovery: str = "", memory: str = ""
     (artifacts / discovery / memory / threads) ride in via the ctx dict. SUBDIRECTORY CONTEXT is NOT a
     region here — it's framed by the caller into the NOW footer (make_build_slice → render_now)."""
     return render_regions(_slice_context(
-        s, artifacts, discovery, memory, threads, worktree, repo_map, cache_manifest, focus,
+        s, artifacts, discovery, memory, threads, worktree, repo_map, focus,
         max_findings=max_findings,
     ))
 
 
 def _slice_context(s: Slice, artifacts: str, discovery: str = "", memory: str = "", threads: str = "",
-                   worktree: str = "", repo_map: str = "", cache_manifest: str = "",
+                   worktree: str = "", repo_map: str = "",
                    focus: str = "", open_file_paths=None,
                    *, max_findings: int = MAX_FINDINGS) -> dict:
     """Build the single renderer context consumed by both legacy rendering and the elastic seed plan."""
@@ -312,7 +308,6 @@ def _slice_context(s: Slice, artifacts: str, discovery: str = "", memory: str = 
         "threads": threads,
         "worktree": worktree,
         "repo_map": repo_map,
-        "cache_manifest": cache_manifest,
         "focus": focus,
         # Production passes the live host classification. Legacy/direct render callers have no host seam,
         # so preserving their supplied paths is the only truthful fallback.
@@ -411,18 +406,8 @@ def make_build_slice(state, tools, retriever, memory, task: str, session_id: str
     env_facts += [f"- Platform: {sys.platform}", f"- HOME: {os.path.expanduser('~')}"]
     if cwd:
         env_facts.append(f"- Working directory (cwd): {cwd}")
-    gbs = git_branch_status(cwd) if cwd else ""
-    # Flag values: "1" = full spine layout; "p3" = HEAD-STABILITY ONLY (this site + the lessons_memo
-    # keying below, no spine region) — the P5 attribution baseline, so a head-freeze-alone win can
-    # never be booked to the spine (roadmap P5 baseline policy).
-    if gbs and not tape_on():
-        # R6a: under the spine, the system prefix must be byte-stable across turns — a live
-        # branch/dirty/HEAD line here re-bills every downstream byte on each commit or edit. The
-        # worktree region already carries live git state in the volatile tail; this line is the
-        # legacy placement and is omitted when the spine layout is active.
-        env_facts.append(f"- Git: {gbs}")
-    elif gbs:
-        pass
+    # R6a (unconditional since wave 2): the system prefix stays byte-stable — live git state
+    # renders only in the volatile-tail worktree region (git_worktree_state), never here.
     environment_block = (
         "\n\n# ENVIRONMENT (OBSERVED ground truth at session start — use THESE real values; do NOT "
         "assume a generic sandbox/OS or path)\n" + "\n".join(env_facts)
@@ -474,7 +459,7 @@ def make_build_slice(state, tools, retriever, memory, task: str, session_id: str
         ) else ""
     except Exception:
         repo_map_text = ""
-    if tape_on() and repo_map_text:
+    if repo_map_text:
         # Frozen-stream layouts (spine/tape): the map lives in msg0, ABOVE the stream — any byte
         # change there re-bills the entire prompt (s11 measured: 3 map refreshes as the model
         # created files = full-prompt cache misses). Freeze the FIRST computed map for the
@@ -517,42 +502,23 @@ def make_build_slice(state, tools, retriever, memory, task: str, session_id: str
     # discipline lives in the byte-stable system prefix; the locator region (Half B) is the visible
     # target. The two halves ship together or not at all — either alone reproduces a measured
     # dead-affordance failure (recalls=0 / the 38% manifest).
-    if tape_on():
-        # SESSION TAPE composition contract (SESSION-TAPE-DESIGN §2) — supersedes the Option B
-        # read-first discipline: reads become the exception (hash mismatch / untracked), not the rule.
-        locators_block = (
-            "\n\n# WORKSPACE FILES VIA THE SESSION TAPE\n"
-            "File contents live in the SESSION TAPE as [base] versions plus [patch] entries — "
-            "each patch is the EXACT unified diff of an edit you already made, recorded by the "
-            "host from the file itself, so applying base+patches in order gives you the current "
-            "file verbatim. Every patch shows the resulting sha256; the OPEN FILES index shows "
-            "each file's CURRENT on-disk sha256.\n"
-            "Rules:\n"
-            "1. Hashes match -> your composition IS the file: edit directly, no read needed.\n"
-            "2. File absent from the tape, marked [external], or hash mismatch -> read_file "
-            "before editing.\n"
-            "3. Never guess content that is in neither the tape nor a fresh read.\n"
-            "4. A failed str_replace means your composition drifted: re-read that file once and "
-            "continue from the fresh text."
-        )
-    else:
-        locators_block = (
-        "\n\n# WORKSPACE FILES ARE LOCATORS\n"
-        "WORKSPACE FILES appear as LOCATORS, not contents. Each OPEN FILES line shows a file's "
-        "path, line count, content hash, and the exact call to view it. A file's contents are NOT "
-        "in your context until you read_file() it.\n"
-        "Non-negotiable discipline:\n"
-        "1. Before ANY edit (str_replace / write / insert), call read_file(\"path\") for that file "
-        "in THIS turn — unless you already read it this turn, or your own successful edit this "
-        "turn already showed you the resulting content.\n"
-        "2. The sha256 in a locator is the file's on-disk fingerprint AT THE START OF THIS TURN. "
-        "If it differs from the hash you saw last turn, the file changed between turns — your "
-        "memory of it is STALE; re-read before acting.\n"
-        "3. \"(edited this session)\" marks files you changed in earlier turns. On-disk truth is "
-        "the locator's hash, never your memory of the edit.\n"
-        "4. Never reconstruct file contents from the path, your notes, or earlier turns. A read is "
-        "one cheap call; an edit aimed at remembered text wastes a whole step."
-    ) if False else ""   # Option B standalone discipline retired with the locators flag (tag lab-2026-08-05)
+    # SESSION TAPE composition contract (SESSION-TAPE-DESIGN §2) — supersedes the Option B
+    # read-first discipline: reads become the exception (hash mismatch / untracked), not the rule.
+    locators_block = (
+        "\n\n# WORKSPACE FILES VIA THE SESSION TAPE\n"
+        "File contents live in the SESSION TAPE as [base] versions plus [patch] entries — "
+        "each patch is the EXACT unified diff of an edit you already made, recorded by the "
+        "host from the file itself, so applying base+patches in order gives you the current "
+        "file verbatim. Every patch shows the resulting sha256; the OPEN FILES index shows "
+        "each file's CURRENT on-disk sha256.\n"
+        "Rules:\n"
+        "1. Hashes match -> your composition IS the file: edit directly, no read needed.\n"
+        "2. File absent from the tape, marked [external], or hash mismatch -> read_file "
+        "before editing.\n"
+        "3. Never guess content that is in neither the tape nor a fresh read.\n"
+        "4. A failed str_replace means your composition drifted: re-read that file once and "
+        "continue from the fresh text."
+    )
     system_prefix = (
         SYSTEM_PROMPT.replace("{{MEMORY_MODEL}}", mem_block) + delegation_block
         + env_line + environment_block + workspace_block + conventions_block + repo_map_block
@@ -595,7 +561,6 @@ def make_build_slice(state, tools, retriever, memory, task: str, session_id: str
         resource_kinds = {ref.kind for ref in current_resources}
         needs_files = bool(resource_kinds & {"file", "workspace_file", "path", "workspace", "git"})
         needs_memory = bool(resource_kinds & {"memory", "history"})
-        needs_history = "history" in resource_kinds
         graph_paths = dependency_resource_paths(
             s.active_work, workspace_epoch=current_epoch,
         ) if graph_active else None
@@ -606,12 +571,11 @@ def make_build_slice(state, tools, retriever, memory, task: str, session_id: str
         # slice. This matters on resume: the parked topic keeps its goal, but the new resume message is what
         # the user is asking for RIGHT NOW.
         goal = getattr(getattr(s, "intent", None), "current_request", "") or task
-        if tape_on():
-            # R6b: keyed by the per-turn request, the KNOWLEDGE region's bytes change every turn
-            # while sitting in the head — the memory lookup re-runs and re-renders even when the
-            # task is unchanged. Under the spine the memo keys by the STABLE task, so the region's
-            # bytes hold for the task's duration (snapshot-per-topic, the review's remedy).
-            goal = task or goal
+        # keyed by the per-turn request, the KNOWLEDGE region's bytes change every turn
+        # while sitting in the head — the memory lookup re-runs and re-renders even when the
+        # task is unchanged. Under the spine the memo keys by the STABLE task, so the region's
+        # bytes hold for the task's duration (snapshot-per-topic, the review's remedy).
+        goal = task or goal
         typed_knowledge_push = callable(getattr(memory, "seed_recall", None))
         if goal not in lessons_memo and (typed_knowledge_push or not graph_active or needs_memory):
             # KNOWLEDGE candidates through the ONE read seam (memory-lessons backend) — no sibling recall.
@@ -638,16 +602,15 @@ def make_build_slice(state, tools, retriever, memory, task: str, session_id: str
         # identity + turn ordinal: a new turn (seal/reset increments s.turns) naturally
         # invalidates; nothing persists across turns. (The interim AGENT_FREEZE_OPEN_FILES
         # full-body freeze was subsumed by this branch and retired 2026-08-05 — review note b.)
-        if tape_on():
-            _key = (id(s), int(getattr(s, "turns", 0) or 0))
-            _frozen = getattr(make_build_slice, "_frozen_locators", None)
-            if _frozen is None:
-                _frozen = {}
-                make_build_slice._frozen_locators = _frozen
-            if _key not in _frozen:
-                _frozen.clear()            # keep exactly one turn's snapshot — no growth
-                _frozen[_key] = render_file_locators(s, tools, selected_paths=graph_paths)
-            artifacts = _frozen[_key]
+        _key = (id(s), int(getattr(s, "turns", 0) or 0))
+        _frozen = getattr(make_build_slice, "_frozen_locators", None)
+        if _frozen is None:
+            _frozen = {}
+            make_build_slice._frozen_locators = _frozen
+        if _key not in _frozen:
+            _frozen.clear()            # keep exactly one turn's snapshot — no growth
+            _frozen[_key] = render_file_locators(s, tools, selected_paths=graph_paths)
+        artifacts = _frozen[_key]
         open_file_paths = physical_active_files(
             s, tools, s.active_files if graph_paths is None else graph_paths,
         )
@@ -665,12 +628,8 @@ def make_build_slice(state, tools, retriever, memory, task: str, session_id: str
         # SENSORY CORTEX — LIVE world-state: re-probe git each build (current branch + changed files), so
         # the slice always carries the up-to-date working-tree state instead of a stale snapshot.
         worktree = git_worktree_state(cwd) if cwd and (not graph_active or needs_files) else ""
-        # PAGED-OUT HISTORY manifest — HISTORY / HIPPOCAMPUS made visible through @sliceagent/history/
-        # files (the dead active-ask channel's missing trigger). Same PageTable read seam as code/notes/xsession;
-        # bounded to MANIFEST_TURNS locators (moat), self-suppresses with no durable log (NullMemory => []).
-        manifest_refs = pages.lookup(session_id, kind="episode-thissession", k=MANIFEST_TURNS) \
-            if (not graph_active or needs_history) else ()
-        cache_manifest = render_cache_manifest(manifest_refs)
+        # (PAGED-OUT HISTORY manifest retired in wave 2 — tape digests carry per-turn locators
+        # and the epoch marker carries the index affordance; search_history remains the recall tool.)
         # ACTIVE FOCUS — surface the file-tool reach beyond the workspace (auto-granted when the shell
         # works on an external dir, but otherwise INVISIBLE → the model defaulted to the workspace frame
         # and lost the thread across turns). Carries naturally: the host's extra roots persist per session.
@@ -680,7 +639,7 @@ def make_build_slice(state, tools, retriever, memory, task: str, session_id: str
             focus_text = render_focus(_focus_path, _extra_roots, home=os.path.expanduser("~"), workspace=tools.root())
         ctx = _slice_context(
             s, artifacts, discovery, lessons_memo[goal], threads,
-            worktree, "", cache_manifest, focus_text,  # repo_map rides the cacheable SYSTEM prefix
+            worktree, "", focus_text,  # repo_map rides the cacheable SYSTEM prefix
             open_file_paths=open_file_paths, max_findings=_NO_CAP,
         )
         # 2B + review fix: the <workspace_context> envelope wraps reference STATE only. The live request frames
