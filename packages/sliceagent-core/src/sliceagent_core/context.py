@@ -163,6 +163,19 @@ class ContextBlock:
     def __post_init__(self) -> None:
         if not self.block_id or not self.item_id or not self.alternative_group:
             raise ValueError("context block identity fields must be non-empty")
+        # FACTORY-BYPASS GUARD (adversarial review at 124dc13): placement is a law, not a field a
+        # caller may choose. regions.context_block() derives `slot`; constructing a block directly
+        # still cannot lie about where it belongs. Lazy + best-effort import so this dataclass
+        # stays usable from contexts that never load the region registry.
+        try:
+            from .regions import region_zone
+        except Exception:  # noqa: BLE001 — no registry available: nothing to enforce
+            return
+        want = region_zone(self.item_id)
+        if self.slot != want:
+            raise ValueError(
+                f"placement law: block {self.block_id!r} (item {self.item_id!r}) declares slot "
+                f"{self.slot} but its item belongs in zone {want}")
         if self.representation_loss is not RepresentationLoss.NONE and not (self.handles or self.reobservable):
             raise ValueError(
                 f"incomplete context block {self.block_id!r} has no recovery handle or re-observation path"

@@ -923,9 +923,9 @@ def render_now(hints: str = "") -> str:
 # so the iteration equals the old hand-ordered concatenation BYTE-FOR-BYTE. (Provenance framing for
 # # YOUR NOTES / the # OPEN USER REPORT blocker / the # REPEATED-FAILING header all live in the
 # literals below — relocated verbatim from render_slice, not duplicated.)
-# Field order: RegionSpec(name, tier, render, slot, priority, instruction_class, freshness, mandatory, role)
+# Field order: RegionSpec(name, render, zone, priority, instruction_class, freshness, mandatory, role)
 REGIONS: tuple[RegionSpec, ...] = (
-    # ──────────── TIER 1 · INTENT — what the user wants (the contract). STABLE, slot-0: leads the cache prefix. ────────────
+    # ──────────── TIER 1 · INTENT — what the user wants (the contract). zone 2: the tail's leading band. ────────────
     # ACTIVE INTENT — exact standing clauses with typed lifecycle. EMPTY by default, so a greeting/question
     # produces no false contract. There is deliberately no semantic count/character cap here: physical
     # pressure changes representation later, never by silently dropping obligations in this reducer.
@@ -1270,12 +1270,25 @@ def context_block(item: str, **kw) -> ContextBlock:
 
 
 def assert_placement_law(blocks) -> None:
-    """Assembly-seam validator: nothing but the tape may sit at or above the tape's zone."""
+    """Assembly-seam validator: EVERY block must sit at the zone its item declares.
+
+    The first version asked only "is a block at zone<=1 named tape?" — it trusted self-claimed
+    identity, so a forged block calling itself `region:session_tape` at slot 0 walked straight
+    through and resurrected the very hole the law exists to close (adversarial review, 124dc13).
+    The law is now positional equality against the ONE resolver, which also kills tape-at-5,
+    misplaced-intent, and bare-vs-prefixed naming drift in a single assertion — plus a
+    cardinality check, because "exactly one growing region" is the physical premise."""
+    tapes = 0
     for b in blocks:
-        if b.slot <= TAPE_ZONE and b.item_id != f"region:{_TAPE_REGION}":
+        want = region_zone(b.item_id)
+        if b.slot != want:
             raise ValueError(
-                f"placement law: block {b.block_id!r} (item {b.item_id!r}) at zone {b.slot} is at "
-                f"or above the TAPE zone; only {_TAPE_REGION} may live there")
+                f"placement law: block {b.block_id!r} (item {b.item_id!r}) sits at zone {b.slot} "
+                f"but its item declares zone {want}")
+        if want == TAPE_ZONE:
+            tapes += 1
+    if tapes > 1:
+        raise ValueError(f"placement law: {tapes} blocks in the TAPE zone; exactly one is allowed")
 
 
 def build_context_blocks(ctx: dict) -> tuple[ContextBlock, ...]:

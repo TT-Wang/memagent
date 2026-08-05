@@ -21,8 +21,10 @@ real, not by-construction: message-list overhead is computed analytically (brack
 separators) and nested-value serializations are computed independently, so any change in
 json.dumps behavior or a bad span split breaks the sum.
 
-Token estimates use the repo's own byte→token ratio (sliceagent_core.execution._TOKENS_PER_BYTE)
-when importable; the column is labeled est_tokens and is NEVER provider-exact. Raw char and UTF-8
+Token estimates are CALIBRATED per run from the provider's own ledger (meter.in_total / summed
+prompt bytes) — the repo's static _TOKENS_PER_BYTE is a runtime budgeting constant measured 1.63x
+off the billed ratio, which corrupted every dollar attribution while leaving shares intact. A
+>10% mismatch between the category sum and meter.in_total marks the run INVALID. Raw char and UTF-8
 byte counts are always reported alongside.
 
 Also measured per call: whether the seed user message (msg1) is byte-identical to the previous
@@ -254,10 +256,32 @@ def summarize(res: dict, calls: list[dict], *, scenario: str, label: str, wall_s
         rows.append({"call": i, "turn": turn, "first_of_turn": bool(first), "n_msgs": len(call["msgs"]),
                      "n_schemas": call["n_schemas"], "whole_chars": whole, "gap": gap,
                      "msg1_same_as_prev": msg1_same, "parts": parts})
+    # CALIBRATED TOKEN ESTIMATE (2026-08-05 fix): the repo's static byte->token ratio is a RUNTIME
+    # budgeting constant, not a billing one — measured against this very run it was 2.61
+    # chars/token while the provider billed 4.26, inflating every est_tokens by ~1.63x. Shares
+    # were unaffected (uniform scale) but est_tokens x price — the number an optimization
+    # decision reads — was 63% too high. Calibrate from the run's own provider ledger.
+    prompt_bytes = sum(a["bytes"] for a in totals.values())
+    meter_in = int(res.get("in_total") or 0)
+    calibrated = (meter_in / prompt_bytes) if (prompt_bytes and meter_in) else None
+    ratio = calibrated if calibrated else _TPB
+    estimator = ("calibrated(meter.in_total/prompt_bytes)" if calibrated
+                 else f"UNCALIBRATED {_ESTIMATOR}")
     for agg in list(totals.values()) + list(rollup.values()):
-        agg["est_tokens"] = _est_tokens(agg["bytes"])
+        agg["est_tokens"] = int(round(agg["bytes"] * ratio))
+    # SELF-CHECK: the categories must reconstruct the provider's own input total. This is the
+    # alarm that would have caught the 1.63x drift the day it appeared.
+    est_sum = sum(a["est_tokens"] for a in totals.values())
+    drift = abs(est_sum - meter_in) / meter_in if meter_in else 0.0
+    if meter_in and drift > 0.10:
+        invalid = (invalid + " | " if invalid else "") + (
+            f"CENSUS ESTIMATOR DRIFT: categories sum to {est_sum:,} est tokens but the provider "
+            f"billed {meter_in:,} input tokens ({drift:.0%} off) — dollar attributions are not "
+            "trustworthy")
     return {
-        "label": label, "scenario": scenario, "estimator": _ESTIMATOR, "tokens_per_byte": _TPB,
+        "label": label, "scenario": scenario, "estimator": estimator,
+        "tokens_per_byte": round(ratio, 6), "static_tokens_per_byte": _TPB,
+        "estimator_drift_vs_meter": round(drift, 4),
         "passed": res.get("passed"), "detail": res.get("detail"), "wall_s": round(wall_s, 1),
         "invalid": invalid, "calls": len(calls),
         "calls_outside_turn_map": max(0, len(calls) - len(turn_of)),
