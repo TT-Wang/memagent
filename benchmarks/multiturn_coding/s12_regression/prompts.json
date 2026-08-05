@@ -1,0 +1,14 @@
+[
+"Read README.md and the mathlib/ package to orient. Then add a module docstring to mathlib/seq.py describing each helper in one line.",
+"Add median(seq) to mathlib/stats.py (no imports; even-length averages the middle pair). Quick check with a couple of calls.",
+"normalize() in mathlib/seq.py should also accept tuples and generators, not just lists. Keep its behavior otherwise.",
+"Add clamp(seq, lo, hi) to mathlib/seq.py returning a new list with values clamped.",
+"scale(seq, k) currently multiplies; make k=0 return a list of zeros of the SAME length (it already does — add an explicit test for it plus a docstring note).",
+"normalize() should drop NaN values (float('nan')) before sorting. Tests.",
+"Quick one: add VERSION = '0.2' to mathlib/__init__.py.",
+"Add a percentile(seq, p) to mathlib/stats.py (nearest-rank method). Tests.",
+"normalize() is called a lot — micro-optimize it (avoid double iteration if easy) while keeping the exact same output contract. Show a quick before/after check.",
+"Add top_k(seq, k) to mathlib/seq.py returning the k largest values, descending.",
+"Write mathlib/cli.py: `python -m mathlib.cli summary 1 2 3` prints the summary dict.",
+"Final: add CHANGELOG.md with one line per change made this session."
+]

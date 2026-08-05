@@ -1,0 +1,1 @@
+{"name": "s12_regression", "turns": 12, "stressor": "PASS_TO_PASS: planted distant callers depend on edited helpers' contracts; headline = fixed-but-broke-something (REGRESS section)", "max_steps_per_turn": 12, "use_code_index": false}
