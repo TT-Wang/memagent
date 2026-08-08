@@ -123,7 +123,10 @@ def render_findings_frames_by_source_no_re_derive():
     findings = ["uses a queue", "the task is done"]
     sources = {"uses a queue": "tool-note", "the task is done": "claim"}
     out = render_findings(findings, sources)
-    assert "verify against OPEN FILES" in out          # tool-note framing
+    # the referent moved (2026-08-05): OPEN FILES is a HASH INDEX, so "verify against OPEN
+    # FILES" named an object that cannot verify anything and left read_file as the only
+    # literal way to obey. The framing must still demand verification — against the text.
+    assert "verify against the current file text or a tool result" in out
     assert "UNVERIFIED" in out                          # claim framing
     assert "do not re-derive" not in out.lower()        # the dangerous framing is GONE
     assert "UNVERIFIED" in render_findings(["legacy"], {"legacy": "unknown-source"}), \

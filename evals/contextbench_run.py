@@ -154,6 +154,16 @@ def _run_one(task: dict, workspace: str, model: str, max_steps: int,
     state = Slice(); state.reset(prompt)
     tools = LocalToolHost(workspace)
     tools.registry.register(make_grep_tool(tools))
+    # PRODUCTION ACTIVE-WORK PARITY (the same defect benchmarks/run.py carried until the cost
+    # review): with no bound provider, LocalToolHost.schemas() keeps the six legacy semantic-state
+    # tools AND injects the 351-char `note` arg into EVERY schema — 12,697 chars/call that the CLI
+    # (cli.py:_bind_active_work_host) never pays. Binding alone is schema reduction, not parity, so
+    # the turn below is admitted with stable ids too: without a request ROOT, update_work stays
+    # advertised in a state where it errors ("no active request root").
+    # Measured single-fix effect (run-tape-parity-2026-08-05, same 50 tasks vs the unbound arm):
+    # cost $0.3514 -> $0.3308, median peak 32,377 -> 26,022, fileF1 0.579 -> 0.609.
+    if callable(getattr(tools, "bind_active_work", None)):
+        tools.bind_active_work(lambda: (state.active_work, "L1", 0))
     retriever = make_code_index(workspace)
     # PRODUCTION PARITY (same defect as benchmarks/run.py): the original arm passed memory=None, so
     # the model never even SAW the search_history tool or the manifest region — a different tool
@@ -251,7 +261,8 @@ def _run_one(task: dict, workspace: str, model: str, max_steps: int,
                         base_url=os.environ.get("LLM_BASE_URL") or (_prov or {}).get("base_url") or _cfg.base_url or None)
     else:
         llm = OpenAILLM(model=model)
-    record_user(state, prompt)
+    record_user(state, prompt, source_artifact="turn-001", source_event_id="ev-001",
+                source_text=prompt, logical_id="L1", workspace_epoch=0)
     build = make_build_slice(state, tools, retriever, memory, prompt, session_id, model_id=model)
     t0 = time.time()
     result = run_turn(build_slice=build, llm=llm, tools=tools, dispatch=dispatch,
