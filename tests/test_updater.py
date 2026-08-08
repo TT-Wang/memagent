@@ -114,13 +114,14 @@ def updater_replaces_an_old_exact_pin_via_canonical_install_command():
         os_name="posix",
         python_version=(3, 12),
         neutral_cwd="/neutral",
+        resolve_latest=lambda: "0.3.2",
     )
     assert rc == 0 and len(calls) == 1
     argv, kwargs = calls[0]
     assert argv == [
         os.path.realpath(uv_path), "tool", "install", "--force", "--upgrade",
         "--python", "3.12", "--no-config", "--default-index", "https://pypi.org/simple",
-        "sliceagent[tui]",
+        "sliceagent[tui]==0.3.2",
     ], argv
     assert kwargs["cwd"] == "/neutral" and kwargs["check"] is False
     assert kwargs.get("shell") is not True, "the updater must never invoke a shell"
@@ -132,6 +133,28 @@ def updater_replaces_an_old_exact_pin_via_canonical_install_command():
     assert not any(key.startswith(("UV_", "PIP_")) for key in kwargs["env"]
                    if key not in ("UV_TOOL_DIR", "UV_TOOL_BIN_DIR"))
     assert any("Restart SliceAgent" in line for line in messages)
+
+
+@check
+def updater_fails_closed_when_the_latest_version_cannot_be_resolved():
+    # Review finding: the update command previously asked uv for an unpinned "latest". The pinned
+    # path resolves the version FIRST; an unresolvable version is a closed door, never a fallback
+    # to an unbounded install.
+    prefix, _, _ = _uv_tool()
+    calls, messages = [], []
+    uv_path = os.path.join(os.path.expanduser("~"), ".local", "bin", "uv")
+    rc = run_update(
+        prefix=prefix,
+        executable="/tool/python",
+        distribution=_Dist(),
+        which=lambda name: uv_path if name == "uv" else None,
+        runner=lambda argv, **kwargs: calls.append(argv) or SimpleNamespace(returncode=0),
+        out=messages.append,
+        os_name="posix",
+        resolve_latest=lambda: None,
+    )
+    assert rc == 1 and calls == [], ("no install may run without a resolved version", calls)
+    assert any("Could not resolve" in line for line in messages)
 
 
 @check

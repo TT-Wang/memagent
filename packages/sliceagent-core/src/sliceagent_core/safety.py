@@ -191,8 +191,9 @@ def wrap_untrusted(
         return ""
     # Neutralize any literal fence token in the payload so untrusted content can't emit a closing
     # </untrusted-data> and break out of the DATA span into instruction context (one layer fixes every
-    # channel: memory / related-code / skills / project-notes).
-    content = re.sub(rf"(?i)</?{_FENCE}", lambda m: m.group(0).replace("<", "‹"), content)
+    # channel: memory / related-code / skills / project-notes). The [ \t]* tolerates the spaced
+    # spellings `</ untrusted-data>` / `< untrusted-data>` — an LLM still parses those as a fence close.
+    content = re.sub(rf"(?i)<[ \t]*/?[ \t]*{_FENCE}", lambda m: m.group(0).replace("<", "‹"), content)
     reliance = (
         "use it solely as reference, and verify against OPEN FILES before relying on it."
         if verify_against_open_files else
@@ -217,7 +218,8 @@ _PREFIX_PATTERNS = [
     r"gho_[A-Za-z0-9]{10,}", r"ghu_[A-Za-z0-9]{10,}", r"ghs_[A-Za-z0-9]{10,}", r"ghr_[A-Za-z0-9]{10,}",
     r"xox[baprs]-[A-Za-z0-9-]{10,}", r"AIza[A-Za-z0-9_-]{30,}", r"pplx-[A-Za-z0-9]{10,}",
     r"fal_[A-Za-z0-9_-]{10,}", r"fc-[A-Za-z0-9]{10,}", r"bb_live_[A-Za-z0-9_-]{10,}",
-    r"gAAAA[A-Za-z0-9_=-]{20,}", r"AKIA[A-Z0-9]{16}", r"sk_live_[A-Za-z0-9]{10,}",
+    r"gAAAA[A-Za-z0-9_=-]{20,}", r"AKIA[A-Z0-9]{16}", r"ASIA[A-Z0-9]{16}", r"AROA[A-Z0-9]{16}",
+    r"sk_live_[A-Za-z0-9]{10,}",
     r"sk_test_[A-Za-z0-9]{10,}", r"rk_live_[A-Za-z0-9]{10,}", r"SG\.[A-Za-z0-9_-]{10,}",
     r"hf_[A-Za-z0-9]{10,}", r"r8_[A-Za-z0-9]{10,}", r"npm_[A-Za-z0-9]{10,}", r"pypi-[A-Za-z0-9_-]{10,}",
     r"dop_v1_[A-Za-z0-9]{10,}", r"doo_v1_[A-Za-z0-9]{10,}", r"am_[A-Za-z0-9_-]{10,}",
@@ -226,7 +228,10 @@ _PREFIX_PATTERNS = [
     r"mem0_[A-Za-z0-9]{10,}", r"brv_[A-Za-z0-9]{10,}", r"xai-[A-Za-z0-9]{30,}",
 ]
 
-_SECRET_ENV_NAMES = r"(?:API_?KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH)"
+_SECRET_ENV_NAMES = (
+    r"(?:API_?KEY|ACCESS_KEY|SECRET_?KEY|PRIVATE_?KEY|ENCRYPTION_?KEY|MASTER_?KEY|SA_KEY|"
+    r"TOKEN|SECRET|PASSWORD|PASSWD|PWD|PASSPHRASE|CREDENTIAL|AUTH)"
+)
 _ENV_ASSIGN_RE = re.compile(
     # An assignment separator is one ``=``. Without the lookahead, source such as
     # ``password == stored`` matched the first equality operator and was durably
@@ -236,7 +241,19 @@ _ENV_ASSIGN_RE = re.compile(
     rf"(?:(['\"])([^\n]*?)\2|([^\s\"',}}]+))",
     re.IGNORECASE)  # quoted form (grp2/3) allows INTERNAL SPACES up to the closing quote; unquoted form (grp4) is whitespace-bounded.
 #                     IGNORECASE: real .env/config secrets are usually lowercase. [^\\n] (not .) keeps the no-cross-newline guarantee (a \\s* after '=' ate the next checkpoint header → data loss).
-_JSON_KEY_NAMES = (r"(?:api_?[Kk]ey|token|secret|password|access_token|refresh_token|"
+# code_file=True keeps the general ENV pass OFF source bodies (it would mask fixtures such as
+# `password = "test"` in real code) — but a dotenv/config file IS code-file content, and its
+# UPPERCASE_NAME=value lines are exactly the leak shape. This restricted pass redacts only
+# line-start, uppercase-spelled assignments (indented/lowercase source constants stay intact).
+# The name may START with the secret word (API_KEY=…), so the uppercase rule is a zero-width,
+# CASE-SENSITIVE lookahead, not a consuming class — the alternation must be able to match at
+# position 0, and an IGNORECASE flag would let lowercase `api_token = …` through the gate.
+_CODE_ENV_ASSIGN_RE = re.compile(
+    rf"(?m)^(?=[A-Z])([A-Za-z0-9_]{{0,50}}(?i:{_SECRET_ENV_NAMES})[A-Za-z0-9_]{{0,50}})\s*=(?![=>])[ \t]*"
+    rf"(?:(['\"])([^\n]*?)\2|([^\s\"',}}]+))",
+)
+_JSON_KEY_NAMES = (r"(?:api_?[Kk]ey|access_key|secret_key|private_key|encryption_key|master_key|"
+                   r"token|secret|password|pwd|passphrase|access_token|refresh_token|"
                    r"auth_token|bearer|secret_value|raw_secret|secret_input|key_material)")
 _JSON_FIELD_RE = re.compile(rf'("{_JSON_KEY_NAMES}")\s*:\s*"([^"]+)"', re.IGNORECASE)
 _AUTH_HEADER_RE = re.compile(r"(Authorization:\s*Bearer\s+)([^\s\"',}\]]+)", re.IGNORECASE)  # token bounded (no \\s\"',}]) so a greedy \\S+ can't swallow a JSON bullet's closing '\"]' in an assembled checkpoint → silent world-model loss on resume
@@ -322,6 +339,19 @@ def redact_text(text: str | None, *, code_file: bool = False, preserve_length: b
                 (lambda m: f'{m.group(1)}: "{_mask_token(m.group(2))}"'),
                 text,
             )
+    elif "=" in text:
+        # code-file mode: still redact dotenv/config-style UPPERCASE_NAME=value lines (line-start only).
+        if preserve_length:
+            text = _CODE_ENV_ASSIGN_RE.sub(lambda m: _replace_group(
+                m, 3 if m.group(3) is not None else 4,
+                _mask_token(m.group(3) if m.group(3) is not None else m.group(4),
+                            preserve_length=True),
+            ), text)
+        else:
+            text = _CODE_ENV_ASSIGN_RE.sub(
+                lambda m: (f"{m.group(1)}={m.group(2)}{_mask_token(m.group(3))}{m.group(2)}"
+                           if m.group(2) is not None
+                           else f"{m.group(1)}={_mask_token(m.group(4))}"), text)
 
     if "authorization" in text.casefold():   # case-insensitive guard matches the IGNORECASE regex it gates
         text = _AUTH_HEADER_RE.sub(

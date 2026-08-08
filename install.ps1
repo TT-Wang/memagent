@@ -62,7 +62,7 @@ function Test-UvCleanVariable([string]$Name) {
     return (
         $Name -like "UV_*" -or $Name -like "PIP_*" -or
         $Name -in @("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV", "AWS_SECRET_ACCESS_KEY") -or
-        $Name -match "(_API_KEY|_TOKEN)$"
+        $Name -match "(_API_KEY|_TOKEN|_KEY|_SECRET|_PASSWORD|_PASSWD|_PWD|_PASSPHRASE|_CREDENTIAL|_AUTH|_ACCESS_KEY|_WEBHOOK|_DSN|_URL)$"
     )
 }
 

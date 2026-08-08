@@ -2301,7 +2301,10 @@ def main() -> None:
             CatastrophicSafeguardHook(CatastrophicSafeguard()),
         ]
         if hook_cfg.verify_cmd:
-            oracle = CommandOracle(hook_cfg.verify_cmd, root=hook_root)
+            # The operator's own verify hook also runs through the configured sandbox with scrubbing
+            # (review M2); CommandOracle(scrub_secrets=False) remains the explicit opt-out for hosts
+            # whose checker genuinely needs the full environment.
+            oracle = CommandOracle(hook_cfg.verify_cmd, root=hook_root, sandbox=sandbox)
             hook_list.append(OracleHook(
                 oracle,
                 lambda out: setattr(

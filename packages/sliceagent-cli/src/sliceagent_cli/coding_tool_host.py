@@ -396,6 +396,22 @@ class CodingToolHost:
             self.add_root(d)
             self._focus = d   # the most-recent external dir the shell worked on → the active focus
 
+    @staticmethod
+    def _open_read(full: str):
+        """Open a tool-resolved path for reading with O_NOFOLLOW (POSIX).
+
+        ``_resolve`` realpaths the path at CHECK time; a concurrent local process could swap the
+        final component for a symlink between that check and the open and redirect the read out of
+        the authorized boundary (TOCTOU). O_NOFOLLOW makes the swap fail the open (ELOOP → tool
+        error) instead of following it. ``full`` is already realpath-resolved, so a legitimate
+        symlink never reaches this call in the target spelling. Defense-in-depth: the model itself
+        cannot race its own check; this closes the concurrent-process window.
+        """
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        return os.fdopen(os.open(full, flags), "rb")
+
     def resolve_read(self, path: str) -> str:
         """Resolution shared by read_file AND the OPEN FILES display so they never diverge. Prefer the
         current-project (focus) copy; if nothing exists there, fall back to a base-STABLE search of every
@@ -616,7 +632,7 @@ class CodingToolHost:
         # OPEN FILES would corrupt the slice and burn tokens. ValueError flows through
         # the registry try/except so both read_file and str_replace degrade gracefully.
         full = self.resolve_read(path) if lossy else self._resolve(path)
-        with open(full, "rb") as f:
+        with self._open_read(full) as f:
             raw = f.read()
         sample = raw[:8192].decode("utf-8", errors="replace")
         if looks_binary(path, sample):
@@ -738,7 +754,7 @@ class CodingToolHost:
         offset, limit = _coerce_int(args.get("offset")), _coerce_int(args.get("limit"))
         if st.st_size > _READ_SLURP_CAP:
             return self._huge_file_view(path, full, st, offset, limit)
-        with open(full, "rb") as f:
+        with self._open_read(full) as f:
             raw = f.read()
         self._mark_read(full)
         sample = raw[:8192].decode("utf-8", errors="replace")
@@ -772,10 +788,10 @@ class CodingToolHost:
         and only the requested window is ever materialized — the contract (line numbers, footer,
         offset/limit paging) is identical to the small-file path."""
         self._mark_read(full)
-        with open(full, "rb") as f:
+        with self._open_read(full) as f:
             sample = f.read(8192).decode("utf-8", errors="replace")
         if looks_binary(path, sample):
-            with open(full, "rb") as f:
+            with self._open_read(full) as f:
                 head = f.read(4096)
             return (f"{path}: binary file, {st.st_size:,} bytes — text tools can't edit it; "
                     f"inspect/convert it with run_command/execute_code (the right CLI).\n"
@@ -783,7 +799,7 @@ class CodingToolHost:
                     + "\n".join(self._hexrows(head[:256])))
         total = 0
         last_byte = b""
-        with open(full, "rb") as f:
+        with self._open_read(full) as f:
             for chunk in iter(lambda: f.read(_READ_STREAM_CHUNK), b""):
                 total += chunk.count(b"\n")
                 last_byte = chunk[-1:]
@@ -813,7 +829,7 @@ class CodingToolHost:
         if start > end:
             return out
         lineno = 0
-        with open(full, "rb") as f:
+        with CodingToolHost._open_read(full) as f:
             pending = b""
             for chunk in iter(lambda: f.read(_READ_STREAM_CHUNK), b""):
                 rows = (pending + chunk).split(b"\n")
@@ -857,7 +873,7 @@ class CodingToolHost:
         artifact) must NOT be flipped whole-file to CRLF — while a uniformly-CRLF file with one stray LF
         still counts as CRLF. crlf ≥ (bare-LF) covers both, and keeps the pinned uniform cases."""
         try:
-            with open(full, "rb") as f:
+            with CodingToolHost._open_read(full) as f:
                 head = f.read(65536)
         except OSError:
             return False
@@ -1088,7 +1104,7 @@ class CodingToolHost:
         the most recent edit. Bounded ring — recent edits only, never an unbounded history."""
         try:
             if os.path.exists(full):
-                with open(full, "rb") as _f:
+                with self._open_read(full) as _f:
                     prev = _f.read()
             else:
                 prev = None
@@ -1122,7 +1138,7 @@ class CodingToolHost:
         import base64
         try:
             full = self.resolve_read(path)
-            with open(full, "rb") as _f:
+            with self._open_read(full) as _f:
                 raw = _f.read()
         except OSError as e:
             return f"Error: cannot read image {path}: {e}"
@@ -1576,7 +1592,10 @@ class CodingToolHost:
             return OracleResult(_TS.INDETERMINATE, f"{missing!r} is not on PATH; the check never ran")
         # Return the typed OracleResult, not a flattened (ok, output): it still unpacks as that pair, but
         # it carries INDETERMINATE, which a bool cannot.
-        return CommandOracle(command, root=self.root()).verify()
+        # Model-authored verify commands run through the HOST's configured sandbox with secret scrubbing
+        # (review M2): this is the one command path that used to instantiate LocalSandbox directly —
+        # silently ignoring AGENT_SANDBOX=docker and inheriting the full host environment.
+        return CommandOracle(command, root=self.root(), sandbox=self.sandbox).verify()
 
     def _t_update_work(self, args: dict) -> str:
         self._item_verify_green = {}

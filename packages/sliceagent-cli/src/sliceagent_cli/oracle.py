@@ -48,15 +48,22 @@ def default_verify_timeout() -> float:
 class CommandOracle:
     """Runs a verification command (e.g. the project's test suite). Pass/fail by exit code."""
 
-    def __init__(self, cmd: str, timeout: float | None = None, *, root: str | None = None):
+    def __init__(self, cmd: str, timeout: float | None = None, *, root: str | None = None,
+                 sandbox=None, scrub_secrets: bool = True):
         self.cmd = cmd
         self.timeout = default_verify_timeout() if timeout is None else timeout
         self.root = os.path.realpath(root or os.getcwd())
+        # Verification runs through the HOST's configured sandbox (so AGENT_SANDBOX=docker is honored,
+        # not silently bypassed) with secret scrubbing ON by default — a model-authored verify command
+        # is no more trusted than any other model command, and its output lands in the durable turn
+        # artifact. ``scrub_secrets=False`` remains the explicit opt-out for embedders whose operator
+        # hook genuinely needs the full environment (review M2).
+        self.sandbox = sandbox if sandbox is not None else LocalSandbox(scrub_secrets=scrub_secrets)
 
     def verify(self) -> OracleResult:
-        # Verification inherits the caller environment for compatibility, but shares the same owned
-        # process-group lifecycle as command tools. A timeout is still conservatively indeterminate:
-        # ordinary descendants are reaped, yet a deliberately detached process cannot be disproved.
+        # Verification shares the same owned process-group lifecycle as command tools. A timeout is
+        # still conservatively indeterminate: ordinary descendants are reaped, yet a deliberately
+        # detached process cannot be disproved.
         # A command whose program is not on PATH answers 127, which is indistinguishable from a real
         # red check — the completion gate would then demand code fixes forever because the CHECKER was
         # never installed (an unbounded fix loop on correct work). Same guard as the update_work
@@ -66,7 +73,7 @@ class CommandOracle:
         if missing:
             return OracleResult(ToolStatus.INDETERMINATE,
                                 f"{missing!r} is not on PATH; the verification never ran")
-        code, output = LocalSandbox(scrub_secrets=False).run(
+        code, output = self.sandbox.run(
             self.cmd, cwd=self.root, timeout=self.timeout,
         )
         output = output.strip()

@@ -36,8 +36,12 @@ _DEVICE = re.compile(
     re.IGNORECASE,
 )
 _DISKUTIL_DEVICE = re.compile(r"^(?:/dev/)?r?disk\d+(?:s\d+)?$", re.IGNORECASE)
+# Generalized fork bomb: any single-line ``name(){ … name | name & … }; name`` shape. The body must
+# contain the RECURSIVE ``name | name &`` pipeline (the exponential fan-out) and the trailing ``; name``
+# call — so ``g(){ echo hi; }; g`` and ``f(){ f | grep x; }; f`` do not match, while any renamed spelling
+# of the classic bomb (``:(){ :|:& };:``, ``f(){ f|f& };f``, …) does.
 _FORK_BOMB = re.compile(
-    r"^\s*:\s*\(\s*\)\s*\{[^\n]*:\s*\|\s*:\s*&[^\n]*\}\s*;\s*:\s*$",
+    r"^\s*(:|[A-Za-z_][A-Za-z0-9_]*)\s*\(\s*\)\s*\{[^\n]*\1\s*\|\s*\1\s*&[^\n]*\}\s*;\s*\1\s*$",
 )
 _SHELL_COMMAND_WORDS = frozenset({
     "rm", "sudo", "command", "nohup", "exec", "time", "env", "shutdown", "shutdown.exe",
@@ -178,6 +182,101 @@ def _token_value(token: str) -> tuple[str, str]:
     if "'" in token or '"' in token:
         return token, "complex"
     return token, ""
+
+
+_ANSI_C_RE = re.compile(r"^\$'(.*)'$", re.DOTALL)
+
+
+def _decode_ansi_c(token: str) -> str | None:
+    """Decode a bash ``$'…'`` ANSI-C quoted word, or return None if it is not one.
+
+    ``rm -rf $'\\x2f'`` executes ``rm -rf /``; leaving ANSI-C quoting opaque let a one-line root wipe
+    through the floor. Returns None on any syntax/escape the shell would reject or that we do not
+    understand, so parser uncertainty still abstains.
+    """
+    match = _ANSI_C_RE.match(token)
+    if match is None:
+        return None
+    body = match.group(1)
+    out: list[str] = []
+    i = 0
+    n = len(body)
+    while i < n:
+        ch = body[i]
+        if ch != "\\":
+            out.append(ch)
+            i += 1
+            continue
+        i += 1
+        if i >= n:
+            return None
+        esc = body[i]
+        simple = {
+            "a": "\a", "b": "\b", "e": "\x1b", "E": "\x1b", "f": "\f",
+            "n": "\n", "r": "\r", "t": "\t", "v": "\v", "\\": "\\", "'": "'", '"': '"', "?": "?",
+        }
+        if esc in simple:
+            out.append(simple[esc])
+            i += 1
+        elif esc == "x":
+            j = i + 1
+            while j < n and body[j] in "0123456789abcdefABCDEF":
+                j += 1
+            if j == i + 1:
+                return None
+            out.append(chr(int(body[i + 1:j], 16)))
+            i = j
+        elif esc in "01234567":
+            j = i
+            while j < n and j < i + 3 and body[j] in "01234567":
+                j += 1
+            out.append(chr(int(body[i:j], 8)))
+            i = j
+        elif esc == "u":
+            j = i + 1
+            while j < n and j < i + 5 and body[j] in "0123456789abcdefABCDEF":
+                j += 1
+            if j == i + 1:
+                return None
+            out.append(chr(int(body[i + 1:j], 16)))
+            i = j
+        elif esc == "U":
+            j = i + 1
+            while j < n and j < i + 9 and body[j] in "0123456789abcdefABCDEF":
+                j += 1
+            if j == i + 1:
+                return None
+            out.append(chr(int(body[i + 1:j], 16)))
+            i = j
+        elif esc == "c":
+            if i + 1 >= n:
+                return None
+            out.append(chr(ord(body[i + 1]) & 0x1F))
+            i += 2
+        else:
+            return None
+    return "".join(out)
+
+
+_PARAM_DEFAULT_RE = re.compile(r"^\$\{([A-Za-z_][A-Za-z0-9_]*)(:-|-)([^}]*)\}$")
+
+
+def _expand_parameter_default(token: str) -> str | None:
+    """Expand the two default-value parameter forms ``${VAR:-default}`` / ``${VAR-default}``.
+
+    ``os.path.expandvars`` does not understand ``:-`` defaults: it looks up ``VAR:-default`` as a literal
+    name and erases the whole token, while the shell resolves ``${ROOT:-/}`` to ``/``. Resolving the
+    default here (and only for the two uncomplicated forms) keeps a one-line ``rm -rf ${ROOT:-/}`` root
+    wipe visible; other forms (``:?`` error, ``:+`` alternate, ``:=`` assign) stay opaque/abstain.
+    """
+    match = _PARAM_DEFAULT_RE.match(token)
+    if match is None:
+        return None
+    name, op, default = match.group(1), match.group(2), match.group(3)
+    value = os.environ.get(name)
+    if op == ":-":
+        return default if value in (None, "") else value
+    return default if value is None else value
 
 
 def _merge_quoted_home_wipes(tokens: list[str]) -> list[str]:
@@ -343,7 +442,7 @@ def _command_index(tokens: tuple[str, ...]) -> int | None:
     return None
 
 
-def _recursive_rm_reason(tokens: tuple[str, ...], index: int) -> str | None:
+def _recursive_rm_reason(tokens: tuple[str, ...], index: int, *, cwd: str | None = None) -> str | None:
     args = tokens[index + 1:]
     recursive = False
     preserve_root = False
@@ -378,7 +477,15 @@ def _recursive_rm_reason(tokens: tuple[str, ...], index: int) -> str | None:
     }
     for token, quote in operands:
         if quote == "complex":
-            continue
+            # bash ``$'…'`` quoting hides the value from shlex — ``rm -rf $'\x2f'`` executes ``rm -rf /``.
+            decoded = _decode_ansi_c(token)
+            if decoded is None:
+                continue
+            token, quote = decoded, ""
+        # ``${VAR:-default}`` — resolve BEFORE expandvars, which erases the whole token.
+        default_expanded = _expand_parameter_default(token)
+        if default_expanded is not None:
+            token, quote = default_expanded, quote
         if token in {"/*", "/{*,.*}"} and not quote:
             return "recursive deletion of root or home"
         if token in symbolic_home_globs | literal_home_globs and not quote:
@@ -405,10 +512,22 @@ def _recursive_rm_reason(tokens: tuple[str, ...], index: int) -> str | None:
             if preserve_root:
                 continue
             return "recursive deletion of root or home"
-        # Relative cleanup is intentionally context-dependent and must abstain. The execution workspace can
-        # change in-process, so resolving it against the classifier process cwd would invent certainty.
-        if os.path.isabs(expanded) and os.path.realpath(expanded) == home:
-            return "recursive deletion of root or home"
+        if os.path.isabs(expanded):
+            real = os.path.realpath(expanded)
+            # Home itself, or ANY ancestor of home: ``rm -rf "$HOME/.."`` / ``~/..`` / ``/Users`` realpath to
+            # a directory that CONTAINS home, so wiping it wipes home too — the documented floor.
+            if real == home or (real != "/" and home.startswith(real.rstrip(os.sep) + os.sep)):
+                return "recursive deletion of root or home"
+        # Relative cleanup is intentionally context-dependent and must abstain — UNLESS an explicit ``cd``
+        # earlier in the same command body fixed the directory (``cd / && rm -rf *`` deletes root).
+        if not os.path.isabs(expanded) and cwd is not None and not quote:
+            if token in {"*", ".*", "{*,.*}"}:
+                if cwd == "/" or cwd == home:
+                    return "recursive deletion of root or home"
+            elif token in {".", ".."}:
+                resolved = os.path.realpath(os.path.join(cwd, token))
+                if resolved == "/" or resolved == home:
+                    return "recursive deletion of root or home"
     return None
 
 
@@ -484,7 +603,7 @@ def _windows_shutdown_reason(values: tuple[str, ...]) -> str | None:
     ) else None
 
 
-def _stage_reason(stage: _Stage, *, depth: int = 0) -> str | None:
+def _stage_reason(stage: _Stage, *, depth: int = 0, cwd: str | None = None) -> str | None:
     index = _command_index(stage.tokens)
     if index is None:
         return None
@@ -543,7 +662,7 @@ def _stage_reason(stage: _Stage, *, depth: int = 0) -> str | None:
     ):
         return "raw write to a device"
     if executable == "rm":
-        return _recursive_rm_reason(stage.tokens, index)
+        return _recursive_rm_reason(stage.tokens, index, cwd=cwd)
     if executable in _SHELL_INTERPRETERS and depth < 3:
         args = stage.tokens[index + 1:]
         for position, raw_token in enumerate(args[:-1]):
@@ -641,6 +760,7 @@ def _body_reason(body: str, *, depth: int = 0) -> str | None:
         return None
     last_status: bool | None = None
     terminated = False
+    cwd: str | None = None
     for position, stage in enumerate(stages):
         if terminated:
             break
@@ -650,7 +770,7 @@ def _body_reason(body: str, *, depth: int = 0) -> str | None:
                     separator == "||" and last_status is True):
                 # A statically unreachable branch does not change the status of the AND/OR list.
                 continue
-        reason = _stage_reason(stage, depth=depth)
+        reason = _stage_reason(stage, depth=depth, cwd=cwd)
         if reason:
             return reason
         index = _command_index(stage.tokens)
@@ -658,6 +778,24 @@ def _body_reason(body: str, *, depth: int = 0) -> str | None:
             last_status = None
             continue
         executable = _executable_basename(_token_value(stage.tokens[index])[0]).casefold()
+        # An explicit ``cd <absolute target>`` fixes the directory for every later stage in the body, so a
+        # following ``rm -rf *`` can be judged root/home-relative instead of abstaining. Only a single
+        # non-option absolute operand that really exists is trusted; ``cd`` with options, relative targets
+        # (resolved against an unknown original cwd), or a target that does not exist leaves cwd unknown.
+        if executable == "cd":
+            operands = stage.tokens[index + 1:]
+            if len(operands) == 1:
+                target, quote = _token_value(operands[0])
+                default_expanded = _expand_parameter_default(target)
+                if default_expanded is not None:
+                    target, quote = default_expanded, quote
+                expanded = target if quote == "'" else os.path.expandvars(target)
+                if not quote:
+                    expanded = os.path.expanduser(expanded)
+                if os.path.isabs(expanded):
+                    real = os.path.realpath(expanded)
+                    if os.path.isdir(real):
+                        cwd = real
         negated = sum(_token_value(token)[0] == "!" for token in stage.tokens[:index]) % 2
         if executable in {"true", ":"}:
             last_status = not negated

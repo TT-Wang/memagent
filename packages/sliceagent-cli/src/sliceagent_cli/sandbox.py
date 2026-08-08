@@ -31,7 +31,10 @@ from sliceagent_core.platform_compat import (IS_WINDOWS, SIG_KILL, kill_tree,
 
 # env var names whose values are secrets the child shouldn't see by default
 _SECRET_RE = re.compile(
-    r"(API_KEY|SECRET|TOKEN|PASSWORD|PASSWD|CREDENTIAL|ACCESS_KEY|PRIVATE_KEY|"
+    r"(API_KEY|ACCESS_KEY|SECRET_KEY|PRIVATE_KEY|ENCRYPTION_KEY|MASTER_KEY|SA_KEY|"
+    r"SECRET|TOKEN|PASSWORD|PASSWD|PWD|PASSPHRASE|CREDENTIAL|AUTH|"
+    r"(?:_|^)KEY$|WEBHOOK|DSN|"
+    r"(?:_|^)(?:DATABASE|REDIS|MONGO|POSTGRES|MYSQL|PG|AMQP|CELERY|BROKER)_URL$|"
     r"(?<!NO)_PROXY$|^HTTPS?_PROXY$|^ALL_PROXY$)",
     re.IGNORECASE,
 )
@@ -281,6 +284,17 @@ class DockerSandbox(BaseSandbox):
 
     def docker_args(self, command: str, *, cwd: str, name: str | None = None) -> list[str]:
         args = [self.docker, "run", "--rm", "-v", f"{cwd}:{cwd}", "-w", cwd]
+        # Hardening (review): drop Linux capabilities, refuse privilege escalation, and cap process
+        # count (a fork-bomb class inside the container). These close the cheap escapes (cap_sys_admin
+        # re-mounts, fork-bomb DoS) at zero cost. Deliberately NOT added: --read-only / --user would
+        # break ordinary agent work — builds and tests write to /tmp and $HOME inside the container —
+        # and SECURITY.md already frames this backend as a disposable isolation layer, not an OS
+        # boundary.
+        args += [
+            "--cap-drop", "ALL",
+            "--security-opt", "no-new-privileges",
+            "--pids-limit", "512",
+        ]
         if name:
             args += ["--name", name]
         if self.network:

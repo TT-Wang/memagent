@@ -55,7 +55,7 @@ run_uv_clean() (
   for _name in $(env | sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p'); do
     case "$_name" in
       UV_TOOL_DIR|UV_TOOL_BIN_DIR) ;;
-      UV_*|PIP_*|PYTHONPATH|PYTHONHOME|VIRTUAL_ENV|AWS_SECRET_ACCESS_KEY|*_API_KEY|*_TOKEN)
+      UV_*|PIP_*|PYTHONPATH|PYTHONHOME|VIRTUAL_ENV|AWS_SECRET_ACCESS_KEY|*_API_KEY|*_TOKEN|*_KEY|*_SECRET|*_PASSWORD|*_PASSWD|*_PWD|*_PASSPHRASE|*_CREDENTIAL|*_AUTH|*_ACCESS_KEY|*_WEBHOOK|*_DSN|*_URL)
         unset "$_name"
         ;;
     esac
@@ -83,13 +83,13 @@ if ! command -v rg >/dev/null 2>&1; then
   fi
 fi
 if ! command -v rg >/dev/null 2>&1; then
-  RG_VER="14.1.1"
+  RG_VER="15.1.0"   # same pinned version the Windows installer verifies (install.ps1)
   case "$(uname -s)-$(uname -m)" in
-    Darwin-arm64)              RG_TARGET="aarch64-apple-darwin" ;;
-    Darwin-x86_64)             RG_TARGET="x86_64-apple-darwin" ;;
-    Linux-x86_64)              RG_TARGET="x86_64-unknown-linux-musl" ;;
-    Linux-aarch64|Linux-arm64) RG_TARGET="aarch64-unknown-linux-gnu" ;;
-    *)                         RG_TARGET="" ;;
+    Darwin-arm64)              RG_TARGET="aarch64-apple-darwin";              RG_SHA256="378e973289176ca0c6054054ee7f631a065874a352bf43f0fa60ef079b6ba715" ;;
+    Darwin-x86_64)             RG_TARGET="x86_64-apple-darwin";               RG_SHA256="64811cb24e77cac3057d6c40b63ac9becf9082eedd54ca411b475b755d334882" ;;
+    Linux-x86_64)              RG_TARGET="x86_64-unknown-linux-musl";         RG_SHA256="1c9297be4a084eea7ecaedf93eb03d058d6faae29bbc57ecdaf5063921491599" ;;
+    Linux-aarch64|Linux-arm64) RG_TARGET="aarch64-unknown-linux-gnu";         RG_SHA256="2b661c6ef508e902f388e9098d9c4c5aca72c87b55922d94abdba830b4dc885e" ;;
+    *)                         RG_TARGET=""; RG_SHA256="" ;;
   esac
   BIN_DIR="$(run_uv_clean tool dir --bin 2>/dev/null || true)"
   [ -n "$BIN_DIR" ] || BIN_DIR="$HOME/.local/bin"
@@ -98,12 +98,23 @@ if ! command -v rg >/dev/null 2>&1; then
     RG_URL="https://github.com/BurntSushi/ripgrep/releases/download/${RG_VER}/ripgrep-${RG_VER}-${RG_TARGET}.tar.gz"
     if { command -v curl >/dev/null 2>&1 && curl -fsSL "$RG_URL" -o "$RG_TMP/rg.tgz"; } \
        || { command -v wget >/dev/null 2>&1 && wget -qO "$RG_TMP/rg.tgz" "$RG_URL"; }; then
-      mkdir -p "$BIN_DIR" \
-        && tar -xzf "$RG_TMP/rg.tgz" -C "$RG_TMP" \
-        && mv "$RG_TMP/ripgrep-${RG_VER}-${RG_TARGET}/rg" "$BIN_DIR/rg" \
-        && chmod +x "$BIN_DIR/rg" \
-        && info "ripgrep installed to $BIN_DIR/rg" \
-        || warn "Could not unpack ripgrep — sliceagent still works, code search is just weaker without it."
+      # SHA256-verify like the Windows installer does (supply-chain pinning; the same digests are
+      # published by GitHub for every release asset). A mismatch refuses the binary — a weaker code
+      # search is safer than an unverified download into the user's bin dir.
+      if command -v shasum >/dev/null 2>&1; then _actual="$(shasum -a 256 "$RG_TMP/rg.tgz")"
+      elif command -v sha256sum >/dev/null 2>&1; then _actual="$(sha256sum "$RG_TMP/rg.tgz")"
+      else _actual=""; fi
+      _actual="${_actual%% *}"
+      if [ "$_actual" != "$RG_SHA256" ]; then
+        warn "ripgrep SHA256 mismatch (got ${_actual:-unverifiable}) — refusing the download; code search falls back."
+      else
+        mkdir -p "$BIN_DIR" \
+          && tar -xzf "$RG_TMP/rg.tgz" -C "$RG_TMP" \
+          && mv "$RG_TMP/ripgrep-${RG_VER}-${RG_TARGET}/rg" "$BIN_DIR/rg" \
+          && chmod +x "$BIN_DIR/rg" \
+          && info "ripgrep installed to $BIN_DIR/rg (SHA256 verified)" \
+          || warn "Could not unpack ripgrep — sliceagent still works, code search is just weaker without it."
+      fi
     else
       warn "Could not download ripgrep — sliceagent still works, code search is just weaker without it."
     fi

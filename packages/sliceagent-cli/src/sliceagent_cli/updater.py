@@ -10,12 +10,14 @@ from __future__ import annotations
 import importlib.metadata
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
 import tomllib
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -23,6 +25,29 @@ from pathlib import Path
 _PACKAGE = "sliceagent"
 _CANONICAL_SPEC = "sliceagent[tui]"
 _PYPI_SIMPLE = "https://pypi.org/simple"
+_PYPI_JSON = "https://pypi.org/pypi/sliceagent/json"
+
+
+def _fetch_latest_version(*, timeout: float = 10.0, url: str = _PYPI_JSON) -> str | None:
+    """Resolve the current stable release from PyPI's JSON API.
+
+    Same TLS trust root as the install itself, but the install then pins that EXACT resolved
+    version instead of asking uv for an unpinned "latest" — a deterministic, reviewable upgrade
+    step (review finding: the previous command resolved "latest" at install time with no way to
+    know what was about to land). Returns None on any failure; the updater FAILS CLOSED and
+    never falls back to an unpinned install.
+    """
+    try:
+        import urllib.request
+
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            document = json.loads(resp.read().decode("utf-8"))
+        version = str((document.get("info") or {}).get("version") or "").strip()
+    except Exception:  # noqa: BLE001 — any resolver failure is a closed door, not a fallback
+        return None
+    if not version or not re.fullmatch(r"[0-9A-Za-z.+\-!]+", version):
+        return None
+    return version
 
 
 @dataclass(frozen=True)
@@ -308,11 +333,14 @@ def run_update(
     os_name: str | None = None,
     python_version: tuple[int, int] | None = None,
     neutral_cwd: str | None = None,
+    resolve_latest: Callable[[], str | None] | None = None,
 ) -> int:
     """Update a canonical install and return a shell-correct exit code.
 
     This function intentionally does not hot-reload or restart the current process.
     Its seams are injectable so the updater is fully testable without network access.
+    ``resolve_latest`` is the version-resolution seam (default: PyPI JSON API); returning
+    None fails closed — the updater never installs an unpinned ``latest``.
     """
     prefix = prefix or sys.prefix
     executable = executable or sys.executable
@@ -339,11 +367,17 @@ def run_update(
         out("  Install uv from https://docs.astral.sh/uv/, then re-run:  sliceagent update")
         return 1
 
+    latest = resolve_latest() if resolve_latest is not None else _fetch_latest_version()
+    if not latest:
+        out("  Could not resolve the current stable release from PyPI; nothing was changed.")
+        out("  Re-run the one-line installer from the README, or retry the update later.")
+        return 1
+
     major, minor = python_version or (sys.version_info.major, sys.version_info.minor)
     command = [
         uv, "tool", "install", "--force", "--upgrade",
         "--python", f"{major}.{minor}", "--no-config", "--default-index", _PYPI_SIMPLE,
-        _CANONICAL_SPEC,
+        f"{_CANONICAL_SPEC}=={latest}",
     ]
     child_env = dict(os.environ if environ is None else environ)
     for key in tuple(child_env):
@@ -351,7 +385,11 @@ def run_update(
         if (
             upper.startswith(("UV_", "PIP_"))
             or upper in {"PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV", "AWS_SECRET_ACCESS_KEY"}
-            or upper.endswith(("_API_KEY", "_TOKEN"))
+            or upper.endswith((
+                "_API_KEY", "_TOKEN", "_KEY", "_SECRET", "_PASSWORD", "_PASSWD", "_PWD",
+                "_PASSPHRASE", "_CREDENTIAL", "_AUTH", "_ACCESS_KEY", "_WEBHOOK", "_DSN",
+                "_DATABASE_URL", "_REDIS_URL",
+            ))
         ):
             child_env.pop(key, None)
     child_env["UV_TOOL_DIR"] = origin.tool_dir

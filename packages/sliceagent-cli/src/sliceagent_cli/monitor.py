@@ -20,6 +20,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import secrets
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -36,6 +37,7 @@ from sliceagent_core.events import (
     TurnInterrupted,
 )
 from sliceagent_core.private_state import atomic_write_private, private_dir, private_file
+from sliceagent_core.safety import redact_text
 from .tui_projection import normalized_tool_status
 
 _MAX_OUTPUT = 6000   # cap a single tool output in the snapshot (the page stays snappy)
@@ -47,6 +49,46 @@ _RING_CAP = 40       # serve only the last N steps; counters stay accurate from 
 
 def _clip(text: str, n: int) -> str:
     return text if len(text) <= n else text[:n] + f"\n…[+{len(text) - n} chars]"
+
+
+def _redact_messages(messages: list) -> list:
+    """Redact every text surface of a prepared request the same way the durable stores do.
+
+    The monitor serves EXACTLY what the LLM saw — which includes secrets that legitimately appear in
+    tool args, tool output, or a message quoting a token. The redact-on-persist invariant applied
+    everywhere else (tape, episodic cache, durable log) must hold here too, for both the live server
+    and the on-disk session snapshots.
+    """
+    out = []
+    for message in messages or []:
+        if not isinstance(message, dict):
+            out.append(redact_text(str(message)))
+            continue
+        message = dict(message)
+        content = message.get("content")
+        if isinstance(content, str):
+            message["content"] = redact_text(content)
+        elif isinstance(content, list):
+            parts = []
+            for part in content:
+                if isinstance(part, dict):
+                    piece = dict(part)
+                    if isinstance(piece.get("text"), str):
+                        piece["text"] = redact_text(piece["text"])
+                    parts.append(piece)
+                else:
+                    parts.append(redact_text(str(part)))
+            message["content"] = parts
+        calls = message.get("tool_calls")
+        if calls:
+            message["tool_calls"] = [
+                {**call, "args": redact_text(
+                    json.dumps(call.get("args", {}), ensure_ascii=False, default=str))}
+                if isinstance(call, dict) else redact_text(str(call))
+                for call in calls
+            ]
+        out.append(message)
+    return out
 
 
 class SliceMonitor:
@@ -98,7 +140,7 @@ class SliceMonitor:
                 self._cur = {
                     "i": self._steps_total - 1, "turn": self._turn, "step": self._step_in_turn,
                     "goal": ctx.get("goal", ""), "topic": ctx.get("topic", ""),
-                    "system": system, "user": user, "assistant": "", "tools": [],
+                    "system": redact_text(system), "user": redact_text(user), "assistant": "", "tools": [],
                     "model_calls": [], "usage": {}, "stop_reason": "", "interrupted": "",
                 }
                 self._steps.append(self._cur)
@@ -113,7 +155,7 @@ class SliceMonitor:
                     self._cur.setdefault("model_calls", []).append({
                         "step": e.step, "attempt": e.attempt, "pressure": e.pressure,
                         "preflight_mode": e.preflight_mode,
-                        "messages": copy.deepcopy(e.messages),
+                        "messages": _redact_messages(e.messages),
                     })
             elif isinstance(e, AssistantText):
                 if self._cur is not None:
@@ -121,8 +163,9 @@ class SliceMonitor:
             elif isinstance(e, ToolResult):
                 if self._cur is not None:
                     self._cur["tools"].append({
-                        "name": e.name, "args": _clip(json.dumps(e.args, ensure_ascii=False), _MAX_ARGS),
-                        "output": _clip(e.output, _MAX_OUTPUT),
+                        "name": e.name,
+                        "args": redact_text(_clip(json.dumps(e.args, ensure_ascii=False, default=str), _MAX_ARGS)),
+                        "output": redact_text(_clip(e.output, _MAX_OUTPUT)),
                         "status": normalized_tool_status(e), "failing": e.failing})
             elif isinstance(e, StepEnd):
                 if self._cur is not None:
@@ -162,9 +205,33 @@ class SliceMonitor:
                     "tokens": self._tokens, "steps": steps}
 
 
+def _server_token(srv) -> str:
+    """Per-process random bearer token for this monitor server.
+
+    The server exposes the FULL model-visible context (exact requests, tool args/output) on loopback —
+    any local process/user could otherwise read it without touching the 0600 disk files. ``AGENT_MONITOR_TOKEN``
+    pins a stable token; otherwise one is minted per start and printed in the URL.
+    """
+    token = os.environ.get("AGENT_MONITOR_TOKEN") or getattr(srv, "monitor_token", None)
+    if not token:
+        token = secrets.token_urlsafe(24)
+    srv.monitor_token = token
+    return token
+
+
 class _Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):       # silence the default stderr access log
         pass
+
+    def _authorized(self) -> bool:
+        token = getattr(self.server, "monitor_token", None)
+        if not token:                   # defensive: no token configured → deny (never open by default)
+            return False
+        query = parse_qs(urlparse(self.path).query)
+        if query.get("token") == [token]:
+            return True
+        auth = self.headers.get("Authorization", "")
+        return auth.startswith("Bearer ") and auth[7:] == token
 
     def _send(self, body: bytes, ctype: str) -> None:
         self.send_response(200)
@@ -178,9 +245,20 @@ class _Handler(BaseHTTPRequestHandler):
             pass
 
     def do_GET(self):
+        if not self._authorized():
+            self.send_response(401)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            try:
+                self.wfile.write("401 unauthorized — pass the monitor token (?token=… or Authorization: Bearer)".encode("utf-8"))
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            return
         path = self.path.split("?", 1)[0]
         if path == "/" or path == "/index.html":
-            self._send(PAGE.encode("utf-8"), "text/html; charset=utf-8")
+            self._send(PAGE.replace("__MONITOR_TOKEN__", getattr(self.server, "monitor_token", "")).encode("utf-8"),
+                       "text/html; charset=utf-8")
         elif path == "/api/state":
             body = json.dumps(self.server.monitor.snapshot(), ensure_ascii=False).encode("utf-8")
             self._send(body, "application/json; charset=utf-8")
@@ -197,9 +275,10 @@ def serve(monitor: SliceMonitor, host: str = "127.0.0.1", port: int = 7654):
             srv = ThreadingHTTPServer((host, p), _Handler)
             srv.monitor = monitor
             srv.daemon_threads = True
+            token = _server_token(srv)
             t = threading.Thread(target=srv.serve_forever, daemon=True)
             t.start()
-            return srv, f"http://{host}:{p}"
+            return srv, f"http://{host}:{p}/?token={token}"
         except OSError as exc:           # port busy → try the next
             last = exc
             continue
@@ -382,9 +461,20 @@ class _PersistentHandler(_Handler):
     flag and a session list — so one standing server reflects whatever session is running, or idles."""
 
     def do_GET(self):
+        if not self._authorized():
+            self.send_response(401)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            try:
+                self.wfile.write("401 unauthorized — pass the monitor token (?token=… or Authorization: Bearer)".encode("utf-8"))
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            return
         u = urlparse(self.path)
         if u.path in ("/", "/index.html"):
-            self._send(PAGE.encode("utf-8"), "text/html; charset=utf-8")
+            self._send(PAGE.replace("__MONITOR_TOKEN__", getattr(self.server, "monitor_token", "")).encode("utf-8"),
+                       "text/html; charset=utf-8")
         elif u.path == "/api/state":
             sel = (parse_qs(u.query).get("session") or [None])[0]
             self._send(json.dumps(self._state(sel), ensure_ascii=False).encode("utf-8"),
@@ -430,7 +520,8 @@ def main():
             srv = ThreadingHTTPServer((host, p), _PersistentHandler)
             srv.monitor_dir = d
             srv.daemon_threads = True
-            print(f"sliceagent monitor (persistent) → http://{host}:{p}   ·   watching {d}", flush=True)
+            token = _server_token(srv)
+            print(f"sliceagent monitor (persistent) → http://{host}:{p}/?token={token}   ·   watching {d}", flush=True)
             print("idle until a session runs with AGENT_MONITOR=1; Ctrl-C to stop.", flush=True)
             srv.serve_forever()
             return
@@ -519,6 +610,7 @@ PAGE = r"""<!doctype html>
   <section class="detail" id="detail"><div class="empty">waiting for the first turn…<br>run a task in the agent.</div></section>
 </main>
 <script>
+window.__MONITOR_TOKEN__="__MONITOR_TOKEN__"; // server-injected bearer token (served page only; /api/state still enforces it)
 let STATE={steps:[],version:-1}, SEL=null, LASTVER=-1, PICK="";
 document.addEventListener("change",e=>{ if(e.target.id==="sess"){ PICK=e.target.value; LASTVER=-1; SEL=null; } });
 const $=id=>document.getElementById(id);
@@ -630,7 +722,9 @@ function syncSessions(d){
 }
 async function poll(){
   try{
-    const url="/api/state"+(PICK?("?session="+encodeURIComponent(PICK)):"");
+    const tk=window.__MONITOR_TOKEN__||"";
+    const sep=(PICK||tk)?"?":"";
+    const url="/api/state"+sep+[PICK?("session="+encodeURIComponent(PICK)):"",tk?("token="+encodeURIComponent(tk)):""].filter(Boolean).join("&");
     const d=await(await fetch(url)).json();
     const dot=$("dot"); dot.classList.remove("stale","idle");
     if(d.session===null){ dot.classList.add("idle"); $("status").textContent="idle — no sessions yet (run with AGENT_MONITOR=1)"; }

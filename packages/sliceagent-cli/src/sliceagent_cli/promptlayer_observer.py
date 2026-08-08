@@ -15,6 +15,7 @@ import hmac
 import json
 import os
 import queue
+import secrets
 import threading
 import time
 from collections.abc import Callable, Mapping
@@ -205,6 +206,10 @@ class PromptLayerObserver:
         if not api_key:
             raise ValueError("PROMPTLAYER_API_KEY is required when PromptLayer logging is enabled")
         self._api_key = api_key
+        # Content digests are correlation keys, NOT confidentiality protection — but they must not be
+        # brute-forceable by the log service itself, which receives the API key in the same request's
+        # X-API-KEY header. Derive them from a per-process random pepper instead of the API key.
+        self._pepper = secrets.token_hex(16)
         self._session_id = session_id
         self._workspace_root = workspace_root
         self.content_mode = "full" if content_mode == "full" else "metadata"
@@ -263,8 +268,8 @@ class PromptLayerObserver:
             "finish_reason": getattr(response, "finish_reason", "") if response is not None else "",
         }
         metadata = {
-            "sliceagent_session": _keyed_id(self._api_key, self._session_id),
-            "sliceagent_workspace": _keyed_id(self._api_key, self._workspace_root()),
+            "sliceagent_session": _keyed_id(self._pepper, self._session_id),
+            "sliceagent_workspace": _keyed_id(self._pepper, self._workspace_root()),
             "sliceagent_provider_route": _provider_route(base_url),
             "sliceagent_reasoning": str(record.get("reasoning") or ""),
             "sliceagent_attempt": str(int(record.get("attempt") or 1)),
@@ -274,9 +279,9 @@ class PromptLayerObserver:
             "sliceagent_message_roles": ",".join(roles),
             "sliceagent_tool_names": ",".join(name for name in tool_names if name),
             "sliceagent_input_hmac_sha256": _keyed_digest(
-                self._api_key, {"messages": messages, "schemas": schemas}
+                self._pepper, {"messages": messages, "schemas": schemas}
             ),
-            "sliceagent_output_hmac_sha256": _keyed_digest(self._api_key, output_identity),
+            "sliceagent_output_hmac_sha256": _keyed_digest(self._pepper, output_identity),
             "sliceagent_input_fresh_tokens": str(
                 int(usage.get("input_other") or 0) + int(usage.get("input_cache_creation") or 0)
             ),
@@ -289,8 +294,8 @@ class PromptLayerObserver:
             # (DeepSeek/OpenRouter/etc.) remains separately filterable in metadata.
             "provider": "openai",
             "model": model,
-            "input": _input_blueprint(messages, schemas, full=full, secret=self._api_key),
-            "output": _output_blueprint(response, full=full, secret=self._api_key),
+            "input": _input_blueprint(messages, schemas, full=full, secret=self._pepper),
+            "output": _output_blueprint(response, full=full, secret=self._pepper),
             "request_start_time": str(record.get("started_at") or ""),
             "request_end_time": str(record.get("ended_at") or ""),
             "parameters": {"reasoning": str(record.get("reasoning") or "")},

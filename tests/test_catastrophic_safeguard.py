@@ -65,6 +65,15 @@ def direct_catastrophic_actions_are_recognized():
         "rm --recursive \"${HOME}\"/": "deletion",
         "rm -rf \"$HOME\"/*": "deletion",
         "rm -rf \"${HOME}\"/{*,.*}": "deletion",
+        'rm -rf "$HOME/.."': "deletion",
+        "rm -rf ~/..": "deletion",
+        f"rm -rf {os.path.dirname(home)}": "deletion",
+        "rm -rf $'\\x2f'": "deletion",
+        "rm -rf ${ROOT:-/}": "deletion",
+        'rm -rf "${ROOT:-/}"': "deletion",
+        "cd / && rm -rf *": "deletion",
+        "cd ~ && rm -rf *": "deletion",
+        "cd /; rm -rf .": "deletion",
         "cat image.raw > /dev/disk2": "device",
         "cat image.raw > /dev/vda": "device",
         "cat image.raw | tee /dev/mapper/root": "device",
@@ -83,6 +92,8 @@ def direct_catastrophic_actions_are_recognized():
         "printf x | exit 0; shutdown -h now": "power",
         "printf x | exec true; reboot": "power",
         ":(){ :|:& };:": "fork",
+        "f(){ f|f& };f": "fork",
+        "bomb(){ bomb | bomb & };bomb": "fork",
     }
     for command, expected in commands.items():
         reason = catastrophic_reason("run_command", {"command": command})
@@ -116,6 +127,7 @@ def mentions_examples_searches_and_comments_are_allowed():
         "rm -rf ../../*",
         "rm -rf ../..",
         "cd /tmp/sliceagent-build && rm -rf *",
+        "cd /tmp && rm -rf *",
         "rm -rf \"./build dir\"/*",
         "rm -rf \"/tmp/sliceagent-test\"/*",
         "rm -rf '$HOME'",
@@ -126,6 +138,11 @@ def mentions_examples_searches_and_comments_are_allowed():
         "rm -rf \"${HOME}/*\"",
         "rm -rf \"~\"",
         "rm -rf './*'",
+        "g(){ echo hi; }; g",
+        "f(){ f | grep x; }; f",
+        "f(){ echo x | f & }; f",   # recursion into a pipeline WITHOUT the same-name fan-out shape is
+        #                             still a fork bomb at runtime, but the classifier requires the exact
+        #                             ``name | name &`` body shape to refuse — documented abstain
         "rm -rf --preserve-root /",
         "git push origin main",
         "env --definitely-unknown reboot",

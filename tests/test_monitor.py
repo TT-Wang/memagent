@@ -161,11 +161,20 @@ def live_server_smoke():
     m = SliceMonitor()
     m.sink(sb("SYSTEM-PROMPT", "ACTIVE SLICE TEXT"))
     srv, url = serve(m, port=7790)
+    token = srv.monitor_token
+    base = url.split("?", 1)[0]                # strip the ?token=… query for explicit token use below
     try:
-        page = urllib.request.urlopen(url + "/", timeout=3).read().decode()
+        page = urllib.request.urlopen(f"{base}/?token={token}", timeout=3).read().decode()
         assert "active memory slice" in page and "/api/state" in page
-        state = json.loads(urllib.request.urlopen(url + "/api/state", timeout=3).read().decode())
+        state = json.loads(urllib.request.urlopen(f"{base}/api/state?token={token}", timeout=3).read().decode())
         assert state["steps_total"] == 1 and state["steps"][0]["user"] == "ACTIVE SLICE TEXT"
+        # the monitor serves the FULL model-visible context — it must be token-gated on loopback
+        try:
+            urllib.request.urlopen(f"{base}/api/state", timeout=3).read()
+            assert False, "token-less /api/state must be refused"
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 401
+        assert token and len(token) >= 24
     finally:
         srv.shutdown()
 
@@ -241,21 +250,29 @@ def persistent_server_idle_and_sessions():
     d = tempfile.mkdtemp()
     srv = ThreadingHTTPServer(("127.0.0.1", 7793), _PersistentHandler)
     srv.monitor_dir = d
+    srv.monitor_token = "test-token-0123456789abcdef"
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     try:
+        base = "http://127.0.0.1:7793/api/state?token=test-token-0123456789abcdef"
         # empty dir → idle, no session
-        st = json.loads(urllib.request.urlopen("http://127.0.0.1:7793/api/state", timeout=3).read())
+        st = json.loads(urllib.request.urlopen(base, timeout=3).read())
         assert st["idle"] is True and st["session"] is None and st["sessions"] == []
         # a fresh session → live (not idle), shows up
         s1 = make_file_monitor_sink("live-1", dir=d)
         s1(sb("S", "U")); s1.writer.drain()       # MON2: async write — wait for the file to land
-        st = json.loads(urllib.request.urlopen("http://127.0.0.1:7793/api/state", timeout=3).read())
+        st = json.loads(urllib.request.urlopen(base, timeout=3).read())
         assert st["session"] == "live-1" and st["idle"] is False and "live-1" in st["sessions"]
         # a stale file → idle (age past threshold), but still served (doesn't die)
         old = time.time() - IDLE_SECONDS - 50
         os.utime(os.path.join(d, "live-1.json"), (old, old))
-        st = json.loads(urllib.request.urlopen("http://127.0.0.1:7793/api/state", timeout=3).read())
+        st = json.loads(urllib.request.urlopen(base, timeout=3).read())
         assert st["idle"] is True and st["session"] == "live-1" and st["steps"][0]["user"] == "U"
+        # token-gated: no token → 401
+        try:
+            urllib.request.urlopen("http://127.0.0.1:7793/api/state", timeout=3).read()
+            assert False, "token-less /api/state must be refused"
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 401
     finally:
         srv.shutdown()
 

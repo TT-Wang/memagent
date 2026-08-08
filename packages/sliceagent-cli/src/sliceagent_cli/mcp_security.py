@@ -14,6 +14,7 @@ pass. General + task-agnostic — only the shell-interpreter-plus-egress/persist
 """
 from __future__ import annotations
 
+import base64
 import os
 import re
 import shlex
@@ -34,9 +35,38 @@ _PERSISTENCE = re.compile(
     r"authorized_keys|\.ssh/|/etc/ssh\b"
     r"|/etc/pam\.d\b|pam_[\w-]+\.so|/etc/sudoers"
     r"|/etc/cron|crontab\b|/etc/rc\.local|/etc/systemd"
-    r"|\.bashrc\b|\.bash_profile\b|\.profile\b|\.zshrc\b",
+    r"|\.bashrc\b|\.bash_profile\b|\.profile\b|\.zshrc\b"
+    # verb-shaped persistence surfaces the path shapes above cannot see (no file path is named):
+    r"|\bsystemctl\s+(?:enable|mask|preset)\b"
+    r"|\bschtasks\s+(?:/create\b|\/create\b)"
+    r"|\blaunchctl\s+(?:load|bootstrap)\b"
+    r"|\breg\s+add\b|\bsc\.exe\s+create\b",
     re.IGNORECASE,
 )
+
+# Base64 blobs long enough to carry a real command (>= 16 chars, canonical alphabet, optional padding).
+_BASE64_BLOB = re.compile(r"[A-Za-z0-9+/]{16,}={0,2}")
+
+
+def _deobfuscated(full: str) -> list[str]:
+    """Return extra scan texts that strip the two cheap obfuscations from an inline shell script.
+
+    ``wge"t"`` (quote-split executable) and ``echo <base64> | base64 -d | sh`` (encoded payload) both
+    defeat a raw substring scan of the original command. Scanning the quote-stripped text and every
+    decodable base64 blob closes both without a real shell parser; the screen only ever refuses a
+    SHELL-interpreter entry on these shapes, so the residual false-positive cost is an over-refusal of
+    a hand-typed shell MCP that quotes a keyword — an acceptable trade against RCE-by-design entries.
+    """
+    texts = [full.replace('"', "").replace("'", "")]
+    for blob in _BASE64_BLOB.findall(full):
+        padded = blob + "=" * (-len(blob) % 4)
+        try:
+            decoded = base64.b64decode(padded, validate=True).decode("utf-8", "replace")
+        except Exception:  # noqa: BLE001 — a non-decodable blob is not an encoded payload
+            continue
+        if decoded.strip():
+            texts.append(decoded)
+    return texts
 
 
 def _script(args) -> str:
@@ -68,10 +98,11 @@ def validate_mcp_server_entry(name: str, conf) -> list[str]:
     if not any(os.path.basename(t).lower() in _SHELL_INTERPRETERS for t in tokens):
         return []
     issues: list[str] = []
-    if _EGRESS.search(full):
+    scan_texts = [full] + _deobfuscated(full)
+    if any(_EGRESS.search(text) for text in scan_texts):
         issues.append(f"MCP server '{name}': a shell interpreter with network-egress arguments "
                       "(exfiltration shape — not a real MCP server)")
-    if _PERSISTENCE.search(full):
+    if any(_PERSISTENCE.search(text) for text in scan_texts):
         issues.append(f"MCP server '{name}': a shell interpreter writing to an OS persistence surface "
                       "(SSH keys / PAM / sudoers / cron / shell rc — backdoor shape, not a real MCP server)")
     return issues

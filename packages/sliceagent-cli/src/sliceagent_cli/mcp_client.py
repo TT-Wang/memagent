@@ -19,7 +19,7 @@ import re
 import threading
 
 from .registry import ToolEntry, ToolText
-from sliceagent_core.safety import wrap_untrusted
+from sliceagent_core.safety import first_threat_message, wrap_untrusted
 
 _QUALIFY_MAX = 64
 
@@ -87,6 +87,11 @@ def _function_schema(qname: str, tool) -> dict:
     if not isinstance(params, dict) or params.get("type") != "object":
         params = {"type": "object", "properties": {}}
     desc = (getattr(tool, "description", None) or f"MCP tool {tool.name}").strip()
+    # The remote server controls its own description, and it is injected into the model's trusted tool
+    # schema verbatim — an injection channel the wrap-on-read seam (tool OUTPUT) does not cover. Threat-
+    # scan it like any other untrusted MCP content; a flagged description degrades to a neutral one.
+    if first_threat_message(desc) is not None:
+        desc = f"MCP tool {tool.name}"
     return {"type": "function", "function": {"name": qname, "description": desc[:1024], "parameters": params}}
 
 

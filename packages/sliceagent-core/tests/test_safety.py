@@ -145,17 +145,28 @@ def redact_masks_authorization_bearer_header():
 
 @check
 def redact_code_file_keeps_larger_budget():
-    # code_file=True is the "keep more content" mode: it SKIPS the ENV-assignment and
+    # code_file=True is the "keep more content" mode: it SKIPS the general ENV-assignment and
     # JSON-field passes (so source-code constants/fixtures survive un-mangled) while
     # still redacting true leaked credentials (prefix keys, JWTs, DB passwords, ...).
     # (Plan bullet phrases this as "MAX_TOKENS=4096"; safety.py expresses the same
     #  "keeps larger budget" intent via the code_file skip — see deviations.)
+    # Hardened 2026-08-08: a dotenv/config file IS code-file content, so line-start UPPERCASE
+    # assignments (the .env shape — AWS_ACCESS_KEY_ID=…, MYSQL_PWD=…) are redacted even in
+    # code_file mode; indented/lowercase source assignments still survive (the original budget intent).
     src = 'API_KEY=mysupersecretvalue1234567890 ; live = "sk-abcdefghij1234567890XYZ"'
     default = redact_text(src, code_file=False)
     code = redact_text(src, code_file=True)
-    # default mode masks the ENV value; code_file mode leaves the source assignment intact.
+    # default mode masks the ENV value; code_file mode now masks line-start UPPERCASE dotenv-style
+    # lines too (a persisted snapshot must not carry .env secrets verbatim).
     assert "mysupersecretvalue1234567890" not in default, default
-    assert "API_KEY=mysupersecretvalue1234567890" in code, code
+    assert "mysupersecretvalue1234567890" not in code, code
+    assert "API_KEY=" in code, code
+    # source-style assignments (indented or lowercase) still survive un-mangled in code_file mode
+    src2 = '    password = "test-fixture"\napi_token = "fixture"\nAWS_ACCESS_KEY_ID=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY'
+    code2 = redact_text(src2, code_file=True)
+    assert 'password = "test-fixture"' in code2, code2
+    assert 'api_token = "fixture"' in code2, code2
+    assert "wJalrXUtnFEMI" not in code2, code2
     # both modes still strip a real prefix secret.
     assert "sk-abcdefghij1234567890XYZ" not in code, code
     assert "sk-abcdefghij1234567890XYZ" not in default, default
