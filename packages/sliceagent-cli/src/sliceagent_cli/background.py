@@ -95,13 +95,19 @@ class BackgroundChildManager:
             self._stash.extend(reclaim)
 
     def deliver(self, peer) -> None:
-        """Hand a completion to the live turn's queue, or stash it while the agent is idle."""
+        """Hand a completion to the live turn's queue, or stash it while the agent is idle.
+
+        The queue ref and the put are both under the lock: ``detach()`` (turn retirement) can null
+        ``self._queue`` between a read and an outside put, and the put would then land on a queue
+        nobody ever drains — a completion silently lost despite the stash-on-idle path (review
+        finding). queue.put on this unbounded queue never blocks, so holding the lock is safe.
+        """
         with self._lock:
             q = self._queue
             if q is None:
                 self._stash.append(peer)
                 return
-        q.put(peer)
+            q.put(peer)
 
     def account_usage(self, usage: dict) -> None:
         with self._lock:

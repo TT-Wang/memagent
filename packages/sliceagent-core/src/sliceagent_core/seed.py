@@ -599,15 +599,20 @@ def make_build_slice(state, tools, retriever, memory, task: str, session_id: str
         # re-render the edited file, invalidating the provider's prefix cache for everything after
         # it — the measured #1 same-turn break source (two instrumented diagnoses; test_seed.py x9).
         # The model's own edits are already visible in the trajectory (tool results), so the
-        # turn-START snapshot plus the trajectory is complete information. Cache key = object
-        # identity + turn ordinal: a new turn (seal/reset increments s.turns) naturally
-        # invalidates; nothing persists across turns. (The interim AGENT_FREEZE_OPEN_FILES
+        # turn-START snapshot plus the trajectory is complete information. Cache key = turn ordinal,
+        # stored ON THE SLICE OBJECT (not the function): a new turn (seal/reset increments s.turns)
+        # naturally invalidates; nothing persists across turns. (The interim AGENT_FREEZE_OPEN_FILES
         # full-body freeze was subsumed by this branch and retired 2026-08-05 — review note b.)
-        _key = (id(s), int(getattr(s, "turns", 0) or 0))
-        _frozen = getattr(make_build_slice, "_frozen_locators", None)
+        # Per-object storage, not a function-level (id(s), turns) dict: id() is REUSED once a
+        # transient slice (a subagent child) is freed, so a process-global dict could hand a later
+        # child the PREVIOUS child's rendered locator hashes, and any interleaved build of another
+        # slice cleared this session's snapshot (review M1). Each slice keeps its own turn-scoped
+        # snapshot, so children can never see each other's — or the parent's — frozen index.
+        _frozen = getattr(s, "_frozen_locators", None)
         if _frozen is None:
             _frozen = {}
-            make_build_slice._frozen_locators = _frozen
+            s._frozen_locators = _frozen
+        _key = int(getattr(s, "turns", 0) or 0)
         if _key not in _frozen:
             _frozen.clear()            # keep exactly one turn's snapshot — no growth
             _frozen[_key] = render_file_locators(s, tools, selected_paths=graph_paths)

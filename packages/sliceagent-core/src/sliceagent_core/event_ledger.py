@@ -373,9 +373,13 @@ class EventLedger:
                 except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
                     # A torn tail or an unrelated corrupt archived ledger cannot contaminate another exact
                     # source. The requested event remains visibly unavailable unless a readable ledger owns it.
+                    # A genuinely torn tail (crash mid-append: the LAST line lacks a trailing newline) ends
+                    # this ledger's scan — nothing valid follows it. A corrupt COMPLETE line mid-file is
+                    # SKIPPED instead (salvage): later appends from subsequent seals are still valid, and
+                    # dropping them with the corrupt line would hide events this ledger genuinely owns.
                     if index == len(lines) and not complete:
                         break
-                    break
+                    continue
                 if event.id not in wanted:
                     continue
                 previous = found.get(event.id)

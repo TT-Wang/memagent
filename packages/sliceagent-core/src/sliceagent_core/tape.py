@@ -331,6 +331,7 @@ def compact_tape(tape: list, files: dict, *, budget: int = TAPE_BUDGET_CHARS) ->
         affected: set[str] = set()
         removed = 0
         anchors_cost = 0
+        extra = 0     # incremental reclaim: bytes of affected files' post-cut entries
         post_cut_by_path: dict[str, int] = {}
         for e in tape:
             if e.kind in _FILE_KINDS and e.path:
@@ -342,10 +343,17 @@ def compact_tape(tape: list, files: dict, *, budget: int = TAPE_BUDGET_CHARS) ->
             if e.kind in _FILE_KINDS and e.path:
                 post_cut_by_path[e.path] -= len(e.rendered)
                 if e.path not in affected:
+                    # this path joins the fold: its REMAINING post-cut entries become reclaimable
                     affected.add(e.path)
                     anchors_cost += _anchor_cost(e.path)
-            # dropping an affected file's post-cut entries also reclaims their bytes
-            extra = sum(post_cut_by_path[p] for p in affected)
+                    extra += post_cut_by_path[e.path]
+                else:
+                    # this entry was already counted at join time; it now passes the cut
+                    extra -= len(e.rendered)
+            # dropping an affected file's post-cut entries also reclaims their bytes. `extra` is
+            # maintained incrementally — the original re-summed post_cut_by_path over the growing
+            # affected set for EVERY cut (O(n·k) over thousands of entries at every over-budget
+            # seal; review finding). Net effect per cut is identical.
             net = removed + extra - anchors_cost - 200      # 200 ≈ marker
             if net > best_net:
                 best_cut, best_net = cut, net
@@ -638,6 +646,28 @@ def tape_journal_append(path: str, entries: list) -> None:
     with open(path, "a", encoding="utf-8") as f:
         for e in entries:
             f.write(json.dumps(e.to_record(), ensure_ascii=False) + "\n")
+        # One fsync per SEAL (not per entry): a crash mid-append otherwise tears the last line in
+        # the middle of the file and, under the old all-or-nothing replay, discarded every valid
+        # later seal with it. Replay now salvages mid-file tears, but fsyncing the burst keeps the
+        # torn-tail window to a single in-flight seal in the first place.
+        f.flush()
+        os.fsync(f.fileno())
+
+
+def _journal_lines(path: str):
+    """Yield (line, is_last, complete) for every non-empty journal line.
+
+    ``complete`` is whether the raw line ends with a newline — the torn-tail signal a crash
+    mid-write leaves on the LAST line. The whole file is read up front so a mid-file corrupt
+    line can be distinguished from a genuinely torn tail (see :func:`journal_registries`).
+    """
+    with open(path, encoding="utf-8") as stream:
+        lines = stream.readlines()
+    for index, raw in enumerate(lines):
+        complete = raw.endswith(("\n", "\r"))
+        line = raw.rstrip("\r\n")
+        if line:
+            yield line, index == len(lines) - 1, complete
 
 
 def journal_registries(path: str) -> tuple[set, set]:
@@ -649,14 +679,14 @@ def journal_registries(path: str) -> tuple[set, set]:
     k_h: set = set()
     if not os.path.isfile(path):
         return f_h, k_h
-    for line in open(path, encoding="utf-8"):
-        line = line.strip()
-        if not line:
-            continue
+    for line, is_last, complete in _journal_lines(path):
         try:
             e = TapeEntry.from_record(json.loads(line))
-        except Exception:  # noqa: BLE001 — torn tail ends the scan
-            break
+        except Exception:  # noqa: BLE001
+            if is_last and not complete:
+                break        # genuinely torn tail (crash mid-write) — nothing valid follows
+            continue         # corrupt COMPLETE line: salvage semantics — later seals' entries
+        #                          are still valid and must not be discarded with it
         if e.kind == "finding":
             f_h.add((e.task, e.post_hash))
         elif e.kind == "knowledge":
@@ -668,19 +698,20 @@ def load_session_tape(path: str, *, budget: int = TAPE_BUDGET_CHARS) -> tuple[li
     """Rebuild (session_tape, tape_files) from the journal. Every base/patch replays through
     compose_after and is verified against its post_hash; a mismatching or unappliable entry drops
     its path from the registry (the composition contract then routes the model to read_file —
-    safe degradation, and the next edit founds a fresh base)."""
+    safe degradation, and the next edit founds a fresh base). A corrupt COMPLETE line mid-file is
+    skipped (salvage: later seals' entries remain valid); only a genuinely torn tail (crash
+    mid-write on the last line) ends the replay."""
     tape: list[TapeEntry] = []
     files: dict = {}
     if not os.path.isfile(path):
         return tape, files
-    for line in open(path, encoding="utf-8"):
-        line = line.strip()
-        if not line:
-            continue
+    for line, is_last, complete in _journal_lines(path):
         try:
             e = TapeEntry.from_record(json.loads(line))
-        except Exception:  # noqa: BLE001 — a torn tail line (crash mid-write) ends the replay
-            break
+        except Exception:  # noqa: BLE001
+            if is_last and not complete:
+                break        # genuinely torn tail — nothing valid follows
+            continue         # corrupt complete line — salvage later seals
         tape.append(e)
         if e.kind in ("base", "patch"):
             try:

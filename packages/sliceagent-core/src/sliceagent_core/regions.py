@@ -251,10 +251,10 @@ def record_note(s, text: str, source: str = "tool-note") -> bool:
 # render model-sourced text as "do not re-derive" (that authored the "already done" ratchet).
 _SOURCE_TAG = {
     "observed": "",                          # backed by a tool result — trust, but OPEN FILES still wins
-    "tool-note": " (your note — verify against OPEN FILES)",
+    "tool-note": " (your note — verify against the current file text or a tool result)",
     "delegated": (" (delegated testimony — UNVERIFIED; the successful spawn proves it was returned/sealed, "
                   "not that its workspace claims are true; check its primary observation or artifact)"),
-    "claim": " (UNVERIFIED claim — confirm against OPEN FILES/a tool result before relying on it)",
+    "claim": " (UNVERIFIED claim — confirm against the current file text or a tool result before relying on it)",
 }
 
 
@@ -303,19 +303,35 @@ def _knowledge_frozen(s, memory_text: str) -> bool:
     return (_active_task_id(s), knowledge_hash(memory_text)) in frozen
 
 
+# Bound the WORLD MODEL's seed view. The stored map is deliberately uncapped (the seal is its
+# durability bound), but the RENDER is a view: an unbounded view defeated the elasticity controller —
+# the region had no locator alternative, so a grown scratchpad behaved like a mandatory region and
+# could throw ContextUnfitError → overflow park (review M9). The budget is generous (far above any
+# realistic maintained map) and the elision is EXPLICIT, so detail is never silently dropped: the full
+# map stays in the sealed checkpoint and the note says where.
+_WORLD_RENDER_CHARS = 16_000
+
+
 def render_world(world: dict) -> str:
     """The agent's durable WORLD MODEL — a maintained key→value scratchpad (maze map, inventory,
     system state, plan). Long/multiline values render as their own block; short ones as bullets.
-    No cap (bound = the seal, not a cut): the whole maintained state renders into each turn's seed."""
+    Bounded render with an explicit elision note (see _WORLD_RENDER_CHARS); the full maintained
+    state remains in the sealed checkpoint."""
     if not world:
         return ""
     parts = []
+    used = 0
     for k, v in world.items():
         v = str(v)
         if "\n" in v or len(v) > 80:
-            parts.append(f"## {k}\n{v}")
+            block = f"## {k}\n{v}"
         else:
-            parts.append(f"- {k}: {v}")
+            block = f"- {k}: {v}"
+        if used + len(block) + 2 > _WORLD_RENDER_CHARS and parts:
+            parts.append(f"… +{len(world) - len(parts)} more keys (full map in the sealed checkpoint)")
+            break
+        parts.append(block)
+        used += len(block) + 2
     return "\n".join(parts)
 
 
@@ -899,7 +915,7 @@ _NOW_FOOTER = ("# NOW: address the CURRENT REQUEST above. If it asks a QUESTION 
                "it directly (observation tools may ground the answer). If it asks for action, use reasonable "
                "reversible judgment to carry it through within the exact user constraints; ask only when a "
                "material ambiguity would change the result or before an unclear consequential external action. "
-               "Base changes on OPEN FILES; once the request is fully handled and verified "
+               "Base changes on the current file text — your SESSION TAPE composition when its hash matches the OPEN FILES index, otherwise a fresh read_file; once the request is fully handled and verified "
                "as well as the environment allows, deliver a brief closeout (outcome + verification — the host "
                "already records each edit) and make NO tool call.")
 
@@ -973,13 +989,13 @@ REGIONS: tuple[RegionSpec, ...] = (
     # Under the TAPE the conversation region is retired: user asks live verbatim in the digests,
     # assistant replies as frozen [reply] entries — same bytes, billed once instead of every
     # boundary (census 2026-08-05: this region cost 3.8k chars per boundary at full price).
-    RegionSpec("findings",       lambda c: (f"# YOUR NOTES FROM PRIOR TOOL CALLS (task-scoped observations and claims to REUSE as leads; OPEN FILES stays ground truth for current contents. Per-note tags mark trust: no tag = observed, '(your note)' = summary, '(UNVERIFIED claim)' = not confirmed. Earlier notes are frozen as [finding] entries on the SESSION TAPE)\n{render_findings(_unfrozen_findings(c['s'], c['max_findings']), c['s'].finding_source)}\n\n" if render_findings(_unfrozen_findings(c["s"], c["max_findings"]), c["s"].finding_source) else ""), 5, 82, InstructionClass.TASK_STATE, FreshnessClass.REVISION_BOUND, False, EpistemicRole.CLAIM),
+    RegionSpec("findings",       lambda c: (f"# YOUR NOTES FROM PRIOR TOOL CALLS (task-scoped observations and claims to REUSE as leads; the tape composition, hash-checked against the OPEN FILES index, stays ground truth for current contents. Per-note tags mark trust: no tag = observed, '(your note)' = summary, '(UNVERIFIED claim)' = not confirmed. Earlier notes are frozen as [finding] entries on the SESSION TAPE)\n{render_findings(_unfrozen_findings(c['s'], c['max_findings']), c['s'].finding_source)}\n\n" if render_findings(_unfrozen_findings(c["s"], c["max_findings"]), c["s"].finding_source) else ""), 5, 82, InstructionClass.TASK_STATE, FreshnessClass.REVISION_BOUND, False, EpistemicRole.CLAIM),
     # progress/world carry CLAIM (not the CONTROL_STATE fallback they used to inherit): both are the model's
     # own carried-forward assertions — same epistemic status as findings — never live observation.
     RegionSpec("progress",       lambda c: (f"# PROGRESS SIGNALS (small task-scoped observations carried across turns; exact detail remains in @sliceagent/history/)\n{render_progress_signals(c['s'].task.progress_signals)}\n\n" if render_progress_signals(c['s'].task.progress_signals) else ""), 5, 35, InstructionClass.TASK_STATE, FreshnessClass.HISTORICAL, False, EpistemicRole.CLAIM),
-    RegionSpec("world",          lambda c: (f"# WORLD MODEL (durable task state YOU maintain — your map / inventory / progress; update with world_set, it persists across turns until the task changes)\n{render_world(c['s'].world)}\n\n" if c['s'].world else ""), 5, 85, InstructionClass.TASK_STATE, FreshnessClass.REVISION_BOUND, False, EpistemicRole.CLAIM),
+    RegionSpec("world",          lambda c: (f"# WORLD MODEL (durable task state carried from an earlier session — read-only now; record new state as findings or ACTIVE WORK)\n{render_world(c['s'].world)}\n\n" if c['s'].world else ""), 5, 85, InstructionClass.TASK_STATE, FreshnessClass.REVISION_BOUND, False, EpistemicRole.CLAIM),
     # ──────────── TIER 4 · RECALL — paged out of the slice; fetched on demand. ────────────
-    RegionSpec("threads",        lambda c: (f"# OTHER OPEN THREADS (parked topics — resume one with switch_topic; do NOT mix them into the current task)\n{c['threads']}\n\n" if c["threads"] else ""), 5, 25, InstructionClass.TASK_STATE, FreshnessClass.DERIVED, False, EpistemicRole.LOCATOR),
+    RegionSpec("threads",        lambda c: (f"# OTHER OPEN THREADS (parked topics the host may resume — do NOT mix them into the current task)\n{c['threads']}\n\n" if c["threads"] else ""), 5, 25, InstructionClass.TASK_STATE, FreshnessClass.DERIVED, False, EpistemicRole.LOCATOR),
     # PAGED-OUT HISTORY — the cache MANIFEST: earlier turns of THIS session that are NOT in the slice,
     # each with the exact @sliceagent/history/ read_file call to page it back. Sits beside GHOST INDEX
     # (same "it's paged out, here's the one call to get it"
@@ -1044,7 +1060,7 @@ def _locator_region(name: str, ctx: dict) -> tuple[str, tuple[str, ...], bool] |
     if name == "open_files":
         paths = tuple(dict.fromkeys(ctx.get("open_file_paths", getattr(s, "active_files", ())) or ()))
         body = "\n".join(f'- read_file("{path}")' for path in paths)
-        return ("# OPEN FILES (paged under context pressure — re-read live before acting)\n"
+        return ("# OPEN FILES (index paged under context pressure — re-read a file before editing it)\n"
                 + (body or "(no resident file body)"), paths or ("workspace",), True)
     if name == "related_code":
         return ("# RELATED CODE (derived view omitted under pressure — use grep/glob on the live repo)\n"
@@ -1080,7 +1096,7 @@ def _locator_region(name: str, ctx: dict) -> tuple[str, tuple[str, ...], bool] |
         return ("# EXECUTION PROGRESS (detail paged under pressure)\n"
                 '- read_file("artifacts/index.md") for sealed turn detail', ("artifacts/index.md",), False)
     if name == "threads":
-        return ("# OTHER OPEN THREADS (details omitted under pressure; switch_topic by task id to refine)\n"
+        return ("# OTHER OPEN THREADS (details omitted under pressure — the host owns resuming these)\n"
                 + str(ctx.get("threads") or ""), ("task-checkpoints",), True)
     if name == "focus":
         return ("# CURRENT PROJECT (live locator)\n" + str(ctx.get("focus") or ""),
@@ -1088,6 +1104,20 @@ def _locator_region(name: str, ctx: dict) -> tuple[str, tuple[str, ...], bool] |
     if name == "worktree":
         return ("# REPO STATE (live view omitted under pressure — re-run git status before relying on it)",
                 ("workspace",), True)
+    if name == "world":
+        # The WORLD MODEL is the agent's own read-only scratchpad (the WIP/2026-08-05 framing: record
+        # new state as findings or ACTIVE WORK). Without a locator alternative the elasticity
+        # controller could never step it down — a grown map behaved exactly like a mandatory region
+        # and threw ContextUnfitError (review M9). Its full content stays in the task checkpoints
+        # (same durable store the OTHER OPEN THREADS locator points at).
+        return ("# WORLD MODEL (paged under pressure — earlier state remains in the task checkpoints; "
+                "record current state as findings or ACTIVE WORK)\n", ("task-checkpoints",), True)
+    if name == "task_constraints":
+        # Task/legacy intent clauses are NOT user authority (the region header says so); under pressure
+        # they degrade to a pointer while the exact user intent regions above stay lossless. The full
+        # clauses remain in the task checkpoints.
+        return ("# PARENT TASK CONSTRAINTS (paged under pressure — task/legacy clauses remain in the "
+                "task checkpoints; the user intent regions above outrank them)\n", ("task-checkpoints",), True)
     return None
 
 
