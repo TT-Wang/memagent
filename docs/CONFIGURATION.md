@@ -2,7 +2,7 @@
 
 _Auto-generated from `src/sliceagent/envspec.py` — do not edit by hand (`python scripts/gen_config_reference.py`)._
 
-sliceagent reads **73** environment variables across **6** groups; every value is validated at startup (a misspelled enum warns instead of silently defaulting). Run `sliceagent config --list` to see the resolved value of each on your machine. Secrets (🔒) are read from the environment / config and never printed.
+sliceagent reads **81** environment variables across **6** groups; every value is validated at startup (a misspelled enum warns instead of silently defaulting). Run `sliceagent config --list` to see the resolved value of each on your machine. Secrets (🔒) are read from the environment / config and never printed.
 
 ## agent
 
@@ -15,14 +15,17 @@ sliceagent reads **73** environment variables across **6** groups; every value i
 | `AGENT_CONTEXT_WINDOW` | — | Provider context window used for strict per-call capacity preflight when the model catalog cannot supply one (0/unset = explicit compatibility mode). |
 | `AGENT_DELEGATION_ABSOLUTE` | `3600` | Absolute per-wave child leak guard in seconds; invalid/non-positive values use 3600. |
 | `AGENT_DELEGATION_TIMEOUT` | `900` | Per-child inactivity window in seconds, reset by child/transport activity; invalid/non-positive values use 900. |
+| `AGENT_MAX_BACKGROUND_CHILDREN` | `8` | Ceiling on concurrently running detached (background) delegated children; the manager thread pool never exceeds this. |
 | `AGENT_MAX_STEPS` | `120` | Per-turn step ceiling (runaway backstop, NOT a work meter — the budget and the user are); raise for deep analysis. |
 | `AGENT_MAX_TOKENS` | — | Per-turn task token budget, including delegated child usage (parks when exhausted). |
 | `AGENT_MINE` | `off` | Opt-in lesson/skill-candidate mining mode for end-of-session consolidation: deterministic, llm, or off. Automatic skill candidates stay inactive. |
 | `AGENT_MODEL` | — | LLM model id to drive the agent. REQUIRED — no default; set it here or pick a provider+model via `sliceagent init`. |
 | `AGENT_MODEL_FALLBACK` | — | Larger-context model to switch to ONCE if the context overflows even after compaction (secondary net; the bounded slice is the primary). |
+| `AGENT_PIN_PROJECTION` | — | Set to 0 to disable the pinned (unchanged-trajectory) projection fast path in the capacity preflight. |
 | `AGENT_PROJECT_SKILLS` | — | Trust repo-local skills (the workspace's .sliceagent/skills) everywhere. Off by default: repo-controlled instructions never load by mere presence — a workspace opts in with a .sliceagent/skills-trust marker file instead (Pi's project-trust gate). |
 | `AGENT_PROVIDER` | — | Default provider id to use from the config's [providers.<id>] tables (overrides [agent].default_provider). |
 | `AGENT_REASONING` | `full` | Reasoning effort: full=provider default, fast=minimal, high/max=more. _(choices: full, fast, high, max)_ |
+| `AGENT_RECORD_REPLAY` | — | Opt-in byte-exact replay corpus (system prompt + roster) for slipstream gap analysis; writes a private journal. |
 | `AGENT_ROOT` | — | Workspace root override (defaults to the current directory). |
 | `AGENT_ROUTER` | `lexical` | Topic router: lexical (instant, no LLM) or llm (classifier round-trip). _(choices: lexical, llm)_ |
 | `AGENT_SANDBOX` | `local` | Tool sandbox backend; docker requires POSIX/WSL2 (native Windows: use local or run under WSL2). _(choices: local, docker)_ |
@@ -35,6 +38,7 @@ sliceagent reads **73** environment variables across **6** groups; every value i
 | `AGENT_VERIFY_TIMEOUT` | `600` | Deadline in seconds for an acceptance check (a work item's verify command, or the oracle); default 600s, operator-raisable to 3600s. A check that overruns is INDETERMINATE, never failed. |
 | `AGENT_WEB` | `1` | Enable the web tools (fetch_url + web_search, DuckDuckGo, no key); set 0/off to disable network egress from the agent. |
 | `AGENT_WEB_DEADLINE` | `60` | Total wall-clock deadline (seconds) for one fetch_url/web_search call, spanning redirects — a slow-trickle server cannot reset it the way it resets the per-read timeout. |
+| `LLM_TEMPERATURE` | — | Sampling temperature override; unset keeps the provider default. Deliberately env-only: eval/replay harnesses pin 0 for decision-equivalence measurements. |
 | `SLICEAGENT_BASH` | — | Windows only: bash.exe that runs shell commands (default: auto-detect Git Bash). |
 
 ## debug
@@ -51,6 +55,7 @@ sliceagent reads **73** environment variables across **6** groups; every value i
 
 | variable | default | description |
 |---|---|---|
+| `AGENT_TAPE_BUDGET` | `120000` | Character budget for the session tape before a fold compacts it (re-read each compaction; counts frozen bytes). |
 | `MEMEM_VAULT` | — | memem's lesson vault (markdown long-term memories), if memem is installed. |
 | `SLICEAGENT_AGENT_ID` | `sliceagent` | Stable agent scope key for typed CRAFT knowledge. |
 | `SLICEAGENT_CACHE_DIR` | — | sliceagent state root for always-on checkpoints, immutable artifacts, recovery journals, and the optional episodic compatibility mirror. |
@@ -102,6 +107,9 @@ sliceagent reads **73** environment variables across **6** groups; every value i
 
 | variable | default | description |
 |---|---|---|
+| `AGENT_MONITOR` | — | Enable the active-memory-slice monitor: a session writes its redacted snapshot to the monitor dir for the standing server. |
+| `AGENT_MONITOR_PORT` | `7654` | Port the standing monitor server binds (first free port at/after it). |
+| `AGENT_MONITOR_TOKEN` | — | Pin the monitor server's bearer token; when unset a fresh random token is minted per start and printed in the URL. Every /api/state and page request must carry it. |
 | `AGENT_SPINNER` | `on` | Animated in-place status spinner during a turn (a Rich live region). Set off to drop just the spinner; all other Rich formatting stays. _(choices: on, off)_ _(aliases: 1, true, yes, 0, false, no)_ |
 | `AGENT_TUI` | `live` | UI mode: live (default — the pinned rich TUI) or off (plain stdout; pipes/CI). The inline REPL tier is retired; legacy values rich/inline/repl mean live. _(choices: live, off)_ _(aliases: rich, inline, repl, 1, on, true, yes, 0, false, no)_ |
 | `SHOW_SLICE` | — | Set truthy to print the rebuilt slice each turn (debug view). |

@@ -48,6 +48,24 @@ REGISTRY: list[EnvVar] = [
     EnvVar("AGENT_WEB_DEADLINE", "agent", "Total wall-clock deadline (seconds) for one fetch_url/"
            "web_search call, spanning redirects — a slow-trickle server cannot reset it the way it "
            "resets the per-read timeout.", "60"),
+    EnvVar("AGENT_MAX_BACKGROUND_CHILDREN", "agent", "Ceiling on concurrently running detached "
+           "(background) delegated children; the manager thread pool never exceeds this.", "8"),
+    EnvVar("AGENT_MONITOR", "ui", "Enable the active-memory-slice monitor: a session writes its "
+           "redacted snapshot to the monitor dir for the standing server.", ""),
+    EnvVar("AGENT_MONITOR_PORT", "ui", "Port the standing monitor server binds (first free port "
+           "at/after it).", "7654"),
+    EnvVar("AGENT_MONITOR_TOKEN", "ui", "Pin the monitor server's bearer token; when unset a fresh "
+           "random token is minted per start and printed in the URL. Every /api/state and page "
+           "request must carry it.", ""),
+    EnvVar("AGENT_PIN_PROJECTION", "agent", "Set to 0 to disable the pinned (unchanged-trajectory) "
+           "projection fast path in the capacity preflight.", ""),
+    EnvVar("AGENT_RECORD_REPLAY", "agent", "Opt-in byte-exact replay corpus (system prompt + roster) "
+           "for slipstream gap analysis; writes a private journal.", ""),
+    EnvVar("AGENT_TAPE_BUDGET", "memory", "Character budget for the session tape before a fold "
+           "compacts it (re-read each compaction; counts frozen bytes).", "120000"),
+    EnvVar("LLM_TEMPERATURE", "agent", "Sampling temperature override; unset keeps the provider "
+           "default. Deliberately env-only: eval/replay harnesses pin 0 for decision-equivalence "
+           "measurements.", ""),
     EnvVar("AGENT_PROJECT_SKILLS", "agent", "Trust repo-local skills (the workspace's "
            ".sliceagent/skills) everywhere. Off by default: repo-controlled instructions never load "
            "by mere presence — a workspace opts in with a .sliceagent/skills-trust marker file "

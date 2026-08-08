@@ -19,6 +19,11 @@ PRICES = {
     # model id -> per-token USD
     "deepseek-v4-flash": {"hit": 0.0028e-6, "miss": 0.14e-6, "out": 0.28e-6},
     "deepseek-v4-pro": {"hit": 0.003625e-6, "miss": 0.435e-6, "out": 0.87e-6},
+    # gpt-5.5 list rates as published in README.md's cost disclosure: $1.25/M fresh input,
+    # $0.125/M cached input (10x prefix discount), $10/M output. Without this sheet, running
+    # benchmarks/run.py with AGENT_MODEL=gpt-5.5 (the README's instructed reproduction) crashed
+    # after the first turn with KeyError (2026-08-08 review M11).
+    "gpt-5.5": {"hit": 0.125e-6, "miss": 1.25e-6, "out": 10e-6},
 }
 
 

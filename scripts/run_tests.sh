@@ -21,7 +21,7 @@ if [ "${#test_files[@]}" -eq 0 ]; then
   exit 2
 fi
 
-pass=0; fail=0; failed=""
+pass=0; skip=0; fail=0; failed=""; skipped=""
 log="$(mktemp)"
 for t in "${test_files[@]}"; do
   # A file with no __main__ block defines its tests and exits 0 without running ANY of them, so the
@@ -33,7 +33,14 @@ for t in "${test_files[@]}"; do
     runner=("$PY" -m pytest -q "$t")
   fi
   if "${runner[@]}" >"$log" 2>&1; then
-    pass=$((pass + 1))
+    # The suite's skip convention is `print("SKIP …"); sys.exit(0)`: a whole file can legitimately
+    # abstain (missing optional `tui` extra, no PTY, win32). Count those SEPARATELY — SKIP is not
+    # PASS, and the tally must not silently hide abstaining coverage (2026-08-08 review M10).
+    if grep -q "^SKIP" "$log"; then
+      skip=$((skip + 1)); skipped="$skipped $t"
+    else
+      pass=$((pass + 1))
+    fi
   else
     fail=$((fail + 1)); failed="$failed $t"
     echo "── FAIL: $t ─────────────────────────────"
@@ -45,5 +52,5 @@ done
 rm -f "$log"
 
 echo "────────────────────────────────────────"
-echo "suite: ${pass} passed, ${fail} failed${failed:+  (${failed} )}"
+echo "suite: ${pass} passed, ${skip} skipped, ${fail} failed${failed:+  (${failed} )}${skipped:+  [skipped:${skipped} ]}"
 [ "$fail" -eq 0 ]

@@ -79,8 +79,16 @@ def empty_error_not_none_string():
 
 @check
 def resume_emits_no_convergence_nudge():
-    r = task_state_to_slice(slice_to_task_state(make_slice(), "t3"))
-    r.last_error = ""                                    # edited non-empty + no error...
+    # The per-turn exploration counter (turn_actions) drives the explore/convergence nudge trigger.
+    # A resumed task must NOT carry a previous session's burned budget into the new turn — reset()
+    # zeroes it (fresh action epoch), exactly like since_edit — otherwise the first action of the
+    # resumed turn would fire a stale nudge. (This check previously had NO assertion and could only
+    # fail by exception; review finding H6.)
+    s = make_slice()
+    s.turn_actions = 7                         # a previous session burned its exploration budget
+    r = task_state_to_slice(slice_to_task_state(s, "t3"))
+    assert getattr(r, "turn_actions", 0) == 0, "resume must reset the per-turn exploration counter"
+    assert r.last_error == s.last_error        # the carried error state itself still survives
 
 @check
 def resume_uses_live_ground_truth():
