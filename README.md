@@ -23,7 +23,7 @@ The field's default is *bigger windows + summarize*. sliceagent does the opposit
        alt="The core loop: a transcript agent re-sends its entire growing history every turn (208k to 1.66M tokens over 6 turns), while sliceagent rebuilds a history-bounded, task-elastic seed from the carried slice, live files, and lessons, then seals each turn to disk, and the hippocampus pages past turns back into future seeds on demand — sliceagent's per-request input stayed ~12-15k across the s1 benchmark.">
 </p>
 
-sliceagent's memory is organized like a brain: fast, lossy **perception** of the live world; an elastic **working memory** for the current task; a **hippocampus** backed by always-on local artifacts; and a typed native **neocortex** for provenance-linked USER, PROJECT, and CRAFT knowledge. Every turn *reconstructs* a history-bounded working set from these — it never replays a growing transcript. With Memem's structured-index protocol (2.10+) installed, Memem is the primary semantic retrieval backend for typed L2; it is not another brain layer or a second record authority.
+sliceagent's memory is organized like a brain: fast, lossy **perception** of the live world; an elastic **working memory** for the current task; a **hippocampus** backed by always-on local artifacts; and a typed native **neocortex** for provenance-linked USER, PROJECT, and CRAFT knowledge. Every turn *reconstructs* a history-bounded working set from these — it never replays a growing transcript. When Memem's structured-index protocol is installed (a memem release that provides it — the protocol's `memory_index_upsert`/`memory_index_remove` surfaces are not yet in the pinned 2.9.x extra, so that extra is detected as unavailable and native search is the active backend), Memem is the primary semantic retrieval backend for typed L2; it is not another brain layer or a second record authority.
 
 | Region | Role |
 |---|---|
@@ -87,15 +87,19 @@ Two questions decide whether reconstructing context every turn actually works: d
 
 ### 1. In-turn capability — Terminal-Bench 2.0 (public)
 
-A TB2.0 task is a single turn, so it's a clean test of raw within-turn ability. On the 32 tasks both agents completed cleanly:
+A TB2.0 task is a single turn, so it's a clean test of raw within-turn ability. On the 39 tasks both
+agents completed cleanly (no environment failure or timeout on either side; the full 56-task ledger is
+`evals/tbench/comparison.csv`, with the earlier 32-task snapshot in `comparison.md`):
 
 | metric | sliceagent | OpenAI Codex |
 |---|--:|--:|
-| **pass rate** | **18 / 32 (56%)** | 18 / 32 (56%) |
-| wins (exclusive) | 4 | 4 |
-| median steps / task | **10** | 27 |
+| **pass rate** | 17 / 39 (44%) | **22 / 39 (56%)** |
+| wins (exclusive) | 4 | 9 |
+| median steps / task | **10** | 28 |
 
-**Dead even, 4 wins each** — reconstruct-every-turn matches a state-of-the-art agent on in-turn tasks with no capability tax.
+Codex holds a capability edge on this in-turn set — the honest read of the current snapshot — while
+sliceagent still uses ~2.8× fewer steps per task. Earlier draft tables (18/32) reflected a smaller
+mid-development run and were retired when the full ledger landed.
 
 ### 2. Multi-turn — ColBench (public: Meta SWEET-RL)
 
@@ -166,6 +170,15 @@ stakes; the architectural advantage is direct child outcomes, optional re-readab
 history-bounded parent.
 
 *N = 3 runs, single model, one opponent, needs the Codex CLI installed. A value-recall sub-check varied wildly run-to-run (sliceagent 1–3 / 3, Codex 0–2 / 3) — it turns on a behavioral re-read choice, so it is within noise and **not** part of the claim. The defensible result is the total-token gap, which held across all three runs (3.2–4.3×).*
+
+> **Data availability (2026-08-08).** §1's ledger and harness are versioned
+> (`evals/tbench/comparison.csv` + the harness files); §2's ledgers are versioned
+> (`evals/colbench/results/SUMMARY.txt`, `h2h_matched.json`, per-agent token ledgers) and reproduce
+> from the committed tasks; §3's harnesses, scenario definitions, and `h2h_matched.json` ledger are
+> versioned (per-run `results*.json` under `evals/h2h/` stay local by design). §4's three per-run
+> usage ledgers were **not retained** — only the summary above survives, so that table is the
+> assertion rather than a reproducible artifact. The Codex-side runs of §3/§4 required the Codex CLI
+> and are not regenerable from this repository alone.
 
 <details>
 <summary><b>How the cost numbers are calculated</b> (exact token counts × published rates)</summary>
@@ -241,10 +254,12 @@ pip install "sliceagent[tui]"                       # plain pip (use a venv)
 ```
 
 Native evidence, Active Work, history, and typed knowledge are included in the base install. The
-`sliceagent[tui,memory]` extra adds optional Memem; when its structured-index protocol is available (Memem 2.10+),
-SliceAgent uses it as primary L2 retrieval and falls back to native search on a whole-query failure. Older Memem
-versions are reported as unavailable for this protocol rather than used as an unscoped recall tail. Typed record
-truth and `@sliceagent/` durability remain available without it.
+`sliceagent[tui,memory]` extra adds optional Memem; when its structured-index protocol is available (a memem
+release that provides it — the protocol's `memory_index_upsert`/`memory_index_remove` surfaces are not yet in
+the pinned 2.9.x extra, so that extra is detected as unavailable and native search is the active backend),
+SliceAgent uses it as primary L2 retrieval and falls back to native search on a whole-query failure. Memem
+releases without the protocol are reported as unavailable for it rather than used as an unscoped recall tail.
+Typed record truth and `@sliceagent/` durability remain available without it.
 
 If `pip` refuses with `Requires-Python >=3.11`: `conda create -n sliceagent python=3.12 -y && conda activate sliceagent`, then pip install. Prefer env vars over the wizard? Export **both** `LLM_API_KEY` and `AGENT_MODEL` (plus `LLM_BASE_URL` for non-OpenAI endpoints). `ripgrep` is recommended (code search degrades gracefully without it).
 </details>

@@ -9,7 +9,7 @@
 
 | 维度 | 结果 |
 |---|---|
-| 架构 | Session Tape 单一 append-only 流,401 项测试全绿,runtime/cli 分离与 subagent(scoped-turn)无破坏 |
+| 架构 | Session Tape 单一 append-only 流,判定时刻 401 项测试全绿(2026-08-08 实测 393 pytest items + 190 文件脚本套件),runtime/cli 分离与 subagent(scoped-turn)无破坏 |
 | 质量 | 中轮 6/6 PASS;CB50 precision 三维全胜三臂、coverage 与 mini 打平低于 kimi;s10 零信息丢失;s11 **三臂唯一全绿**(r2) |
 | 峰值上下文 | 全阶梯优势(CB50 1.4×/2.4×,中轮 2–4×,s11 2.4–3.0×,s10 9×)——"无 context rot"的机械保证 |
 | 成本 | CB50 **−26% vs kimi、−68% vs mini**;中轮对 kimi 2 胜 4 负、对 mini 4 胜 1 负;s11 输 kimi(fresh 车道已修复 −23%,残差在 out 车道) |

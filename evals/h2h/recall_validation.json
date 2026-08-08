@@ -1,0 +1,98 @@
+[
+  {
+    "manifest_on": true,
+    "manifest_in_t2_slice": true,
+    "recall_calls_t2": 0,
+    "recall_args_t2": [],
+    "renamed_def": true,
+    "callers_hit": {
+      "api.py": true,
+      "cli.py": true,
+      "service.py": true
+    },
+    "callers_hit_n": 3,
+    "distractor_untouched": true,
+    "manifest_excerpt": "# PAGED-OUT HISTORY (earlier turns of THIS session \u2014 NOT in the slice; page any back with the call shown)\n- turn 1 \u00b7 \"Find every file in the pkg package that calls Config\" \u00b7 note: Files in the `pkg` package that call `Config.load`: -   \u2192 recall_history(turns=[1])\n# REPEATED/FAILING ACTIONS\n- (nothing repeated or failing)\n\n# RECENT (last 4)\n(none yet \u2014 first move)\n\n# WORKSPACE STATE (LIVE \u2014 current branch & changed files, re-read THIS turn; this is the up-to-date git state \u2014 trust it over any session-start project facts)\nbranch main \u00b7 working tree clean\n\n\n# NOW: do the next step(s) with tools ("
+  },
+  {
+    "manifest_on": true,
+    "manifest_in_t2_slice": true,
+    "recall_calls_t2": 1,
+    "recall_args_t2": [
+      {
+        "turns": [
+          1
+        ]
+      }
+    ],
+    "renamed_def": true,
+    "callers_hit": {
+      "api.py": true,
+      "cli.py": true,
+      "service.py": true
+    },
+    "callers_hit_n": 3,
+    "distractor_untouched": true,
+    "manifest_excerpt": "# PAGED-OUT HISTORY (earlier turns of THIS session \u2014 NOT in the slice; page any back with the call shown)\n- turn 1 \u00b7 \"Find every file in the pkg package that calls Config\" \u00b7 note: Files in `pkg` that call `Config.load`: - `pkg/api.py`  \u2192 recall_history(turns=[1])\n# REPEATED/FAILING ACTIONS\n- (nothing repeated or failing)\n\n# RECENT (last 4)\n(none yet \u2014 first move)\n\n# WORKSPACE STATE (LIVE \u2014 current branch & changed files, re-read THIS turn; this is the up-to-date git state \u2014 trust it over any session-start project facts)\nbranch main \u00b7 working tree clean\n\n\n# NOW: do the next step(s) with tools ("
+  },
+  {
+    "manifest_on": true,
+    "manifest_in_t2_slice": true,
+    "recall_calls_t2": 0,
+    "recall_args_t2": [],
+    "renamed_def": true,
+    "callers_hit": {
+      "api.py": true,
+      "cli.py": true,
+      "service.py": true
+    },
+    "callers_hit_n": 3,
+    "distractor_untouched": true,
+    "manifest_excerpt": "# PAGED-OUT HISTORY (earlier turns of THIS session \u2014 NOT in the slice; page any back with the call shown)\n- turn 1 \u00b7 \"Find every file in the pkg package that calls Config\" \u00b7 note: Files in `pkg/` that call `Config.load`: - `pkg/api.py  \u2192 recall_history(turns=[1])\n# REPEATED/FAILING ACTIONS\n- (nothing repeated or failing)\n\n# RECENT (last 4)\n(none yet \u2014 first move)\n\n# WORKSPACE STATE (LIVE \u2014 current branch & changed files, re-read THIS turn; this is the up-to-date git state \u2014 trust it over any session-start project facts)\nbranch main \u00b7 working tree clean\n\n\n# NOW: do the next step(s) with tools ("
+  },
+  {
+    "manifest_on": false,
+    "manifest_in_t2_slice": false,
+    "recall_calls_t2": 0,
+    "recall_args_t2": [],
+    "renamed_def": true,
+    "callers_hit": {
+      "api.py": true,
+      "cli.py": true,
+      "service.py": true
+    },
+    "callers_hit_n": 3,
+    "distractor_untouched": true,
+    "manifest_excerpt": "(no manifest in slice)"
+  },
+  {
+    "manifest_on": false,
+    "manifest_in_t2_slice": false,
+    "recall_calls_t2": 0,
+    "recall_args_t2": [],
+    "renamed_def": true,
+    "callers_hit": {
+      "api.py": true,
+      "cli.py": true,
+      "service.py": true
+    },
+    "callers_hit_n": 3,
+    "distractor_untouched": true,
+    "manifest_excerpt": "(no manifest in slice)"
+  },
+  {
+    "manifest_on": false,
+    "manifest_in_t2_slice": false,
+    "recall_calls_t2": 0,
+    "recall_args_t2": [],
+    "renamed_def": true,
+    "callers_hit": {
+      "api.py": true,
+      "cli.py": true,
+      "service.py": true
+    },
+    "callers_hit_n": 3,
+    "distractor_untouched": true,
+    "manifest_excerpt": "(no manifest in slice)"
+  }
+]

@@ -1,0 +1,54 @@
+
+## ColBench backend (multi-turn, gpt-5.5 high)  (sliceagent N=20 · codex N=20)
+metric                    sliceagent         codex  codex/slice
+---------------------------------------------------------------
+fully passed          20/20         20/20         
+peak input (median)            5,191        13,415        2.58×
+peak input (mean)              5,188        13,424        2.59×
+total tokens                 307,793       769,224        2.50×
+output tokens                 24,265         8,786        0.36×
+wall total (s)                 548.6         535.7        0.98×
+wall median (s)                 26.1          26.3        1.01×
+cache %                          50%           57%
+cost $ (cache-aware)          $0.436        $0.555        1.27×
+
+## h2h scenarios (multi-turn/step, gpt-5.5 high)  (sliceagent N=3 · codex N=3)
+metric                    sliceagent         codex  codex/slice
+---------------------------------------------------------------
+fully passed           3/3           3/3          
+peak input (median)           16,330     2,075,987      127.13×
+peak input (mean)             16,734     2,056,732      122.91×
+total tokens               2,277,362    26,724,181       11.73×
+output tokens                 63,372       355,365        5.61×
+wall total (s)                1069.1        1760.8        1.65×
+wall median (s)                351.3         640.6        1.82×
+cache %                          84%           91%
+cost $ (cache-aware)         $1.3011         $9.43        7.25×
+
+## per-task ColBench (pass/10 · peak_in · tok · wall)
+task     slice pass  cdx pass  slice peak  cdx peak  slice tok   cdx tok slice wall  cdx wall
+t01     10/10      10/10            5,148    13,375     15,986    26,823      33.9s     17.5s
+t02     10/10      10/10            5,230    13,372     21,828    40,332      36.0s     30.1s
+t03     10/10      10/10            5,170    13,404     21,154    53,737      28.2s     33.3s
+t04     10/10      10/10            5,154    13,334     15,769    26,782      28.1s     18.5s
+t05     10/10      10/10            5,210    13,502     16,222    27,030      25.2s     17.1s
+t06     10/10      10/10            5,166    13,452     11,054    40,465      21.2s     25.9s
+t07     10/10      10/10            5,260    13,443     15,816    40,514      21.2s     34.4s
+t08     10/10      10/10            5,260    13,599     26,704    68,369      42.1s     61.3s
+t09     10/10      10/10            5,242    13,557     15,957    54,530      23.7s     43.8s
+t10     10/10      10/10            5,210    13,410     11,113    26,961      25.3s     16.5s
+t11     10/10      10/10            5,192    13,582     16,225    54,198      26.5s     33.4s
+t12     10/10      10/10            5,138    13,360     10,554    26,787      16.6s     16.4s
+t13     10/10      10/10            5,196    13,420     16,735    26,981      47.7s     21.8s
+t14     10/10      10/10            5,124    13,425     15,965    40,518      26.0s     27.4s
+t15     10/10      10/10            5,250    13,447     10,585    40,343      15.0s     21.5s
+t16     10/10      10/10            5,190    13,433     11,368    26,956      20.9s     16.3s
+t17     10/10      10/10            5,132    13,376     10,790    40,340      19.7s     26.7s
+t18     10/10      10/10            5,112    13,213     15,976    26,601      26.1s     16.3s
+t19     10/10      10/10            5,228    13,368     16,542    40,373      38.9s     28.5s
+t20     10/10      10/10            5,158    13,409     11,450    40,584      26.3s     29.0s
+
+# NOTE (2026-07-03): h2h section above = benchmark v2 (s1_longhorizon_debug + s2_taskdag_scheduler + s3_intervalset_algebra,
+# all genuinely multi-turn, both agents gpt-5.5 high). v1 rows (retired 1-shottable s2_largefile_bug/s3_multifile_refactor)
+# are preserved in h2h_matched_v1_backup.json. ColBench strict-vs-logic scorer note: strict interface-exact was 11/20 (slice)
+# vs 20/20 (codex); LOGIC scorer (defaults-aware, applied to both) gives the 20/20-20/20 shown — see t19 note in session log.

@@ -1,5 +1,10 @@
 # SliceAgent — Cognitive Memory and ContextFS Architecture
 
+> **SUPERSEDED (tape graduation, 2026-08-05)** — the conversation/adjacency/cache-manifest machinery this
+> document specifies was deleted in wave 2 of the graduation; the session is now an unconditional typed
+> SESSION TAPE (docs/SESSION-TAPE-DESIGN.md) with the three-zone placement law in the region registry.
+> Kept as the evidence chain; the runnable historical arm lives at git tag `lab-2026-08-05`.
+
 > Status: implemented core, compatibility surfaces retained · 2026-07-12  
 > Companion: `ENDGAME-CONTEXT-DESIGN.md`
 

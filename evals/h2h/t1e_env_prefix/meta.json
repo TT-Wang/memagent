@@ -1,0 +1,9 @@
+{
+  "name": "t1e_env_prefix",
+  "stressor": "buried aside detail (env-var naming rule) with a 4-turn gap",
+  "turns": 7,
+  "max_steps_per_turn": 12,
+  "use_code_index": false,
+  "source_note": "Hand-built stateful project: confkit, a KEY=VALUE/INI-ish config loader. Seed parses flat string pairs; seven dependent turns add type coercion, comment handling + ConfigError, [section] support, require() validation, defaults precedence, multi-file layering, and finally environment-variable overrides. No third-party deps; stdlib only.",
+  "discriminator": "T1 buried-detail mechanics: turn 3's MAIN request is [section] parsing; buried mid-turn as a casual aside ('oh, and by the way... nothing to build right now') is a naming rule — any env var the loader ever reads must carry the APPCFG_ prefix, bare names must never be consulted. The rule exists ONLY in that one conversational aside: setup() never writes it, no file ever mentions it, and turns 4-6 do real unrelated work (require(), defaults, load_files). Turn 7 cashes it in — 'add env-var overrides for every config key' with a name-derivation rule (uppercase, dots to underscores) that never re-mentions the prefix. A transcript agent holds the aside verbatim and composes APPCFG_ + derived name; a reconstruct-per-turn agent must have judged the aside worth keeping four turns earlier. verify() splits the verdict: the task probe sets BOTH prefixed and bare env names to the SAME value (so either naming passes it), while the detail probe sets APPCFG_TIMEOUT=45 vs bare TIMEOUT=999 (prefixed must win) and a bare-only DB_PORT=7777 (must be ignored), yielding task_ok=True detail_ok=False for an agent that lost the aside."
+}

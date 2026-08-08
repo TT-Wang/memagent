@@ -1,0 +1,9 @@
+{
+  "name": "nr1_shared_helper",
+  "stressor": "no-regression: changing a shared helper's RETURN SHAPE silently breaks a DISTANT caller the task does not name; success requires PASS_TO_PASS (unrelated behavior intact), not just FAIL_TO_PASS",
+  "turns": 1,
+  "max_steps_per_turn": 24,
+  "use_code_index": true,
+  "source_note": "The canonical no-regression failure (SWE-bench PASS_TO_PASS guard; arxiv.org/pdf/2410.12468 'agent patches may break other functionalities by modifying files the gold patch doesn't'): a shared helper get_setting() is changed from returning a value to returning a (value, source) tuple. The task NAMES the change but does NOT say 'update every caller'. Three callers depend on the old shape; one (jobs/scheduler.py) is DISTANT (different subpackage) and easy to miss. A naive fix updates the definition + the obvious caller and ships, leaving the distant caller doing int((value, source) or '1') -> TypeError. util/strings.py has an UNRELATED get_setting_label that must NOT be touched.",
+  "discriminator": "re-observation-reach = action-reach: editing a shared symbol requires reaching EVERY caller, including a distant one in another subpackage. A bounded slice that ranks an edited symbol's CALLERS into the working set (caller-first co-residency) keeps the distant caller visible so it gets updated; a partial fix passes the FAIL_TO_PASS (get_setting returns a tuple) but fails PASS_TO_PASS (scheduler.max_workers() / report.timeout_line() crash or return wrong values). A blanket edit that also rewrites the unrelated util.get_setting_label distractor is rejected."
+}

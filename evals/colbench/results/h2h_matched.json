@@ -1,0 +1,686 @@
+[
+  {
+    "agent": "sliceagent",
+    "scenario": "s1_longhorizon_debug",
+    "passed": true,
+    "detail": "all cumulative + regression checks passed",
+    "steps": 41,
+    "wall_s": 257.2,
+    "wall_clean": 255.9,
+    "stalls": 0,
+    "in_total": 484603,
+    "in_cached": 393728,
+    "out_total": 14587,
+    "peak_in": 14769,
+    "series_in": [
+      8598,
+      8686,
+      9202,
+      10094,
+      10241,
+      10329,
+      10601,
+      11110,
+      11198,
+      11548,
+      11776,
+      11909,
+      7937,
+      10682,
+      10831,
+      11355,
+      11411,
+      11562,
+      11809,
+      11149,
+      11260,
+      12044,
+      12171,
+      11694,
+      11823,
+      12153,
+      12677,
+      13043,
+      13174,
+      12107,
+      12196,
+      12749,
+      13285,
+      13362,
+      14008,
+      14132,
+      14233,
+      12886,
+      14143,
+      14666,
+      14769
+    ],
+    "per_turn": [
+      {
+        "turn": 1,
+        "steps": 12,
+        "stop": "max_steps",
+        "in": 133229,
+        "out": 2393,
+        "peak_in": 11909
+      },
+      {
+        "turn": 2,
+        "steps": 6,
+        "stop": "end_turn",
+        "in": 67650,
+        "out": 2223,
+        "peak_in": 11809
+      },
+      {
+        "turn": 3,
+        "steps": 4,
+        "stop": "end_turn",
+        "in": 46624,
+        "out": 1985,
+        "peak_in": 12171
+      },
+      {
+        "turn": 4,
+        "steps": 6,
+        "stop": "end_turn",
+        "in": 74564,
+        "out": 1599,
+        "peak_in": 13174
+      },
+      {
+        "turn": 5,
+        "steps": 8,
+        "stop": "end_turn",
+        "in": 106072,
+        "out": 4050,
+        "peak_in": 14233
+      },
+      {
+        "turn": 6,
+        "steps": 4,
+        "stop": "end_turn",
+        "in": 56464,
+        "out": 2337,
+        "peak_in": 14769
+      }
+    ],
+    "re_reads": 0,
+    "recalls": 0,
+    "pinview_calls": {
+      "pin": 0,
+      "view": 0
+    },
+    "workdir": "/var/folders/ln/zfd8s4v510529zt2t3wnshsr0000gn/T/h2h-s1_longhorizon_debug-sliceagent-dhbd3okz"
+  },
+  {
+    "agent": "codex",
+    "scenario": "s1_longhorizon_debug",
+    "passed": true,
+    "detail": "all cumulative + regression checks passed",
+    "steps": 6,
+    "wall_s": 464.7,
+    "in_total": 5098949,
+    "in_cached": 4603264,
+    "out_total": 69235,
+    "peak_in": 1655714,
+    "per_turn": [
+      {
+        "turn": 1,
+        "wall": 98.6,
+        "peak_in": 208325,
+        "in": 208325,
+        "rc": 0
+      },
+      {
+        "turn": 2,
+        "wall": 61.1,
+        "peak_in": 368216,
+        "in": 368216,
+        "rc": 0
+      },
+      {
+        "turn": 3,
+        "wall": 72.7,
+        "peak_in": 633041,
+        "in": 633041,
+        "rc": 0
+      },
+      {
+        "turn": 4,
+        "wall": 96.5,
+        "peak_in": 950632,
+        "in": 950632,
+        "rc": 0
+      },
+      {
+        "turn": 5,
+        "wall": 76.6,
+        "peak_in": 1283021,
+        "in": 1283021,
+        "rc": 0
+      },
+      {
+        "turn": 6,
+        "wall": 59.3,
+        "peak_in": 1655714,
+        "in": 1655714,
+        "rc": 0
+      }
+    ],
+    "effort": "high",
+    "workdir": "/var/folders/ln/zfd8s4v510529zt2t3wnshsr0000gn/T/h2h-s1_longhorizon_debug-codex-h753s20h"
+  },
+  {
+    "agent": "sliceagent",
+    "scenario": "s2_taskdag_scheduler",
+    "passed": true,
+    "detail": "all cumulative + regression checks passed",
+    "steps": 66,
+    "wall_s": 460.6,
+    "wall_clean": 457.4,
+    "stalls": 0,
+    "in_total": 899023,
+    "in_cached": 755712,
+    "out_total": 25415,
+    "peak_in": 19104,
+    "series_in": [
+      8592,
+      8936,
+      10204,
+      10491,
+      11066,
+      11373,
+      11517,
+      11563,
+      11687,
+      11990,
+      10736,
+      10815,
+      10904,
+      10985,
+      11061,
+      11357,
+      12111,
+      13111,
+      13680,
+      14349,
+      14737,
+      14818,
+      14909,
+      14992,
+      11064,
+      12145,
+      12262,
+      12561,
+      13054,
+      13296,
+      13415,
+      12567,
+      12698,
+      13767,
+      13922,
+      14069,
+      13030,
+      14041,
+      14229,
+      14342,
+      13236,
+      13358,
+      13948,
+      14040,
+      14164,
+      13597,
+      13655,
+      14270,
+      14776,
+      14902,
+      14414,
+      14974,
+      15717,
+      15945,
+      17114,
+      15234,
+      15321,
+      15446,
+      15531,
+      15624,
+      16669,
+      17334,
+      17457,
+      17779,
+      18968,
+      19104
+    ],
+    "per_turn": [
+      {
+        "turn": 1,
+        "steps": 10,
+        "stop": "end_turn",
+        "in": 107419,
+        "out": 3928,
+        "peak_in": 11990
+      },
+      {
+        "turn": 2,
+        "steps": 14,
+        "stop": "max_steps",
+        "in": 189629,
+        "out": 5326,
+        "peak_in": 14992
+      },
+      {
+        "turn": 3,
+        "steps": 6,
+        "stop": "end_turn",
+        "in": 76733,
+        "out": 1652,
+        "peak_in": 13415
+      },
+      {
+        "turn": 4,
+        "steps": 5,
+        "stop": "end_turn",
+        "in": 67023,
+        "out": 2461,
+        "peak_in": 14069
+      },
+      {
+        "turn": 5,
+        "steps": 4,
+        "stop": "end_turn",
+        "in": 55642,
+        "out": 1793,
+        "peak_in": 14342
+      },
+      {
+        "turn": 6,
+        "steps": 5,
+        "stop": "end_turn",
+        "in": 68746,
+        "out": 1875,
+        "peak_in": 14164
+      },
+      {
+        "turn": 7,
+        "steps": 5,
+        "stop": "end_turn",
+        "in": 71200,
+        "out": 1727,
+        "peak_in": 14902
+      },
+      {
+        "turn": 8,
+        "steps": 5,
+        "stop": "end_turn",
+        "in": 78164,
+        "out": 2006,
+        "peak_in": 17114
+      },
+      {
+        "turn": 9,
+        "steps": 1,
+        "stop": "end_turn",
+        "in": 15234,
+        "out": 607,
+        "peak_in": 15234
+      },
+      {
+        "turn": 10,
+        "steps": 10,
+        "stop": "end_turn",
+        "in": 169233,
+        "out": 4040,
+        "peak_in": 19104
+      }
+    ],
+    "re_reads": 1,
+    "recalls": 0,
+    "pinview_calls": {
+      "pin": 0,
+      "view": 0
+    },
+    "workdir": "/var/folders/ln/zfd8s4v510529zt2t3wnshsr0000gn/T/h2h-s2_taskdag_scheduler-sliceagent-x1h8oc6i"
+  },
+  {
+    "agent": "codex",
+    "scenario": "s2_taskdag_scheduler",
+    "passed": true,
+    "detail": "all cumulative + regression checks passed",
+    "steps": 10,
+    "wall_s": 655.5,
+    "in_total": 9893948,
+    "in_cached": 9035904,
+    "out_total": 148815,
+    "peak_in": 2075987,
+    "per_turn": [
+      {
+        "turn": 1,
+        "wall": 89.2,
+        "peak_in": 131907,
+        "in": 131907,
+        "rc": 0
+      },
+      {
+        "turn": 2,
+        "wall": 98.1,
+        "peak_in": 297883,
+        "in": 297883,
+        "rc": 0
+      },
+      {
+        "turn": 3,
+        "wall": 48.4,
+        "peak_in": 443201,
+        "in": 443201,
+        "rc": 0
+      },
+      {
+        "turn": 4,
+        "wall": 71.5,
+        "peak_in": 609429,
+        "in": 609429,
+        "rc": 0
+      },
+      {
+        "turn": 5,
+        "wall": 54.3,
+        "peak_in": 798338,
+        "in": 798338,
+        "rc": 0
+      },
+      {
+        "turn": 6,
+        "wall": 46.3,
+        "peak_in": 1010146,
+        "in": 1010146,
+        "rc": 0
+      },
+      {
+        "turn": 7,
+        "wall": 59.9,
+        "peak_in": 1246038,
+        "in": 1246038,
+        "rc": 0
+      },
+      {
+        "turn": 8,
+        "wall": 63.9,
+        "peak_in": 1502420,
+        "in": 1502420,
+        "rc": 0
+      },
+      {
+        "turn": 9,
+        "wall": 56.3,
+        "peak_in": 1778599,
+        "in": 1778599,
+        "rc": 0
+      },
+      {
+        "turn": 10,
+        "wall": 67.6,
+        "peak_in": 2075987,
+        "in": 2075987,
+        "rc": 0
+      }
+    ],
+    "effort": "high",
+    "workdir": "/var/folders/ln/zfd8s4v510529zt2t3wnshsr0000gn/T/h2h-s2_taskdag_scheduler-codex-tzj16n2m"
+  },
+  {
+    "agent": "sliceagent",
+    "scenario": "s3_intervalset_algebra",
+    "passed": true,
+    "detail": "all cumulative + regression checks passed",
+    "steps": 64,
+    "wall_s": 351.3,
+    "wall_clean": 349.4,
+    "stalls": 0,
+    "in_total": 830364,
+    "in_cached": 717312,
+    "out_total": 23370,
+    "peak_in": 16330,
+    "series_in": [
+      8702,
+      8783,
+      8860,
+      8941,
+      9417,
+      9985,
+      10293,
+      11139,
+      11756,
+      11848,
+      12257,
+      12646,
+      12907,
+      10662,
+      10751,
+      10996,
+      11386,
+      11606,
+      11697,
+      10915,
+      11030,
+      11669,
+      11786,
+      11391,
+      11504,
+      12824,
+      12959,
+      11657,
+      11754,
+      11858,
+      12836,
+      13101,
+      13501,
+      13992,
+      14276,
+      14375,
+      12955,
+      13123,
+      13827,
+      14274,
+      14379,
+      13171,
+      13272,
+      13377,
+      14571,
+      15058,
+      15176,
+      15283,
+      13588,
+      13701,
+      14800,
+      15537,
+      16037,
+      16152,
+      14841,
+      14950,
+      15672,
+      15991,
+      16102,
+      14940,
+      15069,
+      15929,
+      16199,
+      16330
+    ],
+    "per_turn": [
+      {
+        "turn": 1,
+        "steps": 13,
+        "stop": "end_turn",
+        "in": 137534,
+        "out": 4497,
+        "peak_in": 12907
+      },
+      {
+        "turn": 2,
+        "steps": 6,
+        "stop": "end_turn",
+        "in": 67098,
+        "out": 1162,
+        "peak_in": 11697
+      },
+      {
+        "turn": 3,
+        "steps": 4,
+        "stop": "end_turn",
+        "in": 45400,
+        "out": 1838,
+        "peak_in": 11786
+      },
+      {
+        "turn": 4,
+        "steps": 4,
+        "stop": "end_turn",
+        "in": 48678,
+        "out": 2557,
+        "peak_in": 12959
+      },
+      {
+        "turn": 5,
+        "steps": 9,
+        "stop": "end_turn",
+        "in": 117350,
+        "out": 1834,
+        "peak_in": 14375
+      },
+      {
+        "turn": 6,
+        "steps": 5,
+        "stop": "end_turn",
+        "in": 68558,
+        "out": 1845,
+        "peak_in": 14379
+      },
+      {
+        "turn": 7,
+        "steps": 7,
+        "stop": "end_turn",
+        "in": 99908,
+        "out": 2824,
+        "peak_in": 15283
+      },
+      {
+        "turn": 8,
+        "steps": 6,
+        "stop": "end_turn",
+        "in": 89815,
+        "out": 2374,
+        "peak_in": 16152
+      },
+      {
+        "turn": 9,
+        "steps": 5,
+        "stop": "end_turn",
+        "in": 77556,
+        "out": 2228,
+        "peak_in": 16102
+      },
+      {
+        "turn": 10,
+        "steps": 5,
+        "stop": "end_turn",
+        "in": 78467,
+        "out": 2211,
+        "peak_in": 16330
+      }
+    ],
+    "re_reads": 0,
+    "recalls": 0,
+    "pinview_calls": {
+      "pin": 0,
+      "view": 0
+    },
+    "workdir": "/var/folders/ln/zfd8s4v510529zt2t3wnshsr0000gn/T/h2h-s3_intervalset_algebra-sliceagent-0gjq_vsu"
+  },
+  {
+    "agent": "codex",
+    "scenario": "s3_intervalset_algebra",
+    "passed": true,
+    "detail": "all cumulative + regression checks passed",
+    "steps": 10,
+    "wall_s": 640.6,
+    "in_total": 11375919,
+    "in_cached": 10436096,
+    "out_total": 137315,
+    "peak_in": 2438496,
+    "per_turn": [
+      {
+        "turn": 1,
+        "wall": 124.4,
+        "peak_in": 177677,
+        "in": 177677,
+        "rc": 0
+      },
+      {
+        "turn": 2,
+        "wall": 40.8,
+        "peak_in": 322636,
+        "in": 322636,
+        "rc": 0
+      },
+      {
+        "turn": 3,
+        "wall": 50.6,
+        "peak_in": 488032,
+        "in": 488032,
+        "rc": 0
+      },
+      {
+        "turn": 4,
+        "wall": 53.0,
+        "peak_in": 677834,
+        "in": 677834,
+        "rc": 0
+      },
+      {
+        "turn": 5,
+        "wall": 44.4,
+        "peak_in": 895681,
+        "in": 895681,
+        "rc": 0
+      },
+      {
+        "turn": 6,
+        "wall": 58.3,
+        "peak_in": 1144893,
+        "in": 1144893,
+        "rc": 0
+      },
+      {
+        "turn": 7,
+        "wall": 89.6,
+        "peak_in": 1429483,
+        "in": 1429483,
+        "rc": 0
+      },
+      {
+        "turn": 8,
+        "wall": 60.8,
+        "peak_in": 1754093,
+        "in": 1754093,
+        "rc": 0
+      },
+      {
+        "turn": 9,
+        "wall": 56.8,
+        "peak_in": 2047094,
+        "in": 2047094,
+        "rc": 0
+      },
+      {
+        "turn": 10,
+        "wall": 61.9,
+        "peak_in": 2438496,
+        "in": 2438496,
+        "rc": 0
+      }
+    ],
+    "effort": "high",
+    "workdir": "/var/folders/ln/zfd8s4v510529zt2t3wnshsr0000gn/T/h2h-s3_intervalset_algebra-codex-f049qh60"
+  }
+]

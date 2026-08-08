@@ -1,0 +1,44 @@
+[
+  {
+    "agent": "sliceagent",
+    "scenario": "m4_consolidate_helper",
+    "passed": true,
+    "detail": "all checks passed: punycode helper introduced and every call site (incl. the get",
+    "steps": 9,
+    "wall_s": 79.1,
+    "wall_clean": 78.9,
+    "stalls": 0,
+    "in_total": 71790,
+    "in_cached": 62976,
+    "out_total": 4124,
+    "peak_in": 10337,
+    "series_in": [
+      3877,
+      5646,
+      6005,
+      7908,
+      8871,
+      9443,
+      9587,
+      10116,
+      10337
+    ],
+    "per_turn": [
+      {
+        "turn": 1,
+        "steps": 9,
+        "stop": "end_turn",
+        "in": 71790,
+        "out": 4124,
+        "peak_in": 10337
+      }
+    ],
+    "re_reads": 2,
+    "recalls": 0,
+    "pinview_calls": {
+      "pin": 0,
+      "view": 0
+    },
+    "workdir": "/var/folders/ln/zfd8s4v510529zt2t3wnshsr0000gn/T/h2h-m4_consolidate_helper-sliceagent-y9oohfc1"
+  }
+]

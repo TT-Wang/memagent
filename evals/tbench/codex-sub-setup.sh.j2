@@ -1,0 +1,17 @@
+#!/bin/bash
+set -e
+
+apt-get update
+apt-get install -y curl
+
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.2/install.sh | bash
+source "$HOME/.nvm/nvm.sh"
+nvm install 22
+npm -v
+
+npm install -g @openai/codex@latest
+
+# Subscription auth: decode the host's ~/.codex/auth.json (OAuth tokens) carried in via $CODEX_AUTH_B64.
+mkdir -p "$HOME/.codex"
+printf '%s' "$CODEX_AUTH_B64" | base64 -d > "$HOME/.codex/auth.json"
+chmod 600 "$HOME/.codex/auth.json"

@@ -1,0 +1,9 @@
+{
+  "name": "t1d_timestamp_format",
+  "stressor": "buried detail: a once-stated format mandate must survive six unrelated turns (memory curation)",
+  "turns": 8,
+  "max_steps_per_turn": 12,
+  "use_code_index": false,
+  "source_note": "Hand-built stateful project: jobrun, a tiny synchronous job runner. Seed ships submit/run with done/failed statuses; eight dependent turns add call arguments, retry support, a FIFO queue, cancellation, queue priorities, a runpy-spec CLI, reporting helpers, and finally an audit log. No third-party deps; stdlib only; deterministic (retries are immediate, no sleeping).",
+  "discriminator": "Turn 2's main request is retry support; buried mid-prompt is a casual parenthetical aside — anything the project ever logs timestamps for must be UTC ISO-8601 with a trailing 'Z' (ops' parser chokes on anything else). The detail is never written to disk by setup, and turns 3-7 do real unrelated work (queue, cancellation, priorities, CLI, reporting) that never touches time. Turn 8 cashes it in — 'add an audit log that records job start/finish times' — with zero allusion to the format. verify() runs jobs behaviorally, parses the audit file, and checks every timestamp against ^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$ plus a parsed-as-UTC wall-clock window, reporting task_ok and detail_ok separately. A growing-transcript agent holds the turn-2 aside verbatim at turn 8; a reconstruct-per-turn agent succeeds only if it judged that one low-salience sentence worth carrying for six turns."
+}

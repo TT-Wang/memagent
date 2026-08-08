@@ -28,6 +28,11 @@ AGENT_REASONING=high python benchmarks/run.py     # match the published run
 
 It drives sliceagent over each scenario's turns, scores the final repo with `verify.py`, and prints pass + per-call **peak input**, tokens (input/cached/output), wall, and steps — per turn and total.
 
+The Codex-side comparison numbers below came from runs of the Codex CLI (external; not regenerable from
+this repo — the Codex arm has no versioned driver). The sliceagent arm reproduces via `benchmarks/run.py`
+(the price sheet in `meter.py` covers the documented `gpt-5.5` rates); the `h2h_matched.json` ledger the
+README §3 table cites is versioned under `evals/colbench/results/`.
+
 ## Published results (sliceagent vs OpenAI Codex, both `gpt-5.5` at `high`)
 
 | metric | sliceagent | Codex | % of Codex |

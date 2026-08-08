@@ -5,6 +5,53 @@ this project aims for [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+- **Catastrophic-command floor hardened against one-line bypass spellings.** The safeguard now
+  expands `$'…'` ANSI-C quoting and `${VAR:-default}` parameter forms before root/home checks
+  (`rm -rf $'\x2f'` / `rm -rf ${ROOT:-/}`), treats any ancestor of the user's home as a home wipe
+  (`rm -rf "$HOME/.."`, `rm -rf /Users`), tracks an explicit `cd /`/`cd ~` so `rm -rf *` after it
+  is root/home-relative, and recognizes renamed fork bombs (`f(){ f|f& };f`).
+- **Secret redaction covers the common credential spellings it missed.** The env-assignment pass
+  now matches `ACCESS_KEY`/`SECRET_KEY`/`PRIVATE_KEY`/`ENCRYPTION_KEY`/`MASTER_KEY`/`SA_KEY`/`PWD`/
+  `PASSPHRASE` names and AWS session-key prefixes (`ASIA…`/`AROA…`); dotenv/config-style
+  `UPPERCASE_NAME=value` lines are redacted even in `code_file` mode (tape file snapshots no longer
+  persist `AWS_ACCESS_KEY_ID=…` verbatim); JSON fields gained the same key spellings.
+- **Model-authored `verify` commands run through the configured sandbox with secret scrubbing**
+  (previously they instantiated `LocalSandbox(scrub_secrets=False)` directly, ignoring
+  `AGENT_SANDBOX=docker` and inheriting the full host environment).
+- **MCP spawn screen catches obfuscated abuse shapes**: quote-split executables (`wge"t"`),
+  base64-encoded payloads, and verb-shaped persistence (`systemctl enable`, `schtasks /create`,
+  `launchctl load`, `reg add`); MCP tool descriptions are threat-scanned before entering the model's
+  tool schema.
+- **The monitor server is token-gated** (per-process bearer token in the URL or
+  `Authorization: Bearer`; `AGENT_MONITOR_TOKEN` pins it) and redacts tool args/output and prepared
+  requests at capture time — previously any local process could read the full model-visible context
+  from the unauthenticated loopback server, and snapshots persisted unredacted.
+- **Child-command env scrubbing widened** (`*_KEY`/`*_PWD`/`*_WEBHOOK`/`*_DSN`/connection-string
+  `*_URL` vars) in the sandbox, both installers, and the updater.
+- **PromptLayer digest keys are per-process random peppers**, not the API key PromptLayer itself
+  receives in the same request.
+- **`sliceagent update` pins the resolved PyPI version** (`sliceagent[tui]==X.Y.Z`) and fails
+  closed when the version cannot be resolved instead of installing an unpinned "latest";
+  `install.sh` now SHA256-verifies ripgrep (aligned with `install.ps1` at 15.1.0) and the Docker
+  backend drops capabilities, refuses privilege escalation, and caps processes.
+- **File-tool reads open with `O_NOFOLLOW`** (TOCTOU defense-in-depth) and the untrusted-content
+  fence neutralizes spaced spellings of its own tag.
+
+### Fixed
+- **Tape journal replay salvages corrupt mid-file lines** instead of discarding every later seal
+  (a torn tail still ends the scan; each seal's append is fsynced once), and the event ledger's
+  sibling scans skip corrupt complete lines the same way.
+- **The OPEN FILES locator snapshot is keyed per slice object** — the previous process-global
+  `id()`-keyed cache could hand one subagent child another child's rendered file hashes.
+- **`world`/`task_constraints` regions gained locator alternatives** (they could previously never
+  be paged under pressure and threw `ContextUnfitError` on a grown world map); the world-model
+  render is budget-bounded with an explicit elision note.
+- **The verify-command and world-model fixes are covered by regression tests**, and
+  `scripts/run_tests.sh` now counts SKIP files separately from PASS instead of hiding them.
+
+## [0.3.2] — 2026-08-02
+
 ### Added
 - **Background (detached) delegation.** `spawn_agent` accepts `background: true` for read-only
   kinds: the call returns immediately with a typed `running` child outcome, the child runs on a

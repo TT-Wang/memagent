@@ -1,0 +1,9 @@
+{
+  "name": "t1a_chunk_limit",
+  "stressor": "buried detail: a non-round numeric limit (40000 bytes), planted once as a turn-2 aside, must survive 6 turns of unrelated work and silently govern the turn-8 chunked-upload feature",
+  "turns": 8,
+  "max_steps_per_turn": 12,
+  "use_code_index": false,
+  "source_note": "Hand-built stdlib-only sync utility: package `syncer` with a Transport contract (syncer/transport.py) and a Client shell (syncer/client.py) that sends request bodies through an injected transport. Eight turns build single upload+receipt, a size manifest, manifest diffing, retry/backoff, an upload log, a checksum helper, a small refactor, and finally chunked large-file upload. Verification injects a recording transport; deterministic; no third-party deps.",
+  "discriminator": "Turn 2's MAIN request is the size manifest; buried mid-prompt is the aside 'the remote rejects any request body over 40000 bytes'. The number is deliberately NON-round (not 32768/65536) so a defensive chunker cannot pass by guessing a common buffer size. Turns 3-7 do real unrelated work (diff, retry, log, checksum, refactor) with no re-hint. Turn 8 cashes it: 'add support for uploading arbitrarily large files' with zero mention of any limit. verify injects a RecordingTransport, uploads a 300 KB payload, and splits the verdict: task_ok = the chunks reassemble to the original bytes AND cumulative features behave; detail_ok = EVERY recorded request body is <= 40000 bytes. A transcript agent holds the turn-2 aside verbatim at turn 8; a reconstruct-per-turn agent only wins if it judged the throwaway limit worth carrying for six turns."
+}

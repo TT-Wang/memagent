@@ -15,8 +15,8 @@ spine 曲线封顶 33.6%(P5 verdict)、locators 经济性 −22%(oflocators verd
 | **G2a 长程质量(活模型,已判)** | s11 typed r4:公平镜 PASS 级质量 | r4 = **48/48 + quiz 4/4、曲线 91.0%、同轮 125/125** ✅ | ✅ 绿 |
 | **G2b 长程机制(离线重放)** | `evals/tape_replay.py` s11 形态 52 轮:folds ≤3 · final ≤ 预算 · 无 thrash · 轮界账单中位 <6k | r4 抓到净增折叠回归(18 折/166k)→ 净效应裁剪修复 → 重放 **folds 2 / 86.3k / 无相邻折 / 中位 1.6k** ✅;常驻 pytest 门 | ✅ 绿 |
 | **G2c 毕业时刻活确认(一次性)** | 波一合并前跑**一次** s11 typed(fresh ≤600k 复核);此后机制迭代永不再用活模型 | 待跑(owner 择时,~45min/$0.24) | ⏳ 择时 |
-| **G3 flag-off 字节恒等** | off 模式 golden(test_region_registry)在 HEAD 全绿——删除波之前 off 仍是逐字节 HEAD 语义 | `packages/sliceagent-core/tests/test_region_registry.py` | ✅(398 全绿含此) |
-| **G4 全量门禁** | 全仓 pytest + ruff 全净 | CI/本地 | ✅ 398 + clean |
+| **G3 flag-off 字节恒等** | off 模式 golden(test_region_registry)在 HEAD 全绿——删除波之前 off 仍是逐字节 HEAD 语义 | `packages/sliceagent-core/tests/test_region_registry.py` | ✅(判定时刻 398 全绿含此) |
+| **G4 全量门禁** | 全仓 pytest + ruff 全净 | CI/本地 | ✅ 判定时刻 398 + clean(2026-08-08 实测:393 pytest items + 190 文件脚本套件) |
 
 **若 G1 判"方差"**(r8 回带)→ 过;**若 r8 仍 >48k** → 先按条目类型分解 tape 体积
 (digest/base/patch/reply 逐类字节),修复根因,重跑 G1。G2 同理:fresh 超带先做轮界断点

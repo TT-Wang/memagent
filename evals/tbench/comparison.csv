@@ -1,0 +1,57 @@
+task,mem_reward,cdx_reward,mem_wall_s,cdx_wall_s,mem_tok_in,mem_tok_out,cdx_tok_in,cdx_tok_out,mem_steps,cdx_steps,mem_error,cdx_error
+break-filter-js-from-html,0.0,0.0,115.4,276.3,77001,2659,354304,3817,10,28,,
+cancel-async-tasks,0.0,0.0,55.3,111.0,40757,2313,92544,968,6,12,,
+crack-7z-hash,0.0,0.0,900.0,900.0,,,,,,,"{'exception_type': 'AgentTimeoutError', 'exception_message': 'Agent execution ti","{'exception_type': 'AgentTimeoutError', 'exception_message': 'Agent execution ti"
+db-wal-recovery,,,,,,,,,,,,"{'exception_type': 'EnvironmentStartTimeoutError', 'exception_message': 'Environ"
+dna-insert,0.0,0.0,171.1,2.0,180167,6344,,,15,,,
+extract-elf,0.0,1.0,123.4,140.8,92654,4354,96896,1484,9,30,,
+fix-git,1.0,,55.8,,59211,1505,,,8,,,"{'exception_type': 'RuntimeError', 'exception_message': 'Docker compose command "
+kv-store-grpc,1.0,0.0,297.9,235.6,66301,2729,238336,554,9,28,,
+log-summary-date-ranges,1.0,1.0,53.2,128.8,28405,2055,61312,176,4,8,,
+mteb-leaderboard,,,,,,,,,,,,"{'exception_type': 'RuntimeError', 'exception_message': 'Docker compose command "
+openssl-selfsigned-cert,1.0,1.0,80.3,142.9,39021,3299,82560,40,5,12,,
+overfull-hbox,,0.0,,154.9,,,156800,2544,,20,"{'exception_type': 'EnvironmentStartTimeoutError', 'exception_message': 'Environ",
+password-recovery,1.0,,85.7,,209743,4095,,,15,,,"{'exception_type': 'EnvironmentStartTimeoutError', 'exception_message': 'Environ"
+polyglot-rust-c,0.0,,867.8,,921936,18128,,,60,,,"{'exception_type': 'EnvironmentStartTimeoutError', 'exception_message': 'Environ"
+prove-plus-comm,1.0,,38.7,,37102,805,,,6,,,"{'exception_type': 'RuntimeError', 'exception_message': 'Docker compose command "
+query-optimize,,,,,,,,,,,"{'exception_type': 'EnvironmentStartTimeoutError', 'exception_message': 'Environ","{'exception_type': 'EnvironmentStartTimeoutError', 'exception_message': 'Environ"
+regex-log,1.0,1.0,103.2,106.2,42745,5083,77440,1331,6,10,,
+reshard-c4-data,0.0,1.0,1642.9,496.3,255834,8098,388608,2602,12,40,,
+sanitize-git-repo,0.0,1.0,352.2,403.8,134924,10154,384256,976,9,36,,
+vulnerable-secret,1.0,0.0,73.0,102.1,124090,1704,,,10,2,,
+code-from-image,0.0,1.0,1200.1,226.9,,,144896,600,,10,"{'exception_type': 'AgentTimeoutError', 'exception_message': 'Agent execution ti",
+constraints-scheduling,1.0,1.0,144.6,84.3,75593,10845,43008,555,7,14,,
+count-dataset-tokens,0.0,1.0,900.0,664.0,,,698752,2094,,30,"{'exception_type': 'AgentTimeoutError', 'exception_message': 'Agent execution ti",
+financial-document-processor,0.0,,1200.0,,,,,,,,"{'exception_type': 'AgentTimeoutError', 'exception_message': 'Agent execution ti","{'exception_type': 'RuntimeError', 'exception_message': 'Docker compose command "
+fix-code-vulnerability,1.0,1.0,124.9,330.9,718676,4354,350336,505,14,34,,
+git-leak-recovery,1.0,,57.9,,48462,3291,,,7,,,
+git-multibranch,1.0,1.0,278.8,342.7,118185,10885,668544,2486,10,54,,
+headless-terminal,1.0,,97.9,,60754,3506,,,8,,,
+mailman,0.0,1.0,1800.0,736.3,,,2696960,2012,,132,"{'exception_type': 'AgentTimeoutError', 'exception_message': 'Agent execution ti",
+modernize-scientific-stack,0.0,0.0,283.8,201.2,79971,3583,102912,133,9,16,,
+nginx-request-logging,1.0,1.0,139.5,158.0,56972,3268,195328,292,6,16,,
+polyglot-c-py,0.0,0.0,175.3,164.6,83084,8438,117376,1303,11,20,,
+pypi-server,1.0,0.0,282.8,455.1,66928,4285,403200,1417,8,39,,
+pytorch-model-cli,0.0,0.0,159.0,514.0,157180,8904,485760,1523,14,66,,
+sparql-university,1.0,1.0,90.5,96.5,89589,4578,99840,982,8,26,,
+sqlite-db-truncate,0.0,1.0,75.9,157.7,52126,3077,153984,582,7,14,,
+write-compressor,0.0,1.0,352.7,153.4,25659,2123,81536,2176,5,22,,
+largest-eigenval,1.0,0.0,616.3,1.4,214609,6248,,,21,,,
+qemu-startup,0.0,0.0,900.0,900.0,,,,,,,"{'exception_type': 'AgentTimeoutError', 'exception_message': 'Agent execution ti","{'exception_type': 'AgentTimeoutError', 'exception_message': 'Agent execution ti"
+build-cython-ext,0.0,,900.0,,,,,,,,"{'exception_type': 'AgentTimeoutError', 'exception_message': 'Agent execution ti","{'exception_type': 'RuntimeError', 'exception_message': 'Docker compose command "
+build-pmars,1.0,1.0,230.3,878.3,117045,2750,1835904,1765,10,84,,
+chess-best-move,1.0,1.0,856.9,406.4,516905,17392,328960,2747,31,30,,
+circuit-fibsqrt,1.0,1.0,876.9,546.3,443225,25051,360960,3908,26,26,,
+custom-memory-heap-crash,0.0,1.0,1120.3,282.0,90771,4380,355328,1774,10,50,,
+distribution-search,1.0,,124.9,,75294,3706,,,8,,,"{'exception_type': 'EnvironmentStartTimeoutError', 'exception_message': 'Environ"
+dna-assembly,0.0,0.0,555.7,488.3,127704,9323,412288,4779,12,36,,
+large-scale-text-editing,0.0,,1800.0,,,,,,,,"{'exception_type': 'AgentTimeoutError', 'exception_message': 'Agent execution ti","{'exception_type': 'EnvironmentStartTimeoutError', 'exception_message': 'Environ"
+model-extraction-relu-logits,0.0,0.0,356.1,61.3,24439,1843,,,5,8,,
+path-tracing,1.0,1.0,815.1,1800.0,547975,6333,,,21,,,"{'exception_type': 'AgentTimeoutError', 'exception_message': 'Agent execution ti"
+path-tracing-reverse,1.0,1.0,491.8,345.5,2957613,14616,1510272,4088,42,70,,
+pytorch-model-recovery,,,,,,,,,,,"{'exception_type': 'RuntimeError', 'exception_message': 'Docker compose command ","{'exception_type': 'RuntimeError', 'exception_message': 'Docker compose command "
+qemu-alpine-ssh,0.0,,900.0,,,,,,,,"{'exception_type': 'AgentTimeoutError', 'exception_message': 'Agent execution ti","{'exception_type': 'EnvironmentStartTimeoutError', 'exception_message': 'Environ"
+raman-fitting,0.0,,556.9,,213558,15957,,,20,,,"{'exception_type': 'EnvironmentStartTimeoutError', 'exception_message': 'Environ"
+rstan-to-pystan,0.0,0.0,1800.1,2700.1,,,,,,,"{'exception_type': 'AgentTimeoutError', 'exception_message': 'Agent execution ti","{'exception_type': 'AgentTimeoutError', 'exception_message': 'Agent execution ti"
+tune-mjcf,0.0,0.0,213.9,367.3,82053,5243,267392,2775,10,38,,
+video-processing,0.0,0.0,562.5,591.1,622406,11900,580224,3496,22,24,,

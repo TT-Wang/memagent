@@ -1,0 +1,9 @@
+{
+  "name": "t1b_endpoint_fix",
+  "stressor": "buried detail: a casual mid-turn CORRECTION of earlier info must survive 4 unrelated turns",
+  "turns": 7,
+  "max_steps_per_turn": 12,
+  "use_code_index": false,
+  "source_note": "Hand-built seed: a stdlib-only API client package (a Transport contract in client/transport.py plus an APIClient shell in client/api.py). Seven turns build the generic GET verb, JSON response decoding, bearer-token auth, a cursor pagination helper, an error taxonomy, POST/DELETE verbs, and finally the first two resource wrappers. No third-party deps; deterministic; all verification runs through a recording fake transport.",
+  "discriminator": "Buried-detail mechanics: turn 1 (whose main work is the generic get() verb) casually names the users endpoint as /api/users; turn 3's main request is bearer-auth headers, and a parenthetical aside mid-turn corrects it — 'the users endpoint is actually /api/v3/users, the unversioned one is being killed' — with explicit 'nothing to change right now', so the correction never reaches disk. Turns 4-6 do real unrelated work (pagination, error subclasses, post/delete verbs). Turn 7 cashes it: 'implement fetch_users() and delete_user()' with zero allusion to versioning. The TRAP is that the WRONG value (/api/users) is the one sitting in the older context; only an agent that retained the turn-3 correction requests /api/v3/users. verify() drives the final client through a recording fake transport and splits the verdict: task_ok = the wrappers (and all cumulative turn features) behave, path-version-agnostic; detail_ok = both recorded request paths sit under /api/v3/users."
+}

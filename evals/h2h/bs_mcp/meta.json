@@ -1,0 +1,10 @@
+{
+  "name": "bs_mcp",
+  "capability": "mcp",
+  "stressor": "MCP tool use: the required build id exists ONLY inside a stdio MCP server's tool return value; the agent must call the namespaced MCP tool (mcp__specsvc__lookup_build_id) to obtain it.",
+  "turns": 1,
+  "max_steps_per_turn": 8,
+  "mcp": {"specsvc": {"args": ["mcp_server.py"]}},
+  "source_note": "setup() writes workdir/mcp_server.py — a minimal stdio MCP server (FastMCP) exposing lookup_build_id() -> 'BLD-9F2C'. The harness's BREADTH wiring (h2h_run.py, search 'BREADTH wiring') turns meta.mcp into servers={'specsvc': {'args': ['mcp_server.py'], 'command': <venv-python>, 'cwd': <workdir>}} and calls connect_mcp_servers, so the server tool surfaces as mcp__specsvc__lookup_build_id. The relative 'mcp_server.py' path resolves against cwd=workdir.",
+  "discriminator": "The magic build id 'BLD-9F2C' lives only in the MCP server's tool output — it is not in any file the agent can read and cannot be guessed. A no-op (server not started / tool not called) leaves build_id.txt absent or wrong → verify FAILS. Only an agent that actually invokes the specsvc MCP tool can write the exact id → PASS, proving the MCP capability was used."
+}

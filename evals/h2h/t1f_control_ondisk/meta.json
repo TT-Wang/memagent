@@ -1,0 +1,9 @@
+{
+  "name": "t1f_control_ondisk",
+  "stressor": "CONTROL for t1a: identical 40000-byte limit, but the turn-2 aside ALSO asks the agent to record the limit in docs/api_limits.md \u2014 so a compliant agent puts the detail ON DISK in turn 2. Isolates disk-grounding as the variable: pass t1f but fail t1a => the exposure is specifically about non-disk conversational state.",
+  "turns": 8,
+  "max_steps_per_turn": 12,
+  "use_code_index": false,
+  "source_note": "Hand-built stdlib-only sync utility: package `syncer` with a Transport contract (syncer/transport.py) and a Client shell (syncer/client.py) that sends request bodies through an injected transport. Eight turns build single upload+receipt, a size manifest, manifest diffing, retry/backoff, an upload log, a checksum helper, a small refactor, and finally chunked large-file upload. Verification injects a recording transport; deterministic; no third-party deps.",
+  "discriminator": "Same as t1a EXCEPT turn 2's aside adds '...and drop that limit into docs/api_limits.md so we don't forget'. A compliant agent writes the 40000 limit to disk in turn 2, so at the turn-8 payoff a reconstruct-per-turn agent can RE-READ it (no retention required). verify reports task_ok + detail_ok (chunks <= 40000, same as t1a) PLUS a diagnostic note_written flag (does docs/api_limits.md exist and mention 40000). Reading the pair: sliceagent passes t1f but fails t1a => disk-grounding is the boundary of the write-time-salience exposure; fails both => the problem is recall/application, not grounding; passes both => no exposure."
+}

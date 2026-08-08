@@ -1,0 +1,11 @@
+{
+  "name": "bs_plugin",
+  "capability": "plugins",
+  "plugins": true,
+  "turns": 1,
+  "max_steps_per_turn": 8,
+  "use_code_index": false,
+  "stressor": "BREADTH / plugins: a value that exists ONLY behind a plugin-registered tool. setup() writes a sliceagent plugin (workdir/.sliceagent/plugins/releasekit/{plugin.toml,__init__.py}) whose register(ctx) calls ctx.register_tool('get_release_token', handler=...) returning an unguessable magic token RT-7731-<random hex>. The harness's BREADTH wiring (meta.plugins=true) runs load_plugins(tools.registry, skills_mgr, [workdir/.sliceagent/plugins], root=workdir) so the tool is live in the registry the loop drives.",
+  "source_note": "The plugin's __init__.py register(ctx) registers get_release_token with a handler that returns a token whose random suffix is persisted to workdir/.sliceagent/plugins/releasekit/.token at setup time. The token is NOT written anywhere the agent reads as plain data and is NOT in the prompt — the ONLY way to obtain it is to invoke the plugin tool. Reference fix reads that persisted token and writes it to release.txt, simulating an agent that called the tool.",
+  "discriminator": "Success PROVES the plugin mechanism was used: the oracle requires release.txt to contain the EXACT magic token the plugin tool returns, which is unguessable and unobtainable except by calling get_release_token. A no-op setup (token never written to release.txt) FAILS; only an agent that actually invokes the plugin-registered tool can pass. Tests that load_plugins registers the tool into the registry the loop drives."
+}

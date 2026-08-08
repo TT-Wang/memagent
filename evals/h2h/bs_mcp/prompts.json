@@ -1,0 +1,3 @@
+[
+  "A connected MCP server named `specsvc` exposes a tool that returns this project's required build id. Call that specsvc MCP tool (its name is namespaced like `mcp__specsvc__lookup_build_id`) to obtain the build id, then write the EXACT id it returns — nothing else, no quotes, no trailing text — into a file `build_id.txt` in the working directory. Do not invent or guess the id; the only correct value is whatever the MCP tool returns. The build id is not present in any file here, so you must get it through the specsvc MCP tool."
+]

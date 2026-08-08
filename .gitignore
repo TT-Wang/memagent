@@ -120,3 +120,32 @@ docs/*
 
 # ColBench raw HF dataset (huge; selected tasks are committed under evals/colbench/tasks/)
 evals/colbench/data/
+
+# ── benchmark reproducibility (2026-08-08 review H3): version the harnesses + dated result
+#    snapshots the README tables cite; raw job artifacts / datasets / logs stay local. ──
+# TB2 head-to-head (README §1): harness + the two dated comparison snapshots.
+!evals/tbench/
+evals/tbench/jobs/
+evals/tbench/runs/
+evals/tbench/tb2/
+evals/tbench/trajectories/
+evals/tbench/*.log
+evals/tbench/__pycache__/
+# ColBench §2 result ledgers (the harness + tasks are already versioned).
+!evals/colbench/results/
+evals/colbench/results/*
+!evals/colbench/results/SUMMARY.txt
+!evals/colbench/results/h2h_matched.json
+!evals/colbench/results/codex.json
+!evals/colbench/results/sliceagent.json
+!evals/colbench/results/pilot_codex.json
+!evals/colbench/results/pilot_sliceagent.json
+# h2h §3: the harnesses + scenario definitions (meta/prompts/setup/verify + result ledgers);
+# run outputs (cells/artifacts/logs) stay local.
+!evals/h2h_run.py
+!evals/h2h_matched.py
+!evals/h2h/
+evals/h2h/cells/
+evals/h2h/artifacts/
+evals/h2h/*.log
+evals/h2h/__pycache__/

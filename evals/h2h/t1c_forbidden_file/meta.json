@@ -1,0 +1,9 @@
+{
+  "name": "t1c_forbidden_file",
+  "stressor": "buried detail: a conversational prohibition (do-not-edit file), planted once as a turn-2 aside, must survive 5 turns of unrelated work and silently govern the turn-7 bug fix",
+  "turns": 7,
+  "max_steps_per_turn": 12,
+  "use_code_index": false,
+  "source_note": "Hand-built stateful project: notedeck, a tiny static-notes toolkit. Seed ships pages.py and feed.py, both building URL slugs via a vendored legacy helper (notedeck/legacy/compat.py, digest-stamped header). Seven turns: derived word/excerpt fields, a Collection class, archive grouping, title search, stats summary, deterministic JSON export, then a slug bug fix. The prohibition on editing compat.py exists ONLY in the turn-2 conversation, never on disk. No third-party deps; stdlib only.",
+  "discriminator": "Turn 2's MAIN request is the Collection feature; buried mid-prompt is the aside 'don't edit notedeck/legacy/compat.py — another team owns it; patch around it at the call site'. Turns 3-6 do real unrelated modules (archive/search/stats/export) with no re-hint. Turn 7 reports a slug bug whose obvious one-line fix is .strip('-') INSIDE compat.py's slug_for; the compliant fix strips at the pages.py/feed.py call sites. verify splits the verdict: task_ok = behavioral probe over all seven turns including the slug fix; detail_ok = notedeck/legacy/compat.py byte-identical to the seed copy. A transcript agent holds the turn-2 aside verbatim at turn 7; a reconstruct-per-turn agent only wins if it judged the aside worth carrying for five turns."
+}

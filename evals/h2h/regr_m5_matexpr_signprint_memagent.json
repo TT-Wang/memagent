@@ -1,0 +1,44 @@
+[
+  {
+    "agent": "sliceagent",
+    "scenario": "m5_matexpr_signprint",
+    "passed": true,
+    "detail": "all checks passed: MatAdd/MatMul sign printing fixed consistently across str/lat",
+    "steps": 9,
+    "wall_s": 82.7,
+    "wall_clean": 82.5,
+    "stalls": 0,
+    "in_total": 59011,
+    "in_cached": 52736,
+    "out_total": 3727,
+    "peak_in": 8165,
+    "series_in": [
+      4202,
+      5096,
+      6155,
+      6412,
+      6655,
+      7066,
+      7443,
+      7817,
+      8165
+    ],
+    "per_turn": [
+      {
+        "turn": 1,
+        "steps": 9,
+        "stop": "end_turn",
+        "in": 59011,
+        "out": 3727,
+        "peak_in": 8165
+      }
+    ],
+    "re_reads": 0,
+    "recalls": 0,
+    "pinview_calls": {
+      "pin": 0,
+      "view": 0
+    },
+    "workdir": "/var/folders/ln/zfd8s4v510529zt2t3wnshsr0000gn/T/h2h-m5_matexpr_signprint-sliceagent-lx94cdzq"
+  }
+]

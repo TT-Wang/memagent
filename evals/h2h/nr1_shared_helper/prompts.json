@@ -1,0 +1,3 @@
+[
+  "In the `settingskit` package, change `settingskit/core/config.py`'s `get_setting(key)` so that instead of returning just the value string, it returns a `(value, source)` tuple — the value plus where it came from: `\"env\"` if the key is in the environment, `\"file\"` if it comes from the file store, or `\"default\"` if it falls back to the default. The value itself must be exactly what it is today (same lookup order: environment, then file store, then default). The point is to let callers log the provenance of each setting. Make sure the package as a whole still works after this change."
+]

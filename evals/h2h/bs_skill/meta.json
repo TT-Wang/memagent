@@ -1,0 +1,10 @@
+{
+  "name": "bs_skill",
+  "skills": true,
+  "turns": 1,
+  "max_steps_per_turn": 16,
+  "use_code_index": true,
+  "stressor": "BREADTH / capability=skills: a real micro web-router library where adding a new endpoint correctly requires a NON-GUESSABLE project convention (a magic PROTOCOL_REV constant + an exact ROUTES-table registration form + a required handler signature) that lives ONLY in a project SKILL.md. The prompt tells the model to follow 'the project skill for endpoint registration', so loading the skill is the path; the constant/format cannot be inferred from any file in the workdir.",
+  "source_note": "setup() writes a small genuine library: router.py (a tiny dispatcher that looks up handlers in a ROUTES dict and asserts each registered route carries the current PROTOCOL_REV), an existing example endpoint (endpoints/ping.py) that does NOT reveal the magic constant value (it imports PROTOCOL_REV by name from a module the model must not edit), the ROUTES registry file (routes.py), and a SKILL.md at workdir/.sliceagent/skills/endpoint-registration/SKILL.md whose BODY is the ONLY place that states PROTOCOL_REV == 0xC0FFEE, the exact ROUTES entry tuple shape, and the mandated handler signature/return envelope. The agent is asked to add a 'status' endpoint following that skill.",
+  "discriminator": "Success PROVES the skill mechanism was used: the oracle imports the agent's router in a fresh subprocess and dispatches the new 'status' route with UNSEEN input; passing requires the exact magic PROTOCOL_REV constant, the exact ROUTES-table form, and the exact response envelope — all of which appear ONLY in the SKILL.md body and cannot be guessed. A no-op (or an agent that never loads the skill) cannot produce the magic constant and fails."
+}

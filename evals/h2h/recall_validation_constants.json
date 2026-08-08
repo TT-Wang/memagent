@@ -1,0 +1,192 @@
+[
+  {
+    "scenario": "constants",
+    "manifest_on": true,
+    "manifest_in_t2_slice": true,
+    "recall_calls_t2": 1,
+    "recall_args_t2": [
+      {
+        "turns": [
+          1
+        ]
+      }
+    ],
+    "manifest_excerpt": "# PAGED-OUT HISTORY (earlier turns of THIS session \u2014 NOT in the slice; page any back with the call shown)\n- turn 1 \u00b7 \"We've finalized four API error codes for this projec\" \u00b7 note: Got it. The four finalized API error codes are: - **AU  \u2192 recall_history(turns=[1])\n# REPEATED/FAILING ACTIONS\n- (nothing repeated or failing)\n\n# RECENT (last 4)\n(none yet \u2014 first move)\n\n# WORKSPACE STATE (LIVE \u2014 current branch & changed files, re-read THIS turn; this is the up-to-date git state \u2014 trust it over any session-start project facts)\nbranch main \u00b7 working tree clean\n\n\n# NOW: do the next step(s) with tools (",
+    "file_created": true,
+    "codes_present": {
+      "AUTH_FAIL": true,
+      "RATE_LIMIT": true,
+      "BAD_INPUT": true,
+      "TIMEOUT": true
+    },
+    "codes_present_n": 4
+  },
+  {
+    "scenario": "constants",
+    "manifest_on": true,
+    "manifest_in_t2_slice": true,
+    "recall_calls_t2": 1,
+    "recall_args_t2": [
+      {
+        "turns": [
+          1
+        ]
+      }
+    ],
+    "manifest_excerpt": "# PAGED-OUT HISTORY (earlier turns of THIS session \u2014 NOT in the slice; page any back with the call shown)\n- turn 1 \u00b7 \"We've finalized four API error codes for this projec\" \u00b7 note: Acknowledged. The four API error codes are: - **AUTH_F  \u2192 recall_history(turns=[1])\n# REPEATED/FAILING ACTIONS\n- (nothing repeated or failing)\n\n# RECENT (last 4)\n(none yet \u2014 first move)\n\n# WORKSPACE STATE (LIVE \u2014 current branch & changed files, re-read THIS turn; this is the up-to-date git state \u2014 trust it over any session-start project facts)\nbranch main \u00b7 working tree clean\n\n\n# NOW: do the next step(s) with tools (",
+    "file_created": true,
+    "codes_present": {
+      "AUTH_FAIL": true,
+      "RATE_LIMIT": true,
+      "BAD_INPUT": true,
+      "TIMEOUT": true
+    },
+    "codes_present_n": 4
+  },
+  {
+    "scenario": "constants",
+    "manifest_on": true,
+    "manifest_in_t2_slice": true,
+    "recall_calls_t2": 1,
+    "recall_args_t2": [
+      {
+        "turns": [
+          1
+        ]
+      }
+    ],
+    "manifest_excerpt": "# PAGED-OUT HISTORY (earlier turns of THIS session \u2014 NOT in the slice; page any back with the call shown)\n- turn 1 \u00b7 \"We've finalized four API error codes for this projec\" \u00b7 note: Acknowledged. The four API error codes are: - AUTH_FAI  \u2192 recall_history(turns=[1])\n# REPEATED/FAILING ACTIONS\n- (nothing repeated or failing)\n\n# RECENT (last 4)\n(none yet \u2014 first move)\n\n# WORKSPACE STATE (LIVE \u2014 current branch & changed files, re-read THIS turn; this is the up-to-date git state \u2014 trust it over any session-start project facts)\nbranch main \u00b7 working tree clean\n\n\n# NOW: do the next step(s) with tools (",
+    "file_created": true,
+    "codes_present": {
+      "AUTH_FAIL": true,
+      "RATE_LIMIT": true,
+      "BAD_INPUT": true,
+      "TIMEOUT": true
+    },
+    "codes_present_n": 4
+  },
+  {
+    "scenario": "constants",
+    "manifest_on": true,
+    "manifest_in_t2_slice": true,
+    "recall_calls_t2": 1,
+    "recall_args_t2": [
+      {
+        "turns": [
+          1
+        ]
+      }
+    ],
+    "manifest_excerpt": "# PAGED-OUT HISTORY (earlier turns of THIS session \u2014 NOT in the slice; page any back with the call shown)\n- turn 1 \u00b7 \"We've finalized four API error codes for this projec\" \u00b7 note: Got it. The four finalized API error codes are: - AUTH  \u2192 recall_history(turns=[1])\n# REPEATED/FAILING ACTIONS\n- (nothing repeated or failing)\n\n# RECENT (last 4)\n(none yet \u2014 first move)\n\n# WORKSPACE STATE (LIVE \u2014 current branch & changed files, re-read THIS turn; this is the up-to-date git state \u2014 trust it over any session-start project facts)\nbranch main \u00b7 working tree clean\n\n\n# NOW: do the next step(s) with tools (",
+    "file_created": true,
+    "codes_present": {
+      "AUTH_FAIL": true,
+      "RATE_LIMIT": true,
+      "BAD_INPUT": true,
+      "TIMEOUT": true
+    },
+    "codes_present_n": 4
+  },
+  {
+    "scenario": "constants",
+    "manifest_on": false,
+    "manifest_in_t2_slice": false,
+    "recall_calls_t2": 1,
+    "recall_args_t2": [
+      {
+        "turns": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "note": "Retrieving finalized error code values from parked topic."
+      }
+    ],
+    "manifest_excerpt": "(no manifest in slice)",
+    "file_created": true,
+    "codes_present": {
+      "AUTH_FAIL": true,
+      "RATE_LIMIT": true,
+      "BAD_INPUT": true,
+      "TIMEOUT": true
+    },
+    "codes_present_n": 4
+  },
+  {
+    "scenario": "constants",
+    "manifest_on": false,
+    "manifest_in_t2_slice": false,
+    "recall_calls_t2": 0,
+    "recall_args_t2": [],
+    "manifest_excerpt": "(no manifest in slice)",
+    "file_created": true,
+    "codes_present": {
+      "AUTH_FAIL": true,
+      "RATE_LIMIT": false,
+      "BAD_INPUT": false,
+      "TIMEOUT": false
+    },
+    "codes_present_n": 1
+  },
+  {
+    "scenario": "constants",
+    "manifest_on": false,
+    "manifest_in_t2_slice": false,
+    "recall_calls_t2": 4,
+    "recall_args_t2": [
+      {
+        "turns": [
+          1,
+          2
+        ],
+        "full": true,
+        "note": "Retrieve parked topic's full finalized error codes."
+      },
+      {
+        "turns": [
+          2
+        ],
+        "full": true,
+        "note": "Get full turn 2 of parked topic."
+      },
+      {
+        "full": true,
+        "note": "List topic history index."
+      },
+      {
+        "turns": [
+          1
+        ],
+        "full": true,
+        "note": "Read full finalized error codes."
+      }
+    ],
+    "manifest_excerpt": "(no manifest in slice)",
+    "file_created": false,
+    "codes_present": {
+      "AUTH_FAIL": false,
+      "RATE_LIMIT": false,
+      "BAD_INPUT": false,
+      "TIMEOUT": false
+    },
+    "codes_present_n": 0
+  },
+  {
+    "scenario": "constants",
+    "manifest_on": false,
+    "manifest_in_t2_slice": false,
+    "recall_calls_t2": 0,
+    "recall_args_t2": [],
+    "manifest_excerpt": "(no manifest in slice)",
+    "file_created": true,
+    "codes_present": {
+      "AUTH_FAIL": true,
+      "RATE_LIMIT": false,
+      "BAD_INPUT": false,
+      "TIMEOUT": false
+    },
+    "codes_present_n": 1
+  }
+]

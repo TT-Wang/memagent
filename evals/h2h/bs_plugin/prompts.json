@@ -1,0 +1,3 @@
+[
+  "This workspace has a release helper installed as a plugin: it exposes a tool called `get_release_token`. I need the current release token for our deploy step. Please obtain the release token by calling the available `get_release_token` tool, then write the token (exactly as returned, nothing else) into a file named `release.txt` at the workspace root. The token is only retrievable through that tool — it is not stored in any file or in this message, so don't guess it or invent one; call the tool and copy its exact return value into release.txt."
+]

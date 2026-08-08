@@ -24,7 +24,9 @@ uv tool install --python 3.12 "sliceagent[tui]"   # or: pipx install "sliceagent
 ```
 
 The base install includes native typed knowledge and canonical history. Use `sliceagent[tui,memory]` only when
-you also want the optional Memem semantic index (its structured protocol requires Memem 2.10+).
+you also want the optional Memem semantic index (its structured protocol needs a memem release that provides
+the `memory_index_upsert`/`memory_index_remove` surfaces; the pinned 2.9.x extra does not yet, so that extra is
+detected as unavailable and native search stays the active backend).
 
 From source (development):
 

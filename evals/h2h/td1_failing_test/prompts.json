@@ -1,0 +1,3 @@
+[
+  "This workdir holds a small expense-splitting library (money.py, allocator.py, ledger.py) with a unittest suite in test_split.py. Running `python -m unittest -v test_split` shows one failing test, test_leftover_pennies_are_fair, alongside several that pass. The failing test pins how leftover cents should be split when a total doesn't divide evenly: splitting $1.00 three ways should give 34/33/33 cents (the extra cent to the first share), but right now the code hands the whole leftover to the last share, so the split is unfair even though the cents still add up. Make the failing test pass without breaking any of the others, and fix the real cause in the library rather than editing the tests."
+]
