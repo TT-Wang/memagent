@@ -180,6 +180,47 @@ def live_server_smoke():
 
 
 @check
+def served_page_embeds_token_as_a_safe_literal_and_enforces_local_host():
+    # Counter-review M3 (2026-08-09): the raw-text token replace also rewrote the JS IDENTIFIER,
+    # so ~52% of token_urlsafe values (leading digit or a dash) killed the whole <script>; and a
+    # pinned AGENT_MONITOR_TOKEN carrying a quote broke out of the string. Plus there was no Host
+    # check, so DNS rebinding got a 200. Both seams are pinned here, live.
+    import http.client
+    import urllib.parse
+    m = SliceMonitor()
+    m.sink(sb("SYS", "USER-SLICE"))
+    srv, url = serve(m, port=7791)
+    base = url.split("?", 1)[0]
+    try:
+        for nasty in ("0x-VF3abc_def-123", 'quo"te\\back'):
+            srv.monitor_token = nasty
+            page = urllib.request.urlopen(
+                f"{base}/?token={urllib.parse.quote(nasty)}", timeout=3).read().decode()
+            # the token appears exactly once, as a JSON string literal — never as a JS identifier
+            assert "const MONITOR_TOKEN=" in page and "__MONITOR_TOKEN__" not in page
+            assert json.dumps(nasty) in page, (nasty, "token not embedded as a safe literal")
+            assert f"window.{nasty}" not in page
+            state = json.loads(urllib.request.urlopen(
+                f"{base}/api/state?token={urllib.parse.quote(nasty)}", timeout=3).read().decode())
+            assert state["steps_total"] == 1, "the exact (decoded) token must still authorize"
+        # DNS-rebinding guard: a non-local Host is refused even WITH the token…
+        port = srv.server_address[1]
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
+        conn.request("GET", f"/api/state?token={srv.monitor_token}",
+                     headers={"Host": "evil.example.com"})
+        resp = conn.getresponse(); resp.read(); conn.close()
+        assert resp.status == 403, resp.status
+        # …while a loopback-addressed Host is served.
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
+        conn.request("GET", f"/api/state?token={srv.monitor_token}", headers={"Host": "localhost"})
+        resp = conn.getresponse()
+        assert resp.status == 200 and json.loads(resp.read().decode())["steps_total"] == 1
+        conn.close()
+    finally:
+        srv.shutdown()
+
+
+@check
 def file_sink_persists_snapshot():
     import os
     import stat

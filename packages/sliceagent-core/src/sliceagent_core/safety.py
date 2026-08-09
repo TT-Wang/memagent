@@ -230,8 +230,12 @@ _PREFIX_PATTERNS = [
 
 _SECRET_ENV_NAMES = (
     r"(?:API_?KEY|ACCESS_KEY|SECRET_?KEY|PRIVATE_?KEY|ENCRYPTION_?KEY|MASTER_?KEY|SA_KEY|"
-    r"TOKEN|SECRET|PASSWORD|PASSWD|PWD|PASSPHRASE|CREDENTIAL|AUTH)"
+    r"TOKEN|SECRET|PASSWORD|PASSWD|(?<=[A-Za-z0-9_])PWD|PASSPHRASE|CREDENTIAL|AUTH)"
 )
+# PWD requires a word char immediately before it: bare ``PWD=…`` in a persisted shell/env dump is
+# the session's working directory, not a secret — the boundaryless alternative masked every
+# ``PWD=/home/…`` line that crossed a checkpoint (counter-review H2). ``MYSQL_PWD``/``DB_PWD``
+# (and lowercase forms, via the passes' IGNORECASE) still match through the lookbehind.
 _ENV_ASSIGN_RE = re.compile(
     # An assignment separator is one ``=``. Without the lookahead, source such as
     # ``password == stored`` matched the first equality operator and was durably
@@ -243,14 +247,27 @@ _ENV_ASSIGN_RE = re.compile(
 #                     IGNORECASE: real .env/config secrets are usually lowercase. [^\\n] (not .) keeps the no-cross-newline guarantee (a \\s* after '=' ate the next checkpoint header → data loss).
 # code_file=True keeps the general ENV pass OFF source bodies (it would mask fixtures such as
 # `password = "test"` in real code) — but a dotenv/config file IS code-file content, and its
-# UPPERCASE_NAME=value lines are exactly the leak shape. This restricted pass redacts only
-# line-start, uppercase-spelled assignments (indented/lowercase source constants stay intact).
-# The name may START with the secret word (API_KEY=…), so the uppercase rule is a zero-width,
-# CASE-SENSITIVE lookahead, not a consuming class — the alternation must be able to match at
-# position 0, and an IGNORECASE flag would let lowercase `api_token = …` through the gate.
+# UPPERCASE_NAME=value lines are exactly the leak shape. This restricted pass redacts only the
+# DOTENV shape: line-start, ALL-CAPS name, `=` IMMEDIATELY after the name. Every clause of the
+# gate is load-bearing (counter-review H2, 2026-08-09 — the first version of this pass turned
+# 17 of the repo's own parseable .py snapshots into SyntaxErrors):
+#   * whole-name ALL-CAPS lookahead `^(?=[A-Z0-9_]+=)` — a first-character gate let `Secretary`
+#     (contains "Secret") through; judging the entire name keeps mixed-case source constants.
+#   * no whitespace before `=` — the only clean syntactic separator between a dotenv line
+#     (`AWS_ACCESS_KEY_ID=…`) and a Python module constant (`USER_RESERVE_TOKENS = 20_000`,
+#     `TOKEN_TTL_SECONDS = 900`). Masking the latter produced `NAME = ***` — a SyntaxError.
+#   * an unquoted value must reach end-of-line (optional trailing # comment) — otherwise
+#     `SECRET = b"gamma"` matched the bare `b`, yielding `SECRET=***"gamma"`: syntax broken
+#     AND the secret survived. The consuming name group needs no IGNORECASE: the lookahead has
+#     already excluded any lowercase name.
+# `export ` is accepted (a dotenv shape that never opens a Python line). Leading whitespace stays
+# excluded — an indented ALL-CAPS assignment is source, not dotenv. Documented residual gaps
+# (accepted, fail-open toward source fidelity): TAB-indented .env lines and lowercase env names
+# pass through in code_file mode.
 _CODE_ENV_ASSIGN_RE = re.compile(
-    rf"(?m)^(?=[A-Z])([A-Za-z0-9_]{{0,50}}(?i:{_SECRET_ENV_NAMES})[A-Za-z0-9_]{{0,50}})\s*=(?![=>])[ \t]*"
-    rf"(?:(['\"])([^\n]*?)\2|([^\s\"',}}]+))",
+    rf"(?m)^(?:export[ \t]+)?(?=[A-Z0-9_]+=)"
+    rf"([A-Za-z0-9_]{{0,50}}{_SECRET_ENV_NAMES}[A-Za-z0-9_]{{0,50}})=(?![=>])[ \t]*"
+    rf"(?:(['\"])([^\n]*?)\2|([^\s\"',}}]+)(?=[ \t]*(?:#.*)?$))",
 )
 _JSON_KEY_NAMES = (r"(?:api_?[Kk]ey|access_key|secret_key|private_key|encryption_key|master_key|"
                    r"token|secret|password|pwd|passphrase|access_token|refresh_token|"
@@ -304,8 +321,9 @@ def redact_text(text: str | None, *, code_file: bool = False, preserve_length: b
     Safe on any string — non-matching text passes through unchanged. Always on (this is a
     safety boundary, not a logging preference, so the env-toggle from the source is dropped).
 
-    code_file=True skips the ENV-assignment and JSON-field passes (avoids masking source-code
-    constants/fixtures); prefix/JWT/private-key/DB/header/phone passes still apply.
+    code_file=True skips the general ENV-assignment pass (source-code constants/fixtures survive
+    un-mangled) but still redacts dotenv-shaped UPPERCASE lines, JSON secret fields, and the
+    prefix/JWT/private-key/DB/header/phone passes.
     """
     if text is None:
         return ""
@@ -332,26 +350,25 @@ def redact_text(text: str | None, *, code_file: bool = False, preserve_length: b
                     lambda m: (f"{m.group(1)}={m.group(2)}{_mask_token(m.group(3))}{m.group(2)}"
                                if m.group(2) is not None
                                else f"{m.group(1)}={_mask_token(m.group(4))}"), text)
-        if ":" in text and '"' in text:
-            text = _JSON_FIELD_RE.sub(
-                (lambda m: _replace_group(m, 2, _mask_token(m.group(2), preserve_length=True)))
-                if preserve_length else
-                (lambda m: f'{m.group(1)}: "{_mask_token(m.group(2))}"'),
-                text,
-            )
     elif "=" in text:
-        # code-file mode: still redact dotenv/config-style UPPERCASE_NAME=value lines (line-start only).
-        if preserve_length:
-            text = _CODE_ENV_ASSIGN_RE.sub(lambda m: _replace_group(
-                m, 3 if m.group(3) is not None else 4,
-                _mask_token(m.group(3) if m.group(3) is not None else m.group(4),
-                            preserve_length=True),
-            ), text)
-        else:
-            text = _CODE_ENV_ASSIGN_RE.sub(
-                lambda m: (f"{m.group(1)}={m.group(2)}{_mask_token(m.group(3))}{m.group(2)}"
-                           if m.group(2) is not None
-                           else f"{m.group(1)}={_mask_token(m.group(4))}"), text)
+        # code-file mode: redact dotenv-shaped lines only (see the gate comment above).
+        # `_replace_group` swaps ONLY the value — preserving the original spacing, any `export `
+        # prefix, and a trailing comment, all of which a match-rebuild would normalize away.
+        text = _CODE_ENV_ASSIGN_RE.sub(lambda m: _replace_group(
+            m, 3 if m.group(3) is not None else 4,
+            _mask_token(m.group(3) if m.group(3) is not None else m.group(4),
+                        preserve_length=preserve_length),
+        ), text)
+    if ":" in text and '"' in text:
+        # JSON/config fields (`"token": "…"`) are redacted in BOTH modes (counter-review H2:
+        # this pass used to be skipped entirely under code_file, so JSON configs inside tape
+        # snapshots kept live secrets; the quoted replacement keeps source syntax valid).
+        text = _JSON_FIELD_RE.sub(
+            (lambda m: _replace_group(m, 2, _mask_token(m.group(2), preserve_length=True)))
+            if preserve_length else
+            (lambda m: f'{m.group(1)}: "{_mask_token(m.group(2))}"'),
+            text,
+        )
 
     if "authorization" in text.casefold():   # case-insensitive guard matches the IGNORECASE regex it gates
         text = _AUTH_HEADER_RE.sub(

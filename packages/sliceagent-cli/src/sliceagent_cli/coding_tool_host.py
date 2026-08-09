@@ -1584,6 +1584,20 @@ class CodingToolHost:
             return runner(command)
         from sliceagent_core.execution import ToolStatus as _TS
         from .oracle import CommandOracle, OracleResult
+        from .safeguards import catastrophic_reason
+        # CATASTROPHE GATE, at the host seam (counter-review M2): a model-authored verify command
+        # is shell semantics, not a trusted tool name — classify the body through the same
+        # catastrophic floor run_command passes at preflight, BEFORE the PATH probe (whose "not on
+        # PATH" report would otherwise mislabel a refused catastrophe) and before the sandbox.
+        # CommandOracle.verify() repeats the check for its other callers (completion-hook path).
+        reason = catastrophic_reason("run_command", {"command": command})
+        if reason is not None:
+            # INDETERMINATE, not FAILED: the check never ran — no verdict on the work, and the
+            # no-verdict path tells the model to fix the CHECK, never to re-edit good work.
+            return OracleResult(
+                _TS.INDETERMINATE,
+                f"refused by the catastrophic-command safeguard ({reason}); the check never ran — "
+                "give the item a non-destructive verify command")
         # A command whose program is not on PATH answers 127, which is indistinguishable from a real red
         # check — the host would tell the model to fix perfectly good work because `pytest` was never
         # installed. Resolve it first and report the same NO-VERDICT class a deadline overrun reports.

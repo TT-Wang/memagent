@@ -132,6 +132,7 @@ evals/tbench/trajectories/
 evals/tbench/*.log
 evals/tbench/__pycache__/
 # ColBench §2 result ledgers (the harness + tasks are already versioned).
+!evals/colbench_final.py
 !evals/colbench/results/
 evals/colbench/results/*
 !evals/colbench/results/SUMMARY.txt
@@ -140,6 +141,9 @@ evals/colbench/results/*
 !evals/colbench/results/sliceagent.json
 !evals/colbench/results/pilot_codex.json
 !evals/colbench/results/pilot_sliceagent.json
+# Gap-detection benchmark (confabulation-vs-abstention harness cited by the deck claims);
+# its captured *.json run data stays local via the evals/* ignore.
+!evals/gap_detection.py
 # h2h §3: the harnesses + scenario definitions (meta/prompts/setup/verify + result ledgers);
 # run outputs (cells/artifacts/logs) stay local.
 !evals/h2h_run.py

@@ -219,9 +219,49 @@ def _server_token(srv) -> str:
     return token
 
 
+def _render_page(token: str) -> bytes:
+    """Serve PAGE with the bearer token embedded as a JSON string literal.
+
+    The placeholder is a BARE JS expression (``const MONITOR_TOKEN=__MONITOR_TOKEN__;``), so the
+    replacement must be a complete string literal — json.dumps gives exactly that and escapes any
+    quote/backslash a pinned ``AGENT_MONITOR_TOKEN`` may carry. The old raw-text replace also
+    rewrote the JS IDENTIFIER ``window.__MONITOR_TOKEN__``: a ``token_urlsafe`` value has a ~52%
+    chance of containing ``-`` or starting with a digit, producing ``window.0x-VF…="…"`` — an
+    invalid left-hand side that killed the whole <script> on most starts (counter-review M3).
+    """
+    return PAGE.replace("__MONITOR_TOKEN__", json.dumps(token or "")).encode("utf-8")
+
+
 class _Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):       # silence the default stderr access log
         pass
+
+    def _host_ok(self) -> bool:
+        """DNS-rebinding guard: the monitor exposes the FULL model-visible context, so it must
+        only answer requests ADDRESSED to the loopback interface it bound. A rebinding attack
+        arrives with ``Host: attacker.tld`` (the browser resolves the hostile name onto
+        127.0.0.1); the bearer token does not help the served PAGE class. A missing Host header
+        (HTTP/1.0 probes) is tolerated — the token still gates every route."""
+        host = self.headers.get("Host")
+        if not host:
+            return True
+        name = host.strip().lower()
+        if name.startswith("["):
+            name = name[1:name.index("]")] if "]" in name else name[1:]
+        else:
+            name = name.split(":", 1)[0]
+        bind = str(getattr(self.server, "server_address", ("", 0))[0] or "").lower()
+        return name in {"127.0.0.1", "localhost", "::1", bind}
+
+    def _plain(self, code: int, text: str) -> None:
+        self.send_response(code)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        try:
+            self.wfile.write(text.encode("utf-8"))
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     def _authorized(self) -> bool:
         token = getattr(self.server, "monitor_token", None)
@@ -245,6 +285,10 @@ class _Handler(BaseHTTPRequestHandler):
             pass
 
     def do_GET(self):
+        if not self._host_ok():
+            self._plain(403, "403 forbidden — the monitor only answers requests addressed to its "
+                             "loopback bind (Host header check; DNS rebinding defense)")
+            return
         if not self._authorized():
             self.send_response(401)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
@@ -257,8 +301,7 @@ class _Handler(BaseHTTPRequestHandler):
             return
         path = self.path.split("?", 1)[0]
         if path == "/" or path == "/index.html":
-            self._send(PAGE.replace("__MONITOR_TOKEN__", getattr(self.server, "monitor_token", "")).encode("utf-8"),
-                       "text/html; charset=utf-8")
+            self._send(_render_page(getattr(self.server, "monitor_token", "")), "text/html; charset=utf-8")
         elif path == "/api/state":
             body = json.dumps(self.server.monitor.snapshot(), ensure_ascii=False).encode("utf-8")
             self._send(body, "application/json; charset=utf-8")
@@ -461,6 +504,10 @@ class _PersistentHandler(_Handler):
     flag and a session list — so one standing server reflects whatever session is running, or idles."""
 
     def do_GET(self):
+        if not self._host_ok():
+            self._plain(403, "403 forbidden — the monitor only answers requests addressed to its "
+                             "loopback bind (Host header check; DNS rebinding defense)")
+            return
         if not self._authorized():
             self.send_response(401)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
@@ -473,8 +520,7 @@ class _PersistentHandler(_Handler):
             return
         u = urlparse(self.path)
         if u.path in ("/", "/index.html"):
-            self._send(PAGE.replace("__MONITOR_TOKEN__", getattr(self.server, "monitor_token", "")).encode("utf-8"),
-                       "text/html; charset=utf-8")
+            self._send(_render_page(getattr(self.server, "monitor_token", "")), "text/html; charset=utf-8")
         elif u.path == "/api/state":
             sel = (parse_qs(u.query).get("session") or [None])[0]
             self._send(json.dumps(self._state(sel), ensure_ascii=False).encode("utf-8"),
@@ -610,7 +656,7 @@ PAGE = r"""<!doctype html>
   <section class="detail" id="detail"><div class="empty">waiting for the first turn…<br>run a task in the agent.</div></section>
 </main>
 <script>
-window.__MONITOR_TOKEN__="__MONITOR_TOKEN__"; // server-injected bearer token (served page only; /api/state still enforces it)
+const MONITOR_TOKEN=__MONITOR_TOKEN__; // server-injected bearer token (JSON literal; served page only — /api/state still enforces it)
 let STATE={steps:[],version:-1}, SEL=null, LASTVER=-1, PICK="";
 document.addEventListener("change",e=>{ if(e.target.id==="sess"){ PICK=e.target.value; LASTVER=-1; SEL=null; } });
 const $=id=>document.getElementById(id);
@@ -722,7 +768,7 @@ function syncSessions(d){
 }
 async function poll(){
   try{
-    const tk=window.__MONITOR_TOKEN__||"";
+    const tk=MONITOR_TOKEN||"";
     const sep=(PICK||tk)?"?":"";
     const url="/api/state"+sep+[PICK?("session="+encodeURIComponent(PICK)):"",tk?("token="+encodeURIComponent(tk)):""].filter(Boolean).join("&");
     const d=await(await fetch(url)).json();

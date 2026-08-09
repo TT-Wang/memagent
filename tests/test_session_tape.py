@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from sliceagent_core.tape import (_h, TapeEntry, TapeRecorder, base_entry,  # noqa: E402
                                   compact_tape, compose_after, digest_entry,
                                   load_session_tape, patch_entry, render_tape_base,
-                                  tape_render, tape_seal_update, unified_patch)
+                                  tape_chars, tape_render, tape_seal_update, unified_patch)
 
 
 def _ws(tmp_path, body="def f():\n    return 1\n"):
@@ -566,3 +566,151 @@ def test_workspace_rebase_carries_tape():
     merged = rebase_session_for_workspace(cur, restored)
     assert merged.session_tape == cur.session_tape
     assert merged.tape_files == cur.tape_files
+
+
+def test_journal_salvage_skips_corrupt_complete_lines_midfile(tmp_path):
+    """M8 (counter-review, 2026-08-09): a corrupt COMPLETE line mid-file must not discard the
+    valid seals that follow it — the pre-salvage all-or-nothing replay dropped them (and the
+    finding/knowledge registries with them, so a restart re-froze duplicates). A genuinely torn
+    tail (last line, no newline) still ends the scan."""
+    from sliceagent_core.tape import journal_registries
+    j = str(tmp_path / "state" / "tape.jsonl")
+    s, tools = _ws(tmp_path, body="v = 1\n")
+    s.findings.append("salvage note")
+    _seal(s, tools, [("a.py", "v = 1\n")], journal_path=j, ask="first")
+    body2 = "v = 2\n"
+    (tmp_path / "a.py").write_text(body2, encoding="utf-8")
+    _seal(s, tools, [("a.py", body2)], n=2, journal_path=j, ask="second")
+    clean_tape, clean_files = load_session_tape(j)
+    clean_fh, clean_kh = journal_registries(j)
+    # inject BOTH corrupt shapes between the seals: unparseable JSON and parseable-but-invalid record
+    lines = open(j, encoding="utf-8").read().splitlines(keepends=True)
+    mid = len(lines) // 2
+    lines[mid:mid] = ['{"kind": "patch", "path": CORRUPT\n', '{"kind": "mystery"}\n']
+    open(j, "w", encoding="utf-8").write("".join(lines))
+    salvaged_tape, salvaged_files = load_session_tape(j)
+    assert tape_render(salvaged_tape) == tape_render(clean_tape), \
+        "a corrupt complete line must not cost the seals that follow it"
+    assert salvaged_files["a.py"]["content"] == clean_files["a.py"]["content"]
+    # registries salvage identically — a restart must not re-freeze what a corrupt line hides
+    assert journal_registries(j) == (clean_fh, clean_kh)
+    # a corrupt COMPLETE line even at the END is salvaged (nothing follows, nothing lost)…
+    with open(j, "a", encoding="utf-8") as f:
+        f.write("{CORRUPT-END\n")
+    t_end, _ = load_session_tape(j)
+    assert tape_render(t_end) == tape_render(clean_tape)
+    # …while a TORN tail (crash mid-write, no trailing newline) still ends the replay cleanly.
+    with open(j, "a", encoding="utf-8") as f:
+        f.write('{"kind": "patch", "pa')
+    t_torn, f_torn = load_session_tape(j)
+    assert tape_render(t_torn) == tape_render(clean_tape)
+    assert f_torn["a.py"]["content"] == clean_files["a.py"]["content"]
+
+
+def test_journal_append_fsyncs_once_per_seal_and_propagates_write_errors(tmp_path, monkeypatch):
+    """M8: one fsync per SEAL (not per entry) keeps the torn-tail window to a single in-flight
+    seal; a failing fsync (ENOSPC) propagates to the caller instead of vanishing."""
+    import pytest
+    from sliceagent_core.tape import tape_journal_append
+    calls = []
+    real_fsync = os.fsync
+
+    def _counting_fsync(fd):
+        calls.append(fd)
+        real_fsync(fd)
+    monkeypatch.setattr(os, "fsync", _counting_fsync)
+    j = str(tmp_path / "state" / "tape.jsonl")
+    tape_journal_append(j, [digest_entry("[turn t-1]\nask: x\n", "t-1"),
+                            digest_entry("[turn t-1]\nask: y\n", "t-1b")])
+    assert len(calls) == 1, f"one fsync per seal, not per entry: {calls}"
+
+    def _enospc(fd):
+        raise OSError("ENOSPC")
+    monkeypatch.setattr(os, "fsync", _enospc)
+    with pytest.raises(OSError, match="ENOSPC"):
+        tape_journal_append(j, [digest_entry("[turn t-2]\nask: z\n", "t-2")])
+
+
+def test_seal_surfaces_journal_error_in_return_and_log(tmp_path, monkeypatch, caplog):
+    """M8: the old `except Exception: pass` swallowed even ENOSPC/fsync failures — no failure key
+    in the return, empty stderr, empty logs. The seal now reports journal_error AND logs a
+    warning, while the live tape stays intact (durability failure never rolls back a seal)."""
+    import logging
+    s, tools = _ws(tmp_path)
+    j = str(tmp_path / "state" / "tape.jsonl")
+    info = _seal(s, tools, [], journal_path=j)
+    assert info["journal_error"] == "", info          # happy path: no key noise
+    blocker = tmp_path / "blocker"
+    blocker.write_text("x", encoding="utf-8")
+    info2 = _seal(s, tools, [], n=2, journal_path=str(blocker / "tape.jsonl"))
+    assert info2["journal_error"], info2              # unwritable path surfaces, no patching needed
+    assert info2["entries"] > 0
+
+    def _enospc(fd):
+        raise OSError("ENOSPC")
+    monkeypatch.setattr(os, "fsync", _enospc)         # the fsync INSIDE the append raises
+    with caplog.at_level(logging.WARNING, logger="sliceagent_core.tape"):
+        info3 = _seal(s, tools, [], n=3, journal_path=j)
+    assert info3["journal_error"].startswith("OSError") and "ENOSPC" in info3["journal_error"], info3
+    assert any("tape journal append failed" in r.getMessage() for r in caplog.records), \
+        "a torn journal must leave a log trace"
+    assert info3["entries"] > 0, "a durability failure must not roll back the live seal"
+
+
+def test_compact_tape_random_histories_never_orphan_patches_and_shrink():
+    """M8 companion — the O(n) fold-sizing rewrite (and the salvage/fsync work) shipped with NO
+    tests; the cited '400 random tapes byte-identical' check was not in the repo. Property-check
+    the compaction CONTRACT over random file histories: replay integrity (latest base + later
+    patches == registry content), no orphaned patch, determinism, and a real size cut."""
+    import random
+    rng = random.Random(20260809)
+    for trial in range(50):
+        paths = [f"f{i}.py" for i in range(rng.randint(1, 4))]
+        per_file = []
+        registry = {}
+        for path in paths:
+            hist = []
+            prev = None
+            for step in range(rng.randint(1, 5)):
+                body = f"# {path} v{step}\n" + "x\n" * rng.randint(0, 40)
+                hist.append(base_entry(path, body) if (prev is None or rng.random() < 0.3)
+                            else patch_entry(path, prev, body))
+                prev = body
+            per_file.append(hist)
+            registry[path] = {"hash": _h(prev), "content": prev}
+        tape = []
+        while any(per_file):                            # round-robin merge keeps per-file chronology
+            hist = rng.choice([h for h in per_file if h])
+            tape.append(hist.pop(0))
+        for i in range(rng.randint(0, 6)):              # digests sprinkled anywhere
+            tape.insert(rng.randint(0, len(tape)),
+                        digest_entry(f"[turn d{i}]\nask: {'y' * rng.randint(50, 400)}\n", f"d-{i}"))
+        before = list(tape)
+        chars_before = tape_chars(tape)
+        budget = rng.choice((600, 1500, 4000))
+        info = compact_tape(tape, registry, budget=budget)
+        # determinism: an identical copy compacts byte-identically (the twin run must not drift)
+        twin = list(before)
+        twin_registry = {p: dict(v) for p, v in registry.items()}
+        assert compact_tape(twin, twin_registry, budget=budget) == info
+        assert tape_render(twin) == tape_render(tape)
+        # compaction never grows the tape
+        assert tape_chars(tape) <= chars_before, (trial, budget)
+        if info["epoch_folds"]:
+            assert tape[0].kind == "epoch", trial
+            assert tape_chars(tape) < chars_before, "a fold that doesn't shrink must not happen"
+        # no orphaned patch: every patch has an earlier base for its path
+        for i, e in enumerate(tape):
+            if e.kind == "patch":
+                assert any(b.kind == "base" and b.path == e.path for b in tape[:i]), \
+                    (trial, e.path, [x.kind for x in tape])
+        # replay integrity: latest base + later patches still composes the registry content
+        for path, reg in registry.items():
+            content = None
+            for e in tape:
+                if e.kind == "base" and e.path == path:
+                    content = e.payload
+                elif e.kind == "patch" and e.path == path and content is not None:
+                    content = compose_after(e, content)
+            assert content is not None, (trial, path, "file lost every tape anchor")
+            assert content == reg["content"], (trial, path)

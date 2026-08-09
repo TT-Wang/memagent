@@ -29,8 +29,11 @@ from __future__ import annotations
 import difflib
 import hashlib
 import json
+import logging
 import os
 from dataclasses import dataclass
+
+log = logging.getLogger(__name__)
 
 
 def _h(text: str) -> str:
@@ -429,7 +432,9 @@ def tape_seal_update(s, tools, rows, *, session_id: str, artifact_id: str, task_
     ``digest_text`` is the sealed artifact's spine_digest — appended verbatim (one render, seal
     redaction inherited). Callers without one (bench harness) get an in-function render from
     REDACTED inputs. ``rows`` = TapeRecorder rows in execution order. Returns liveness:
-    {"entries", "drift", "rebased", "gc_removed", "epoch_folds"}.
+    {"entries", "drift", "rebased", "journal_error", "gc_removed", "epoch_folds"}
+    (``journal_error`` is "" on a clean journal append; a failure is logged AND reported here,
+    never silent — counter-review M8).
     """
     from .safety import redact_text
     from .spine import render_turn_digest
@@ -533,14 +538,22 @@ def tape_seal_update(s, tools, rows, *, session_id: str, artifact_id: str, task_
             _append(ke)
             k_hashes.add((task_id, ke.post_hash))
 
+    journal_error = ""
     if journal_path:
         try:
             tape_journal_append(journal_path, new_entries)
-        except Exception:  # noqa: BLE001 — durability is best-effort; the live tape is intact and
-            pass           # the next seal's honesty net re-anchors anything a replay would miss
+        except Exception as exc:  # noqa: BLE001 — durability is best-effort; the live tape is
+            # intact and the next seal's honesty net re-anchors anything a replay would miss.
+            # But SILENT is unacceptable (counter-review M8): a torn journal — ENOSPC, an
+            # fsync OSError raised inside tape_journal_append itself — must surface in the log
+            # AND in the seal's return, or the operator never learns the durable record has
+            # fallen behind the live one.
+            journal_error = f"{type(exc).__name__}: {exc}"
+            log.warning("tape journal append failed (%s): %s", journal_path, journal_error)
 
     compaction = compact_tape(tape, files, budget=budget)
-    return {"entries": len(tape), "drift": drift, "rebased": rebased, **compaction}
+    return {"entries": len(tape), "drift": drift, "rebased": rebased,
+            "journal_error": journal_error, **compaction}
 
 
 def reconcile_tape_with_digests(tape: list, digest_pairs: list,

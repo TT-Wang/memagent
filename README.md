@@ -87,19 +87,19 @@ Two questions decide whether reconstructing context every turn actually works: d
 
 ### 1. In-turn capability — Terminal-Bench 2.0 (public)
 
-A TB2.0 task is a single turn, so it's a clean test of raw within-turn ability. On the 39 tasks both
-agents completed cleanly (no environment failure or timeout on either side; the full 56-task ledger is
-`evals/tbench/comparison.csv`, with the earlier 32-task snapshot in `comparison.md`):
+A TB2.0 task is a single turn, so it's a clean test of raw within-turn ability. On the 27 tasks both
+agents completed cleanly — no environment failure or timeout on either side (the full 56-task ledger is
+`evals/tbench/comparison.csv`; `comparison.md` marks infrastructure failures as `ENV` — a re-run item
+per `compare.py`, not a verdict — and those tasks are excluded from this table):
 
 | metric | sliceagent | OpenAI Codex |
 |---|--:|--:|
-| **pass rate** | 17 / 39 (44%) | **22 / 39 (56%)** |
-| wins (exclusive) | 4 | 9 |
-| median steps / task | **10** | 28 |
+| **pass rate** | **16 / 27 (59%)** | 15 / 27 (56%) |
+| wins (exclusive) | 4 | 3 |
+| median steps / task | **9.5** | 26 |
 
-Codex holds a capability edge on this in-turn set — the honest read of the current snapshot — while
-sliceagent still uses ~2.8× fewer steps per task. Earlier draft tables (18/32) reflected a smaller
-mid-development run and were retired when the full ledger landed.
+The two agents are even on this in-turn set — the 4:3 exclusive-win split is well inside noise — while
+sliceagent uses ~2.7× fewer steps per task.
 
 ### 2. Multi-turn — ColBench (public: Meta SWEET-RL)
 

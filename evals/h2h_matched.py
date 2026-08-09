@@ -30,7 +30,7 @@ import time
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO, "src"))
 sys.path.insert(0, os.path.join(REPO, "evals"))
-from h2h_run import _UsageTap, load_scenario, run_sliceagent  # noqa: E402
+from h2h_run import load_scenario, run_sliceagent  # noqa: E402
 
 CODEX_BIN = os.environ.get("CODEX_BIN", "codex")
 CODEX_MODEL = os.environ.get("CODEX_MODEL", "gpt-5.5")

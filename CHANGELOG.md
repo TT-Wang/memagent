@@ -50,6 +50,42 @@ this project aims for [Semantic Versioning](https://semver.org/).
 - **The verify-command and world-model fixes are covered by regression tests**, and
   `scripts/run_tests.sh` now counts SKIP files separately from PASS instead of hiding them.
 
+### Fixed — counter-review verification round (2026-08-09)
+- **The dotenv redaction pass no longer corrupts source, and still masks the leak shapes.** The
+  `code_file` gate is now the whole dotenv shape — line-start, ALL-CAPS name, `=` immediately
+  after the name — with unquoted values anchored to end-of-line and masks applied by group
+  replacement (original spacing, `export ` prefixes, and trailing comments survive). The previous
+  first-character gate turned 17 of the repo's own parseable `.py` snapshots into SyntaxErrors
+  (`Secretary = "Ms. Smith"`, `TOKEN_TTL_SECONDS = 900`, `USER_RESERVE_TOKENS = 20_000` were all
+  masked) and masked the bare `b` of `SECRET = b"gamma"` while leaving the secret. JSON secret
+  fields are now redacted in `code_file` mode too (the pass was skipped entirely there), and bare
+  `PWD=…` (the working directory) is no longer masked in any pass. A repo-wide invariant test
+  asserts redacted package sources stay parseable, and the flipped assertion that endorsed the
+  regression is restored to the positive proposition and extended to the broken shapes.
+- **A workspace rebase no longer carries the previous workspace's OPEN FILES index.** The
+  turn-scoped locator snapshot rode `deepcopy` across `rebase_session_for_workspace` (segment
+  starts deliberately keep the turn ordinal), so the target workspace's first build rendered the
+  source workspace's file hashes. `_workspace_rebased_slice` now drops the snapshot, and the
+  cache key includes the workspace epoch as a second line of defense.
+- **Model-authored `verify` commands pass the catastrophic-command floor before the sandbox.**
+  `update_work` acceptance checks and completion-hook verification are shell semantics, not a
+  trusted tool name: they now classify through the same `catastrophic_reason` gate as
+  `run_command` — a refusal reports NO VERDICT (fix the check), never a failed-check demand to
+  re-edit good work.
+- **The monitor page injects its bearer token as a JSON string literal**, and the server rejects
+  non-loopback `Host` headers (DNS-rebinding defense). The raw-text replace also rewrote the JS
+  identifier, so ~52% of random tokens (leading digit or a `-`) produced an invalid assignment
+  that killed the page's whole `<script>`.
+- **A failed tape-journal append is no longer silent**: the seal logs a warning and returns a
+  `journal_error` key (ENOSPC/fsync failures included). New tests pin journal salvage of corrupt
+  mid-file lines, one-fsync-per-seal, and the compaction contract over random file histories.
+- **The TB2.0 README table now matches its own stated caliber.** The 39-task basis counted 7
+  `ENV`/timeout infrastructure rows as `0.0` (per `compare.py` they are re-run items, not
+  verdicts — 4 of them gifted the comparison exclusive wins). Per the text's own definition
+  (exclude environment failures AND timeouts on either side): **27 tasks, 16/27 vs 15/27,
+  exclusive wins 4:3**. `evals/colbench_final.py` and `evals/gap_detection.py` are versioned (the
+  blanket `evals/*` ignore still held them).
+
 ## [0.3.2] — 2026-08-02
 
 ### Added

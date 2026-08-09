@@ -599,20 +599,26 @@ def make_build_slice(state, tools, retriever, memory, task: str, session_id: str
         # re-render the edited file, invalidating the provider's prefix cache for everything after
         # it — the measured #1 same-turn break source (two instrumented diagnoses; test_seed.py x9).
         # The model's own edits are already visible in the trajectory (tool results), so the
-        # turn-START snapshot plus the trajectory is complete information. Cache key = turn ordinal,
-        # stored ON THE SLICE OBJECT (not the function): a new turn (seal/reset increments s.turns)
-        # naturally invalidates; nothing persists across turns. (The interim AGENT_FREEZE_OPEN_FILES
-        # full-body freeze was subsumed by this branch and retired 2026-08-05 — review note b.)
-        # Per-object storage, not a function-level (id(s), turns) dict: id() is REUSED once a
-        # transient slice (a subagent child) is freed, so a process-global dict could hand a later
-        # child the PREVIOUS child's rendered locator hashes, and any interleaved build of another
-        # slice cleared this session's snapshot (review M1). Each slice keeps its own turn-scoped
-        # snapshot, so children can never see each other's — or the parent's — frozen index.
+        # turn-START snapshot plus the trajectory is complete information. Cache key = (turn ordinal,
+        # workspace epoch), stored ON THE SLICE OBJECT (not the function): a new turn (seal/reset
+        # increments s.turns) naturally invalidates; nothing persists across turns. (The interim
+        # AGENT_FREEZE_OPEN_FILES full-body freeze was subsumed by this branch and retired
+        # 2026-08-05 — review note b.) Per-object storage, not a function-level (id(s), turns)
+        # dict: id() is REUSED once a transient slice (a subagent child) is freed, so a
+        # process-global dict could hand a later child the PREVIOUS child's rendered locator
+        # hashes, and any interleaved build of another slice cleared this session's snapshot
+        # (review M1). Each slice keeps its own turn-scoped snapshot, so children can never see
+        # each other's — or the parent's — frozen index. The epoch half of the key is the
+        # deepcopy guard (counter-review M1, 2026-08-09): per-object storage survives
+        # copy.deepcopy, and a workspace rebase deepcopies the slice WITHOUT bumping turns — the
+        # rebased slice would otherwise hit its old key and render the PREVIOUS workspace's file
+        # index (hashes included) on the target's first build. _workspace_rebased_slice also pops
+        # the attribute outright; the epoch key is the second line of defense for any other copy path.
         _frozen = getattr(s, "_frozen_locators", None)
         if _frozen is None:
             _frozen = {}
             s._frozen_locators = _frozen
-        _key = int(getattr(s, "turns", 0) or 0)
+        _key = (int(getattr(s, "turns", 0) or 0), current_epoch)
         if _key not in _frozen:
             _frozen.clear()            # keep exactly one turn's snapshot — no growth
             _frozen[_key] = render_file_locators(s, tools, selected_paths=graph_paths)

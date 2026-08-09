@@ -284,6 +284,14 @@ class SessionBinding:
 def _workspace_rebased_slice(source: Slice) -> Slice:
     """Carry language/task intent into a new workspace while dropping old physical-world claims."""
     state = deepcopy(source)
+    # The turn-scoped OPEN FILES locator snapshot is runtime-only state keyed by turn ordinal —
+    # but it is stored on the slice object, so the deepcopy carries it across the rebase, and
+    # begin_workspace_segment deliberately does NOT bump turns: workspace B's first build would
+    # hit the key and render workspace A's file index (hashes included) — the exact
+    # cross-workspace residency leak the resets below exist to prevent (counter-review M1).
+    # File residency belongs to the old root, so the frozen index does too: drop it and let the
+    # first target-workspace build re-render from the target's own disk.
+    state.__dict__.pop("_frozen_locators", None)
     # File residency, revisions, shell facts, action tallies, and observed findings belong to the old root.
     state.work.reset(read_budget=source.work.read_budget, read_ceiling=source.work.read_ceiling)
     state.findings = []

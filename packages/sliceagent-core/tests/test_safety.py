@@ -145,19 +145,23 @@ def redact_masks_authorization_bearer_header():
 
 @check
 def redact_code_file_keeps_larger_budget():
-    # code_file=True is the "keep more content" mode: it SKIPS the general ENV-assignment and
-    # JSON-field passes (so source-code constants/fixtures survive un-mangled) while
-    # still redacting true leaked credentials (prefix keys, JWTs, DB passwords, ...).
+    # code_file=True is the "keep more content" mode: it SKIPS the general ENV-assignment pass
+    # (so source-code constants/fixtures survive un-mangled) while still redacting true leaked
+    # credentials (prefix keys, JWTs, DB passwords, ...).
     # (Plan bullet phrases this as "MAX_TOKENS=4096"; safety.py expresses the same
     #  "keeps larger budget" intent via the code_file skip — see deviations.)
-    # Hardened 2026-08-08: a dotenv/config file IS code-file content, so line-start UPPERCASE
-    # assignments (the .env shape — AWS_ACCESS_KEY_ID=…, MYSQL_PWD=…) are redacted even in
-    # code_file mode; indented/lowercase source assignments still survive (the original budget intent).
-    src = 'API_KEY=mysupersecretvalue1234567890 ; live = "sk-abcdefghij1234567890XYZ"'
+    # POSITIVE PROPOSITION (restored 2026-08-09, counter-review H2): assignments that live INSIDE
+    # source code are NOT masked in code_file mode — module-level ALL-CAPS constants included.
+    # The first dotenv patch flipped this test to endorse masking and covered only indented/
+    # lowercase shapes — exactly the shapes it did NOT break. A failing assertion is a signal,
+    # not an obstacle, so the shapes below are the ones the regression actually corrupted.
+    # a dotenv assignment must END its line (a trailing # comment is tolerated) to be redacted
+    # in code_file mode — so the dotenv line and the prefix-secret fragment are separate lines.
+    src = 'API_KEY=mysupersecretvalue1234567890\n; live = "sk-abcdefghij1234567890XYZ"'
     default = redact_text(src, code_file=False)
     code = redact_text(src, code_file=True)
-    # default mode masks the ENV value; code_file mode now masks line-start UPPERCASE dotenv-style
-    # lines too (a persisted snapshot must not carry .env secrets verbatim).
+    # default mode masks the ENV value; the dotenv shape (line-start, ALL-CAPS, no space before
+    # `=`) is masked in code_file mode too — a persisted snapshot must not carry .env secrets.
     assert "mysupersecretvalue1234567890" not in default, default
     assert "mysupersecretvalue1234567890" not in code, code
     assert "API_KEY=" in code, code
@@ -167,6 +171,42 @@ def redact_code_file_keeps_larger_budget():
     assert 'password = "test-fixture"' in code2, code2
     assert 'api_token = "fixture"' in code2, code2
     assert "wJalrXUtnFEMI" not in code2, code2
+    # module-level ALL-CAPS SOURCE CONSTANTS survive: the dotenv gate requires `=` immediately
+    # after the name, so PEP8-spaced constants are source even when the name contains a secret
+    # word (these exact shapes became `NAME = ***` SyntaxErrors under the first patch).
+    constants = (
+        "TOKEN_TTL_SECONDS = 900",
+        "PASSWORD_LENGTH = 23",
+        "USER_RESERVE_TOKENS = 20_000",
+        'Secretary = "Ms. Smith"',
+        'AuthorName = "Tongtao Wang"',
+    )
+    for line in constants:
+        redacted = redact_text(line, code_file=True)
+        assert redacted == line, (line, redacted)
+    # a byte-valued constant keeps BOTH its syntax and its value (the old pass masked the bare
+    # `b` and emitted `SECRET=***"gamma"` — corrupted syntax, surviving secret).
+    byte_src = 'SECRET = b"gamma"'
+    assert redact_text(byte_src, code_file=True) == byte_src
+    # dotenv shapes still masked in code_file mode: `export` prefix, _PWD-suffixed names, and a
+    # trailing comment — name, prefix, spacing and comment all survive the mask.
+    dotenv = (
+        "export DB_PASSWORD=hunter2secretvalue\n"
+        "MYSQL_PWD=hunter2secretvalue\n"
+        "AWS_SESSION_TOKEN=FQoGZXIvYXdzEBYaDKJABCDEFG/wAAAABBBBBB  # sts\n"
+    )
+    out = redact_text(dotenv, code_file=True)
+    assert "hunter2secretvalue" not in out, out
+    assert "FQoGZXIvYXdz" not in out, out
+    assert "export DB_PASSWORD=" in out and "MYSQL_PWD=" in out, out
+    assert "# sts" in out, out
+    # JSON secret fields are redacted in code_file mode too (quoted replacement: syntax valid).
+    jsrc = '{"db": {"password": "hunter2secretvalue"}, "ok": true}'
+    jout = redact_text(jsrc, code_file=True)
+    assert "hunter2secretvalue" not in jout and '"password": "' in jout, jout
+    # PWD boundary (general pass): the session's working directory is not a secret.
+    assert redact_text("PWD=/Users/dev/proj") == "PWD=/Users/dev/proj"
+    assert "hunter2" not in redact_text("MYSQL_PWD=hunter2")
     # both modes still strip a real prefix secret.
     assert "sk-abcdefghij1234567890XYZ" not in code, code
     assert "sk-abcdefghij1234567890XYZ" not in default, default
@@ -218,6 +258,31 @@ def wrap_untrusted_empty_returns_empty_string():
     assert wrap_untrusted("") == ""
     assert wrap_untrusted("", kind="code") == ""
     assert wrap_untrusted("", kind="skill") == ""
+
+
+@check
+def redact_code_file_never_breaks_repo_source_syntax():
+    # Counter-review H2 (2026-08-09): the first dotenv pass turned 17 of the repo's own parseable
+    # .py snapshots into SyntaxErrors, and every gate stayed green because no test asserted the
+    # invariant. Pin it: redacting any shippable .py in code_file mode must keep it parseable.
+    import ast
+    here = os.path.dirname(os.path.abspath(__file__))
+    roots = (os.path.join(here, "..", "src"),
+             os.path.join(here, "..", "..", "sliceagent-cli", "src"))
+    checked = 0
+    for root in roots:
+        for dirpath, _dirs, files in os.walk(root):
+            for fn in files:
+                if not fn.endswith(".py"):
+                    continue
+                body = open(os.path.join(dirpath, fn), encoding="utf-8").read()
+                try:
+                    ast.parse(body)
+                except SyntaxError:
+                    continue            # only files that parse pre-redaction can regress
+                ast.parse(redact_text(body, code_file=True))   # SyntaxError here = regression
+                checked += 1
+    assert checked > 100, checked       # guard against a silently-empty walk
 
 
 def main():

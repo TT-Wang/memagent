@@ -251,6 +251,39 @@ def verify_naming_a_missing_program_never_runs_and_never_blames_the_work():
 
 
 @check
+def verify_command_passes_the_catastrophic_floor_before_the_sandbox():
+    """update_work acceptance checks are model-authored shell: they pass the same catastrophic
+    gate as run_command BEFORE reaching the sandbox (counter-review M2 — H1 welded the front
+    door while this side door executed any command body unchecked)."""
+    from sliceagent.execution import ToolStatus
+    from sliceagent.oracle import CommandOracle
+    from sliceagent.tools import LocalToolHost
+    catastrophic = (
+        "rm -rf $'\\x2f'",
+        "rm -rf ${ROOT:-/}",
+        'rm -rf "$HOME/.."',
+        "cd / && rm -rf *",
+        "f(){ f|f& };f",
+    )
+    for command in catastrophic:
+        class _ExplodingSandbox:
+            def run(self, *a, **k):
+                raise AssertionError(f"a catastrophic verify reached the sandbox: {command}")
+        result = CommandOracle(command, sandbox=_ExplodingSandbox()).verify()
+        assert getattr(result, "status", None) is ToolStatus.INDETERMINATE, (command, result)
+        assert "catastrophic" in result.output, (command, result.output)
+        # INDETERMINATE, not FAILED: no verdict on the work — the no-verdict path points at the CHECK.
+        host_result = LocalToolHost()._run_verify_command(command)
+        assert getattr(host_result, "status", None) is ToolStatus.INDETERMINATE, command
+        assert "catastrophic" in host_result.output, command
+    # benign controls still reach the sandbox: a green check stays green, a red one stays a verdict.
+    ok = CommandOracle(f"{sys.executable} -c \"pass\"").verify()
+    assert ok.status is ToolStatus.SUCCEEDED, ok
+    red = CommandOracle(f"{sys.executable} -c \"import sys; sys.exit(1)\"").verify()
+    assert red.status is ToolStatus.FAILED, red
+
+
+@check
 def verify_deadline_is_the_shell_ceiling_and_is_overridable():
     import os
     from sliceagent.oracle import CommandOracle, default_verify_timeout

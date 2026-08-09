@@ -761,6 +761,46 @@ def logical_turn_can_span_bounded_distinct_workspace_edges_without_synthetic_mes
 
 
 @check
+def workspace_rebase_drops_frozen_open_files_index():
+    # Counter-review M1 (2026-08-09): the per-slice locator snapshot rides copy.deepcopy, and a
+    # workspace rebase deepcopies the slice WITHOUT bumping turns — workspace B's first build hit
+    # the old cache key and rendered workspace A's OPEN FILES index (A's content hashes) on B's
+    # first turn. The fix pops the attribute in _workspace_rebased_slice and adds the workspace
+    # epoch to the cache key for every other copy path.
+    from sliceagent.seed import make_build_slice
+    wd_a = tempfile.mkdtemp(prefix="ws-rebase-a-")
+    wd_b = tempfile.mkdtemp(prefix="ws-rebase-b-")
+    a_path = os.path.join(wd_a, "secret_a.py")
+    b_path = os.path.join(wd_b, "b_only.py")
+    open(a_path, "w", encoding="utf-8").write("ALPHA = 1\n")
+    open(b_path, "w", encoding="utf-8").write("BETA = 2\n")
+    current = Session(NullMemory(), "ws-rebase-session")
+    current.new_topic("work in workspace A")
+    s = current.active()
+    s.active_files.append(a_path)
+    build_a = make_build_slice(current, LocalToolHost(root=wd_a), None, NullMemory(),
+                               "work in workspace A")
+    user_a = build_a()[1]["content"]
+    assert "secret_a.py" in user_a
+    frozen = getattr(s, "_frozen_locators", None)
+    assert frozen, "the build must populate the turn-scoped locator snapshot"
+    merged = rebase_session_for_workspace(current, Session(NullMemory(), "ws-rebase-session"))
+    rebased = merged.active()
+    assert merged.workspace_epoch == 1 and rebased.turns == s.turns
+    assert getattr(rebased, "_frozen_locators", None) is None, \
+        "the frozen OPEN FILES index rode the rebase deepcopy into workspace B"
+    assert not rebased.active_files, "A's file residency must stay with the old root"
+    # defense in depth: even if a snapshot leaks through some OTHER copy path, the epoch half of
+    # the cache key forces a re-render under the new workspace (turns deliberately unchanged).
+    rebased._frozen_locators = dict(frozen)
+    rebased.active_files.append(b_path)
+    build_b = make_build_slice(merged, LocalToolHost(root=wd_b), None, NullMemory(),
+                               "work in workspace A")
+    user_b = build_b()[1]["content"]
+    assert "b_only.py" in user_b and "secret_a.py" not in user_b, user_b
+
+
+@check
 def durable_logical_ids_do_not_collide_when_a_task_is_resumed_in_a_new_app_session():
     from sliceagent.taskstate import slice_to_task_state, task_state_to_slice
 

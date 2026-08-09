@@ -165,6 +165,10 @@ def manager_failure_propagates_and_never_claims_success():
         prefix=prefix, distribution=_Dist(), which=lambda _: "/bin/uv",
         runner=lambda *a, **k: SimpleNamespace(returncode=7),
         out=messages.append, os_name="posix", neutral_cwd="/neutral",
+        # The test's subject is manager-rc propagation, not version resolution — inject the seam
+        # or the "hermetic" test secretly calls PyPI and fails closed (rc==1, misleadingly) on a
+        # network outage instead of exercising this path (counter-review M10 note, 2026-08-09).
+        resolve_latest=lambda: "0.3.2",
     )
     assert rc == 7
     assert any("failed" in line.lower() for line in messages)

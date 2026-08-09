@@ -8,6 +8,7 @@ import os
 from dataclasses import dataclass
 
 from sliceagent_core.execution import ToolStatus
+from .safeguards import catastrophic_reason
 from .sandbox import SANDBOX_TIMEOUT, LocalSandbox
 
 
@@ -64,6 +65,19 @@ class CommandOracle:
         # Verification shares the same owned process-group lifecycle as command tools. A timeout is
         # still conservatively indeterminate: ordinary descendants are reaped, yet a deliberately
         # detached process cannot be disproved.
+        # CATASTROPHE GATE (counter-review M2): a verify command is shell SEMANTICS, not a trusted
+        # tool name — classify the command body through the same catastrophic floor every shell
+        # tool passes at preflight (H1), BEFORE it reaches the sandbox. update_work acceptance
+        # checks and completion-hook verify commands are model-authored shell: they used to skip
+        # the gate entirely, so H1 welded the front door while this side door stayed open.
+        # INDETERMINATE, not FAILED: the check never ran, so there is no verdict on the work —
+        # and the no-verdict path tells the model to fix the CHECK, never to re-edit good work.
+        reason = catastrophic_reason("run_command", {"command": self.cmd})
+        if reason is not None:
+            return OracleResult(
+                ToolStatus.INDETERMINATE,
+                f"refused by the catastrophic-command safeguard ({reason}); the check never ran — "
+                "give the item a non-destructive verify command")
         # A command whose program is not on PATH answers 127, which is indistinguishable from a real
         # red check — the completion gate would then demand code fixes forever because the CHECKER was
         # never installed (an unbounded fix loop on correct work). Same guard as the update_work
