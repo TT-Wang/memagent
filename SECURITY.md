@@ -28,10 +28,16 @@ your operating-system user can access. The relevant containment and safety mecha
   `/` or the user's home. It is not a general permission system, confirmation mode, shell allowlist, or
   substitute for isolation; ordinary requested work runs without a host policy prompt.
 - **MCP** (`mcp_security.py`) — configured stdio servers are RCE by design; each entry is **screened before
-  spawn** and refused if it's a shell interpreter performing network egress or writing OS-persistence
-  surfaces (SSH keys / PAM / sudoers / cron / shell rc).
+  spawn**, including its resolved executable and configured environment, and refused if it's a shell
+  interpreter performing network egress or writing OS-persistence surfaces (SSH keys / PAM / sudoers /
+  cron / shell rc). Remote tool prose is not admitted into model-facing schemas.
 - **Untrusted content** (`safety.py`) — retrieved memory, skills, related code, and subdirectory hints are
-  injection-scanned and secret-redacted before they enter the model's context.
+  injection-scanned and secret-redacted before they enter the model's context. Root convention files are
+  realpath-confined and structurally fenced as untrusted repository data.
+- **Repository trust** (`config.py`, `cli.py`) — project files may set data-only preferences, but executable,
+  credential-destination, extension, and sandbox policy remains user-owned. To intentionally enable those
+  project settings for one process, set `AGENT_TRUST_PROJECT=1` in the parent shell. Repository `.env` files
+  and in-repository marker files cannot mint this approval.
 
 ## Hardening tips
 
@@ -41,3 +47,5 @@ your operating-system user can access. The relevant containment and safety mecha
   expose to model-authored commands.
 - Keep secrets in `.env` (gitignored) or the config file (written `0600`) — never commit them.
 - Review MCP server entries before adding them to your config.
+- Set `AGENT_TRUST_PROJECT=1` only after reviewing the repository's configuration, agents, skills, and
+  plugins; the approval enables host-level extension surfaces for that process.

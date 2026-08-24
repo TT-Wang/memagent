@@ -216,15 +216,15 @@ def _parse_agent_md(path: str) -> AgentSpec | None:
     tools_raw = meta.get("tools")
     # #58: accept both the scalar list `tools: a, b` AND inline YAML `tools: [a, b]` — strip brackets/quotes
     # before splitting so a bracketed value doesn't become tool names like "[a".
-    # A PRESENT-but-blank `tools:` means restrict to ZERO tools (read-only, matching `tools: []`); only an
-    # ABSENT key grants the full writable surface (None).
+    # A PRESENT-but-blank `tools:` and an ABSENT key both restrict external definitions to ZERO tools.
+    # Full inheritance is reserved for the in-tree built-in general/debugger definitions.
     if "tools" in meta and not str(tools_raw or "").strip():
         tools = ()
     elif tools_raw:
         tools = tuple(t for t in tools_raw.replace(",", " ").replace("[", " ").replace("]", " ")
                       .replace("'", " ").replace('"', " ").split() if t)
     else:
-        tools = None
+        tools = ()
     reasoning = (meta.get("reasoning") or "").lower() or None
     return AgentSpec(name=name, description=meta.get("description", ""),
                      tools=tools, reasoning=reasoning, system_prompt=body.strip())

@@ -25,11 +25,11 @@ from sliceagent_core.access import AllAccess
 from .registry import ToolEntry
 
 
-def _default_dirs(root: str | None = None) -> list[str]:
-    return [
-        os.path.join(os.path.realpath(root or os.getcwd()), ".sliceagent", "plugins"),
-        os.path.join(os.path.expanduser("~"), ".sliceagent", "plugins"),
-    ]
+def _default_dirs(root: str | None = None, *, trust_project: bool = False) -> list[str]:
+    dirs = [os.path.join(os.path.expanduser("~"), ".sliceagent", "plugins")]
+    if trust_project:
+        dirs.insert(0, os.path.join(os.path.realpath(root or os.getcwd()), ".sliceagent", "plugins"))
+    return dirs
 
 
 class _PluginRegistrar:
@@ -213,10 +213,10 @@ def _load_one(pdir: str, registry, skills, *, root, config, on_log) -> PluginCon
 
 
 def load_plugins(registry, skills, dirs: list[str] | None = None, *, root: str, config,
-                 on_log=lambda m: None) -> dict:
+                 trust_project: bool = False, on_log=lambda m: None) -> dict:
     """Discover + load plugins from (provided dirs + defaults). Each contributes to the shared
     registry/skills and returns aggregated MCP server configuration."""
-    search = list(dict.fromkeys((dirs or []) + _default_dirs(root)))
+    search = list(dict.fromkeys((dirs or []) + _default_dirs(root, trust_project=trust_project)))
     mcp_servers: dict = {}
     def _ls(r):
         try:

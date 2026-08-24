@@ -66,10 +66,10 @@ REGISTRY: list[EnvVar] = [
     EnvVar("LLM_TEMPERATURE", "agent", "Sampling temperature override; unset keeps the provider "
            "default. Deliberately env-only: eval/replay harnesses pin 0 for decision-equivalence "
            "measurements.", ""),
-    EnvVar("AGENT_PROJECT_SKILLS", "agent", "Trust repo-local skills (the workspace's "
-           ".sliceagent/skills) everywhere. Off by default: repo-controlled instructions never load "
-           "by mere presence — a workspace opts in with a .sliceagent/skills-trust marker file "
-           "instead (Pi's project-trust gate).", ""),
+    EnvVar("AGENT_TRUST_PROJECT", "agent", "Explicitly trust executable/security-sensitive project "
+           "configuration and project extensions for this process. Repository .env files cannot set it.", ""),
+    EnvVar("AGENT_PROJECT_SKILLS", "agent", "Trust repo-local skills for this process only. "
+           "Repository .env files and in-repository marker files cannot set or replace this approval.", ""),
     EnvVar("SLICEAGENT_SYNC_OUTPUT", "ui", "Force synchronized-output frames (ESC[?2026) on|off; "
            "auto-detects iTerm2/kitty/WezTerm/foot/vscode/Windows Terminal otherwise.", ""),
     EnvVar("AGENT_TOPIC_TOOLS", "agent", "Expose model-callable topic switching (off by default; host "

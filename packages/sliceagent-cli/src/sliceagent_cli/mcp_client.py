@@ -82,16 +82,57 @@ def _mcp_handler(server, tool, page_out):
     return _handle
 
 
+_SAFE_SCHEMA_KEYS = frozenset({
+    "type", "properties", "required", "items", "enum", "const", "default", "format",
+    "oneOf", "anyOf", "allOf", "not", "additionalProperties", "minItems", "maxItems",
+    "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "minLength", "maxLength",
+    "pattern", "minProperties", "maxProperties",
+})
+_SAFE_PARAMETER_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]{0,127}$")
+
+
+def _safe_mcp_schema(value, *, depth: int = 0, property_map: bool = False):
+    """Rebuild remote JSON Schema from structural fields only; discard instructional prose."""
+    if depth > 12:
+        raise ValueError("MCP tool schema nesting exceeds 12 levels")
+    if isinstance(value, dict):
+        out = {}
+        for raw_key, raw_value in value.items():
+            if not isinstance(raw_key, str):
+                raise ValueError("MCP tool schema keys must be strings")
+            if property_map:
+                if not _SAFE_PARAMETER_NAME.fullmatch(raw_key) or first_threat_message(raw_key) is not None:
+                    raise ValueError("unsafe MCP parameter name")
+                out[raw_key] = _safe_mcp_schema(raw_value, depth=depth + 1)
+            elif raw_key in _SAFE_SCHEMA_KEYS:
+                out[raw_key] = _safe_mcp_schema(
+                    raw_value, depth=depth + 1, property_map=(raw_key == "properties"),
+                )
+        return out
+    if isinstance(value, list):
+        if len(value) > 256:
+            raise ValueError("MCP tool schema list exceeds 256 items")
+        return [_safe_mcp_schema(item, depth=depth + 1) for item in value]
+    if isinstance(value, str):
+        if len(value) > 4096 or first_threat_message(value) is not None:
+            raise ValueError("unsafe MCP tool schema string")
+        return value
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    raise ValueError("unsupported MCP tool schema value")
+
+
 def _function_schema(qname: str, tool) -> dict:
     params = getattr(tool, "inputSchema", None)
     if not isinstance(params, dict) or params.get("type") != "object":
         params = {"type": "object", "properties": {}}
-    desc = (getattr(tool, "description", None) or f"MCP tool {tool.name}").strip()
-    # The remote server controls its own description, and it is injected into the model's trusted tool
-    # schema verbatim — an injection channel the wrap-on-read seam (tool OUTPUT) does not cover. Threat-
-    # scan it like any other untrusted MCP content; a flagged description degrades to a neutral one.
-    if first_threat_message(desc) is not None:
-        desc = f"MCP tool {tool.name}"
+    params = _safe_mcp_schema(params)
+    raw_desc = getattr(tool, "description", None)
+    if raw_desc is not None and not isinstance(raw_desc, str):
+        raise ValueError("MCP tool description must be a string")
+    # Remote prose has no structural role in argument encoding.  Do not place it in the privileged tool
+    # schema at all: denylist scanning cannot establish that arbitrary natural language is non-instructional.
+    desc = f"MCP tool {qname}"
     return {"type": "function", "function": {"name": qname, "description": desc[:1024], "parameters": params}}
 
 

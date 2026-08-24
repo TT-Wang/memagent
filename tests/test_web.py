@@ -175,10 +175,10 @@ def a_slow_trickle_server_hits_the_total_deadline_not_the_per_read_timeout():
 
     import httpx
     import importlib
-    real_stream = httpx.stream
+    real_stream = httpx.Client.stream
     prior_get = web._http_get         # earlier checks monkeypatch web._http_get without restoring
     importlib.reload(web)             # restore the REAL _http_get (the deadline logic lives inside it)
-    httpx.stream = lambda *a, **k: _FakeStream()
+    httpx.Client.stream = lambda *a, **k: _FakeStream()
     try:
         start = time.monotonic()
         try:
@@ -188,7 +188,7 @@ def a_slow_trickle_server_hits_the_total_deadline_not_the_per_read_timeout():
             assert "total deadline exceeded" in str(e), str(e)
         assert time.monotonic() - start < 5, "the trickle outlived the total deadline"
     finally:
-        httpx.stream = real_stream
+        httpx.Client.stream = real_stream
         web._http_get = prior_get
         os.environ.pop("AGENT_WEB_DEADLINE", None)
 
@@ -226,14 +226,14 @@ def a_redirect_chain_cannot_reset_the_total_deadline_per_hop():
         def __exit__(self, *a):
             return False
 
-    real_stream = httpx.stream
+    real_stream = httpx.Client.stream
     prior_get = web._http_get         # earlier checks monkeypatch web._http_get without restoring
     importlib.reload(web)             # restore the REAL _http_get (the deadline logic lives inside it)
     def slow_connect(*a, **k):
-        hops.append(a[2] if len(a) > 2 else k.get("timeout"))
+        hops.append(k.get("timeout"))
         time.sleep(1.0)               # a slow connect — 7 hops would burn 7s without the clamp
         return _FakeStream()
-    httpx.stream = slow_connect
+    httpx.Client.stream = slow_connect
     try:
         start = time.monotonic()
         try:
@@ -247,7 +247,7 @@ def a_redirect_chain_cannot_reset_the_total_deadline_per_hop():
         assert all(t is not None and t <= 2.0 for t in hops), \
             f"per-hop timeouts were not clamped to the remaining budget: {hops}"
     finally:
-        httpx.stream = real_stream
+        httpx.Client.stream = real_stream
         web._http_get = prior_get
         os.environ.pop("AGENT_WEB_DEADLINE", None)
 

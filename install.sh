@@ -30,15 +30,31 @@ fi
 
 # 1. ensure uv
 if ! command -v uv >/dev/null 2>&1; then
-  info "Installing uv (https://docs.astral.sh/uv) …"
+  UV_VERSION="0.11.26"
+  UV_SHA256="92fa9085d24c214bb4445cc1da8c15ca9cca8cffb34726240fa08c5302e94ccc"
+  UV_URL="https://astral.sh/uv/${UV_VERSION}/install.sh"
+  UV_TMP="$(mktemp -d)"
+  trap 'rm -rf "$UV_TMP"' EXIT HUP INT TERM
+  info "Installing uv ${UV_VERSION} (SHA256 verified) …"
   if command -v curl >/dev/null 2>&1; then
-    curl -LsSf https://astral.sh/uv/install.sh | sh
+    curl -fsSL "$UV_URL" -o "$UV_TMP/install.sh"
   elif command -v wget >/dev/null 2>&1; then
-    wget -qO- https://astral.sh/uv/install.sh | sh
+    wget -qO "$UV_TMP/install.sh" "$UV_URL"
   else
     err "Need curl or wget to bootstrap uv. Install uv manually, then re-run."
     exit 1
   fi
+  if command -v shasum >/dev/null 2>&1; then UV_ACTUAL="$(shasum -a 256 "$UV_TMP/install.sh")"
+  elif command -v sha256sum >/dev/null 2>&1; then UV_ACTUAL="$(sha256sum "$UV_TMP/install.sh")"
+  else UV_ACTUAL=""; fi
+  UV_ACTUAL="${UV_ACTUAL%% *}"
+  if [ "$UV_ACTUAL" != "$UV_SHA256" ]; then
+    err "uv installer SHA256 mismatch (got ${UV_ACTUAL:-unverifiable}); refusing to execute it."
+    exit 1
+  fi
+  sh "$UV_TMP/install.sh"
+  rm -rf "$UV_TMP"
+  trap - EXIT HUP INT TERM
   # uv lands in ~/.local/bin (or ~/.cargo/bin); make it visible for THIS shell
   export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 fi

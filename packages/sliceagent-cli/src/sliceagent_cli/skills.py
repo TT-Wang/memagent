@@ -16,6 +16,7 @@ import shlex
 from dataclasses import dataclass
 
 from sliceagent_core.execution import ToolEffect, ToolStatus
+from sliceagent_core.safety import first_threat_message, wrap_untrusted
 from .registry import ToolEntry, ToolText
 from sliceagent_core.text_utils import one_line
 
@@ -120,7 +121,7 @@ class SkillManager:
         if inside:
             self._on_log(
                 f"project skills skipped (untrusted workspace): {root} — trust it with "
-                ".sliceagent/skills-trust or AGENT_PROJECT_SKILLS=1")
+                "AGENT_TRUST_PROJECT=1 or AGENT_PROJECT_SKILLS=1 in the parent process")
         return not inside
 
     def discover(self) -> "SkillManager":
@@ -158,10 +159,16 @@ class SkillManager:
         if len(name) > SKILL_NAME_MAX:
             self._on_log(f"skill skipped (name > {SKILL_NAME_MAX} chars): {path}")
             return
+        if not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,63}", name):
+            self._on_log(f"skill skipped (unsafe name): {path}")
+            return
         if len(desc) > SKILL_DESCRIPTION_MAX:
             desc = desc[:SKILL_DESCRIPTION_MAX - 1] + "…"
         invocable = (meta.get("disable-model-invocation") or "").strip().lower() not in (
             "1", "true", "yes", "on")
+        if first_threat_message(f"{desc}\n{when}", scope="strict") is not None:
+            invocable = False
+            self._on_log(f"skill excluded from model catalog (unsafe metadata): {path}")
         self._skills.setdefault(name, Skill(name, desc, body.strip(), path, provenance=prov,
                                             root=root, when_to_use=when,
                                             completion_contract=completion_contract,
@@ -221,7 +228,10 @@ def make_skill_tool(manager: SkillManager) -> ToolEntry | None:
         base = f"- {n}: {one_line(d, 140)}"
         return base + (f" (when: {one_line(w, 80)})" if w and w != d else "")
 
-    listing = "\n".join(_line(n, d) for n, d in cat)
+    listing = wrap_untrusted(
+        "\n".join(_line(n, d) for n, d in cat),
+        kind="skill-catalog", verify_against_open_files=False,
+    )
     desc = (
         "Load a SKILL: a reusable procedure whose detailed instructions are added to your "
         "working context and PERSIST for the rest of the task. Call it BEFORE starting work "

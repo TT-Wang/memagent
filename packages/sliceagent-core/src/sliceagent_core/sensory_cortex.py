@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -357,13 +358,15 @@ def workspace_facts(cwd: str) -> str:
 
 def project_conventions(cwd: str, *, max_chars: int = 4000) -> str:
     """The project's agent-convention file CONTENT (first present of AGENTS.md / CLAUDE.md / .cursorrules)
-    — an ALWAYS-IN-FORCE contract that must outlive the bounded slice's eviction. Injection-neutralized
-    (reuses subdir_hints._neutralize_injection) and capped. '' when none / outside a project.
+    — repository-authored reference data that must outlive the bounded slice's eviction. The caller places
+    it in a structural untrusted-data fence; this loader confines real paths, neutralizes known injection
+    phrases, and caps content. '' when none / outside a project.
 
     Deterministic per cwd, so it rides in the cacheable SYSTEM tier (100% prompt-cache after turn 1) and
     CANNOT be evicted/compacted — conventions persist across a long session at ~0 marginal cost, replacing
     the uncached, evictable manual re-read of AGENTS.md. Bounded to ONE file ≤ max_chars (smaller than a
     transcript agent's unbounded merged context). Treat as DATA: the live conversation overrides on conflict."""
+    from .safety import first_threat_message
     from .subdir_hints import _neutralize_injection
     resolved = _resolve_cwd(cwd)
     if resolved is None:
@@ -372,9 +375,36 @@ def project_conventions(cwd: str, *, max_chars: int = 4000) -> str:
     if root is None:
         return ""
     for name in _CONTEXT_FILES:
-        text = _read_small(root / name)
+        candidate = root / name
+        text = ""
+        fd = None
+        try:
+            resolved_target = candidate.resolve(strict=True)
+            resolved_root = root.resolve(strict=True)
+            resolved_target.relative_to(resolved_root)
+            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            fd = os.open(candidate, flags)
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_size > 256_000:
+                os.close(fd); fd = None
+                continue
+            with os.fdopen(fd, encoding="utf-8", errors="replace") as stream:
+                fd = None
+                text = stream.read(256_001)
+            if len(text) > 256_000:
+                text = ""
+        except (OSError, RuntimeError, ValueError):
+            text = ""
+        finally:
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
         if text.strip():
             body = _neutralize_injection(text).strip()
+            if first_threat_message(body, scope="context") is not None:
+                body = "[content withheld: repository convention file matched a prompt-injection pattern]"
             if len(body) > max_chars:
                 body = body[:max_chars] + "\n[...truncated]"
             return f"{name}:\n{body}"

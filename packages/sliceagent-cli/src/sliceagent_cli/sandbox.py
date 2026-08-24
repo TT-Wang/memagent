@@ -52,6 +52,10 @@ SANDBOX_TIMEOUT = -124
 SANDBOX_ADOPTED = -125
 
 
+class _OutputLimitExceeded(RuntimeError):
+    pass
+
+
 @runtime_checkable
 class Sandbox(Protocol):
     """Execute a shell command, return (exit_code, combined_output)."""
@@ -172,6 +176,13 @@ class LocalSandbox(BaseSandbox):
         deadline = _time.monotonic() + max(0.0, timeout)
         next_beat = _time.monotonic() + 1.0
         while True:
+            if size_probe is not None:
+                try:
+                    current_size = size_probe()
+                except OSError:
+                    current_size = 0
+                if current_size > _OUTPUT_CAP:
+                    raise _OutputLimitExceeded
             rc = process.poll()
             if rc is not None:
                 return
@@ -219,6 +230,15 @@ class LocalSandbox(BaseSandbox):
             self._wait_or_cancel(process, timeout,
                                  size_probe=lambda: os.path.getsize(log_path))
             return process.returncode, self._read_log_fh(log_fh)
+        except _OutputLimitExceeded:
+            self._stop_and_reap(process)
+            try:
+                log_fh.flush()
+                os.truncate(log_path, _OUTPUT_CAP)
+            except OSError:
+                pass
+            partial = self._read_log_fh(log_fh).strip()
+            return 1, (f"Command stopped after output exceeded {_OUTPUT_CAP} bytes.\n" + partial).strip()
         except subprocess.TimeoutExpired:
             if on_timeout is not None:
                 # The deadline does not have to be terminal (Kimi Code's autoBackgroundOnTimeout):
@@ -312,14 +332,49 @@ class DockerSandbox(BaseSandbox):
         # CLI; the daemon-side container keeps running. With a name we can `docker kill` it (and --rm then
         # removes it), instead of leaking an orphan container per timeout.
         name = f"sliceagent-{uuid.uuid4().hex[:12]}"
+        log_fd, log_path = tempfile.mkstemp(prefix=".sliceagent-docker-", suffix=".log")
+        log_fh = os.fdopen(log_fd, "w+", encoding="utf-8", errors="replace")
+        process = None
         try:
-            r = subprocess.run(self.docker_args(command, cwd=cwd, name=name),
-                               capture_output=True, text=True, timeout=timeout)
+            import time as _time
+            process = subprocess.Popen(
+                self.docker_args(command, cwd=cwd, name=name),
+                stdin=subprocess.DEVNULL, stdout=log_fh, stderr=subprocess.STDOUT, text=True,
+            )
+            deadline = _time.monotonic() + max(0.0, timeout)
+            while True:
+                try:
+                    size = os.path.getsize(log_path)
+                except OSError:
+                    size = 0
+                if size > _OUTPUT_CAP:
+                    try:
+                        subprocess.run([self.docker, "kill", name], capture_output=True, timeout=10)
+                    except Exception:
+                        pass
+                    process.kill()
+                    process.wait(timeout=2)
+                    log_fh.flush()
+                    os.truncate(log_path, _OUTPUT_CAP)
+                    return 1, (f"Command stopped after output exceeded {_OUTPUT_CAP} bytes.\n"
+                               + LocalSandbox._read_log_fh(log_fh)).strip()
+                code = process.poll()
+                if code is not None:
+                    return code, LocalSandbox._read_log_fh(log_fh)
+                if _time.monotonic() >= deadline:
+                    raise subprocess.TimeoutExpired(process.args, timeout)
+                _time.sleep(0.05)
         except subprocess.TimeoutExpired:
             try:
                 subprocess.run([self.docker, "kill", name], capture_output=True, timeout=10)
             except Exception:  # noqa: BLE001 — best-effort reap; never mask the timeout result
                 pass
+            if process is not None and process.poll() is None:
+                process.kill()
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    pass
             return SANDBOX_TIMEOUT, f"Command timed out after {timeout:g}s; container stop was requested"
         except KeyboardInterrupt:
             # Interrupting the local docker CLI does not prove the daemon-side container stopped.
@@ -327,10 +382,20 @@ class DockerSandbox(BaseSandbox):
                 subprocess.run([self.docker, "kill", name], capture_output=True, timeout=10)
             except Exception:  # noqa: BLE001 — preserve Ctrl-C while still making a bounded cleanup attempt
                 pass
+            if process is not None and process.poll() is None:
+                process.kill()
             raise
         except OSError as e:
             return 127, f"Could not run docker: {e}"
-        return r.returncode, (r.stdout or "") + (r.stderr or "")
+        finally:
+            try:
+                log_fh.close()
+            except Exception:
+                pass
+            try:
+                os.unlink(log_path)
+            except OSError:
+                pass
 
 
 def make_sandbox(backend: str = "local", *, image: str = "python:3.12-slim",

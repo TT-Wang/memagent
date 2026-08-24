@@ -19,6 +19,7 @@ from __future__ import annotations
 import os
 import subprocess
 import tempfile
+import threading
 import time
 
 from sliceagent_core import cancel_scope
@@ -26,13 +27,14 @@ from sliceagent_core.platform_compat import (ProcessGroupTerminationError, captu
                               popen_group_kwargs, process_group_alive, sh as _sh,
                               terminate_process_group)
 
-from .sandbox import _scrub_env
+from .sandbox import _OUTPUT_CAP, _scrub_env
 
 _TAIL_CHARS = 4000  # cap a tail read so a chatty process can't flood the slice
 
 
 class _Proc:
-    __slots__ = ("handle", "cmd", "popen", "log_path", "log_fh", "pgid", "group_extinct")
+    __slots__ = ("handle", "cmd", "popen", "log_path", "log_fh", "pgid", "group_extinct",
+                 "output_limited")
 
     def __init__(self, handle: str, cmd: str, popen, log_path: str, log_fh, pgid=None):
         self.handle = handle
@@ -42,6 +44,7 @@ class _Proc:
         self.log_fh = log_fh
         self.pgid = pgid   # POSIX process-group id captured at spawn (== leader pid); None on Windows
         self.group_extinct = False
+        self.output_limited = False
 
 
 class ProcManager:
@@ -78,7 +81,9 @@ class ProcManager:
         # Capture the process-group id NOW, while the leader is alive: getpgid raises once the leader exits
         # and is reaped, so a later kill could no longer find the group to reach an orphaned background child
         # (external review H-14). Via the platform_compat seam (Windows-safe).
-        self._procs[handle] = _Proc(handle, command, popen, log_path, log_fh, capture_pgid(popen))
+        proc = _Proc(handle, command, popen, log_path, log_fh, capture_pgid(popen))
+        self._procs[handle] = proc
+        self._watch_output_limit(proc)
         return handle
 
     def _spawn_proc(self, command, cwd, env, log_fh):
@@ -101,8 +106,36 @@ class ProcManager:
         """
         self._n += 1
         handle = f"p{self._n}"
-        self._procs[handle] = _Proc(handle, command, popen, log_path, log_fh, capture_pgid(popen))
+        proc = _Proc(handle, command, popen, log_path, log_fh, capture_pgid(popen))
+        self._procs[handle] = proc
+        self._watch_output_limit(proc)
         return handle
+
+    def _watch_output_limit(self, proc: _Proc) -> None:
+        """Terminate a background process before its logfile can grow without bound."""
+        def watch():
+            while True:
+                try:
+                    if os.path.getsize(proc.log_path) > _OUTPUT_CAP:
+                        try:
+                            proc.group_extinct = terminate_process_group(
+                                proc.pgid, proc.popen, term_timeout=0.2, kill_timeout=1.0,
+                            )
+                        except Exception:  # noqa: BLE001 — watcher is a safety backstop, never a traceback source
+                            proc.group_extinct = False
+                        try:
+                            with open(proc.log_path, "r+b") as stream:
+                                stream.truncate(_OUTPUT_CAP)
+                        except OSError:
+                            pass
+                        proc.output_limited = True
+                        return
+                except OSError:
+                    return
+                if proc.popen.poll() is not None:
+                    return
+                time.sleep(0.05)
+        threading.Thread(target=watch, name=f"{proc.handle}-output-limit", daemon=True).start()
 
     def poll(self, handle: str) -> str:
         p = self._get(handle)
@@ -115,6 +148,8 @@ class ProcManager:
             p.log_fh = None
         if rc is None:
             return "running"
+        if p.output_limited:
+            return f"exited {rc} (output limit exceeded)"
         if p.group_extinct:
             return f"exited {rc}"
         group_alive = process_group_alive(p.pgid, p.popen)

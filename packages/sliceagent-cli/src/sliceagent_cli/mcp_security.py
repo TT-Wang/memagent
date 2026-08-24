@@ -18,6 +18,7 @@ import base64
 import os
 import re
 import shlex
+import shutil
 
 _SHELL_INTERPRETERS = frozenset({
     "bash", "sh", "zsh", "dash", "fish", "ksh",
@@ -95,10 +96,23 @@ def validate_mcp_server_entry(name: str, conf) -> list[str]:
         tokens = shlex.split(full, posix=(os.name != "nt"))
     except ValueError:
         tokens = full.split()
-    if not any(os.path.basename(t).lower() in _SHELL_INTERPRETERS for t in tokens):
+    def _is_shell(token: str) -> bool:
+        raw = os.path.expandvars(os.path.expanduser(str(token)))
+        names = {os.path.basename(raw).lower()}
+        resolved = shutil.which(raw) if not os.path.dirname(raw) else raw
+        if resolved:
+            names.add(os.path.basename(os.path.realpath(resolved)).lower())
+        return bool(names & _SHELL_INTERPRETERS)
+
+    if not any(_is_shell(t) for t in tokens):
         return []
     issues: list[str] = []
-    scan_texts = [full] + _deobfuscated(full)
+    env = conf.get("env")
+    env_text = ""
+    if isinstance(env, dict):
+        env_text = " ".join(f"{key}={value}" for key, value in env.items())
+    effective = (full + " " + env_text).strip()
+    scan_texts = [effective] + _deobfuscated(effective)
     if any(_EGRESS.search(text) for text in scan_texts):
         issues.append(f"MCP server '{name}': a shell interpreter with network-egress arguments "
                       "(exfiltration shape — not a real MCP server)")

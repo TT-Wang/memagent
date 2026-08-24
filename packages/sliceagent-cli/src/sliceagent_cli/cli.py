@@ -45,8 +45,16 @@ from .workspace_handoff import WorkspaceScheduleDecision
 
 
 def _load_env(path: str = ".env") -> dict[str, str]:
-    """Load unset values and return exactly the repository overlay introduced by this call."""
+    """Load data values while refusing repository control over host/security policy."""
     applied: dict[str, str] = {}
+    protected = {
+        "AGENT_ALLOW_PLUGINS", "AGENT_PROJECT_SKILLS", "AGENT_TRUST_PROJECT",
+        "AGENT_ADVANCED_TOOLS", "AGENT_ROOT", "AGENT_SANDBOX", "AGENT_VERIFY_CMD",
+        "AGENT_PROXY", "PATH", "PYTHONPATH", "PYTHONHOME",
+        "SLICEAGENT_SKILLS_DIR", "SLICEAGENT_SKILL_CANDIDATES_DIR",
+        "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+        "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
+    }
     try:
         with open(path, encoding="utf-8") as f:
             for line in f:
@@ -57,6 +65,9 @@ def _load_env(path: str = ".env") -> dict[str, str]:
                     if len(v) >= 2 and v[0] == v[-1] and v[0] in ("'", '"'):
                         v = v[1:-1]   # drop surrounding quotes (common .env convention) so the key isn't literal-quoted
                     key = k.strip()
+                    upper = key.upper()
+                    if upper in protected or upper.endswith("_BASE_URL"):
+                        continue
                     if key not in os.environ:
                         os.environ[key] = v
                         applied[key] = v
@@ -540,12 +551,21 @@ def _workspace_paths(root: str, configured: list[str] | None, *defaults: str) ->
 
 
 def _project_skills_trusted(root: str) -> bool:
-    """Pi's project-trust gate (project-trust.ts): repo-local skills are repo-controlled
-    instructions, so they load only on explicit trust — a `.sliceagent/skills-trust` marker file
-    in the workspace, or AGENT_PROJECT_SKILLS=1 for operators who want them everywhere."""
-    if os.environ.get("AGENT_PROJECT_SKILLS", "").strip().lower() in ("1", "on", "true", "yes"):
-        return True
-    return os.path.isfile(os.path.join(root, ".sliceagent", "skills-trust"))
+    """Project instruction packs require approval state that the project cannot commit itself."""
+    from sliceagent_core.config import project_config_trusted
+    skills_only = os.environ.get("AGENT_PROJECT_SKILLS", "").strip().lower() in (
+        "1", "on", "true", "yes",
+    )
+    return project_config_trusted() or skills_only
+
+
+def _advanced_tools_allowed(sandbox) -> bool:
+    """Advanced process/PTY tools are safe only on the local backend they actually use."""
+    from .sandbox import LocalSandbox
+    enabled = os.environ.get("AGENT_ADVANCED_TOOLS", "").strip().lower() in (
+        "1", "on", "true", "yes",
+    )
+    return enabled and isinstance(sandbox, LocalSandbox)
 
 
 def _workspace_mcp_config(root: str, servers: dict) -> dict:
@@ -718,7 +738,7 @@ def _prepare_workspace_resources(
     from .memory import make_write_skill_tool
     from .plugins import load_plugins
     from sliceagent_core.runtime_persistence import CoreArtifactFS, LocalTurnStore
-    from .sandbox import make_sandbox
+    from .sandbox import LocalSandbox, make_sandbox
     from sliceagent_core.session import Session, SessionBinding, make_topic_tools
     from .skills import make_skill_manager, make_skill_tool
     from .scoped_spawn import ScopedSpawnHost
@@ -753,12 +773,15 @@ def _prepare_workspace_resources(
         base_tools.on_workspace_switch = schedule_workspace
         if ask_user is not None:
             base_tools.on_ask_user = ask_user
-        if os.environ.get("AGENT_ADVANCED_TOOLS", "").strip().lower() not in (
+        advanced_enabled = os.environ.get("AGENT_ADVANCED_TOOLS", "").strip().lower() in (
             "1", "on", "true", "yes",
-        ):
+        )
+        if not _advanced_tools_allowed(sandbox):
             for name in tuple(base_tools.registry._tools):
                 if name.startswith(("proc_", "terminal_")):
                     base_tools.registry.deregister(name)
+            if advanced_enabled and not isinstance(sandbox, LocalSandbox):
+                on_log("advanced process/terminal tools disabled: selected sandbox cannot contain them")
         for extra in os.environ.get("AGENT_ROOT", "").split(os.pathsep):
             if extra.strip():
                 expanded = os.path.expanduser(extra.strip())
@@ -775,7 +798,8 @@ def _prepare_workspace_resources(
             trust_project=_project_skills_trusted(root), on_log=on_log)
         plugin_dirs = _workspace_paths(root, cfg.plugin_dirs) if cfg.plugin_dirs else []
         plugin_mcp = load_plugins(
-            base_tools.registry, skills, plugin_dirs, root=root, config=cfg, on_log=on_log,
+            base_tools.registry, skills, plugin_dirs, root=root, config=cfg,
+            trust_project=cfg.project_trusted, on_log=on_log,
         )
         skill_tool = make_skill_tool(skills)
         if skill_tool is not None:
@@ -810,7 +834,12 @@ def _prepare_workspace_resources(
         sub_depth = cfg.subagent_depth
         if sub_depth > 0:
             from .agents import load_agents
-            agent_roots = skill_roots + [root, os.path.join(root, ".sliceagent")]
+            def _outside_project(path: str) -> bool:
+                real = os.path.realpath(path)
+                return real != root and not real.startswith(root + os.sep)
+            agent_roots = [path for path in skill_roots if _outside_project(path)]
+            if cfg.project_trusted:
+                agent_roots += [root, os.path.join(root, ".sliceagent")]
             # ONE mode: every builtin kind + the user's agents/*.md files are always available.
             tools = ScopedSpawnHost(
                 base_tools, llm=llm, retriever=retriever, memory=memory,

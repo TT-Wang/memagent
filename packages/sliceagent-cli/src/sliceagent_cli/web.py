@@ -38,14 +38,13 @@ _DDG_HTML = "https://html.duckduckgo.com/html/"
 
 
 # ── SSRF guard ───────────────────────────────────────────────────────────────
-def _host_blocked(host: str) -> bool:
-    """True if `host` is unsafe to fetch: a non-public name/IP. Resolves names so a domain pointing at a
-    private IP is caught too. Fails CLOSED (unresolvable → blocked)."""
+def _public_addresses(host: str) -> tuple[str, ...]:
+    """Resolve one host to public addresses, failing closed if any answer is non-public."""
     host = (host or "").strip().lower().rstrip(".")
     if not host:
-        return True
+        return ()
     if host == "localhost" or host.endswith((".localhost", ".local", ".internal")):
-        return True
+        return ()
     addrs: list = []
     try:
         addrs = [ipaddress.ip_address(host)]               # IP literal
@@ -53,18 +52,64 @@ def _host_blocked(host: str) -> bool:
         try:
             addrs = [ipaddress.ip_address(ai[4][0]) for ai in socket.getaddrinfo(host, None)]
         except Exception:  # noqa: BLE001 — cannot resolve → block (fail closed)
-            return True
+            return ()
     for ip in addrs:
         # `not is_global` is the catch-all (blocks CGNAT 100.64/10, benchmarking, future special-use ranges);
         # the explicit flags stay as documentation. Public hosts (is_global True) pass.
         if (not ip.is_global or ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
                 or ip.is_multicast or ip.is_unspecified):
-            return True
-    # ACCEPTED RESIDUAL (DNS-rebinding TOCTOU): this validates the name's resolution, but httpx re-resolves
-    # at connect time, so a sub-second rebind to a private IP could slip through. Fully closing it needs
-    # IP-pinning with a custom SNI/Host (high blast-radius on TLS verification, not offline-verifiable), so
-    # we keep the validated-resolution block as the primary defense and accept the narrow rebind window.
-    return False
+            return ()
+    return tuple(dict.fromkeys(str(ip) for ip in addrs))
+
+
+def _host_blocked(host: str) -> bool:
+    """True unless every DNS answer is public. The request path pins one of these exact answers."""
+    return not _public_addresses(host)
+
+
+class _PinnedNetworkBackend:
+    """httpcore network backend that preserves Host/SNI while connecting to a validated IP."""
+
+    def __init__(self, host: str, addresses: tuple[str, ...], delegate):
+        self.host = host.lower().rstrip(".")
+        self.addresses = addresses
+        self.delegate = delegate
+
+    def connect_tcp(self, host, port, timeout=None, local_address=None, socket_options=None):
+        requested = host.decode("ascii", "strict") if isinstance(host, bytes) else str(host)
+        if requested.lower().rstrip(".") != self.host:
+            raise OSError("pinned transport refused an unexpected host")
+        last = None
+        for address in self.addresses:
+            try:
+                return self.delegate.connect_tcp(
+                    address, port, timeout=timeout, local_address=local_address,
+                    socket_options=socket_options,
+                )
+            except Exception as error:  # noqa: BLE001 — try the next validated address
+                last = error
+        if last is not None:
+            raise last
+        raise OSError("pinned transport has no validated address")
+
+    def connect_unix_socket(self, path, timeout=None, socket_options=None):
+        raise OSError("web fetch does not permit Unix sockets")
+
+    def sleep(self, seconds):
+        return self.delegate.sleep(seconds)
+
+
+def _pinned_transport(host: str):
+    import httpcore
+    import httpx
+    addresses = _public_addresses(host)
+    if not addresses:
+        raise ValueError(f"refusing to connect to non-public address: {host}")
+    transport = httpx.HTTPTransport(trust_env=False)
+    transport._pool._network_backend = _PinnedNetworkBackend(  # noqa: SLF001 — httpx exposes no resolver hook
+        host, addresses, httpcore.SyncBackend(),
+    )
+    return transport
 
 
 def _safe_url(url: str) -> tuple[str | None, str]:
@@ -198,20 +243,25 @@ def _http_get(url: str, *, timeout: float, deadline: float = 0.0):
     import httpx
     if not deadline:
         deadline = _time.monotonic() + _web_deadline()
-    with httpx.stream("GET", url, timeout=timeout, follow_redirects=False,
-                      headers={"User-Agent": _UA, "Accept": "text/html,*/*"}) as r:
-        cl = (r.headers.get("content-length") or "").strip()   # strip OWS so a padded length still validates
-        if r.is_redirect or (cl.isdigit() and int(cl) > _MAX_RAW_BYTES):
-            return _Resp(r.status_code, dict(r.headers), "")   # redirect: don't read body; oversized: reject
-        buf = bytearray()
-        for chunk in r.iter_bytes():
-            if _time.monotonic() > deadline:
-                raise ValueError(
-                    f"total deadline exceeded after reading {len(buf)} bytes from {url}")
-            buf += chunk
-            if len(buf) > _MAX_RAW_BYTES:                       # stop the download mid-stream
-                break
-        return _Resp(r.status_code, dict(r.headers), bytes(buf[:_MAX_RAW_BYTES]).decode(r.encoding or "utf-8", "replace"))
+    host = urlparse(url).hostname or ""
+    with httpx.Client(transport=_pinned_transport(host)) as client:
+        with client.stream("GET", url, timeout=timeout, follow_redirects=False,
+                           headers={"User-Agent": _UA, "Accept": "text/html,*/*"}) as r:
+            cl = (r.headers.get("content-length") or "").strip()
+            if r.is_redirect or (cl.isdigit() and int(cl) > _MAX_RAW_BYTES):
+                return _Resp(r.status_code, dict(r.headers), "")
+            buf = bytearray()
+            for chunk in r.iter_bytes():
+                if _time.monotonic() > deadline:
+                    raise ValueError(
+                        f"total deadline exceeded after reading {len(buf)} bytes from {url}")
+                buf += chunk
+                if len(buf) > _MAX_RAW_BYTES:
+                    break
+            return _Resp(
+                r.status_code, dict(r.headers),
+                bytes(buf[:_MAX_RAW_BYTES]).decode(r.encoding or "utf-8", "replace"),
+            )
 
 
 def _fetch(url: str) -> str:

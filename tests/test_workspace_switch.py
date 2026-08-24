@@ -304,9 +304,17 @@ def target_config_loads_by_explicit_root_without_process_chdir():
     with open(os.path.join(target_root, "sliceagent.toml"), "w", encoding="utf-8") as f:
         f.write('[oracle]\nverify_cmd = "TARGET_ONLY"\n')
     cwd_before = os.getcwd()
-    cfg = load_config(target_root)
-    assert cfg.verify_cmd == "TARGET_ONLY", "workspace configuration must follow the selected root"
-    assert os.getcwd() == cwd_before, "loading target config must not mutate process cwd"
+    prior_trust = os.environ.get("AGENT_TRUST_PROJECT")
+    os.environ["AGENT_TRUST_PROJECT"] = "1"
+    try:
+        cfg = load_config(target_root)
+        assert cfg.verify_cmd == "TARGET_ONLY", "trusted workspace configuration must follow the selected root"
+        assert os.getcwd() == cwd_before, "loading target config must not mutate process cwd"
+    finally:
+        if prior_trust is None:
+            os.environ.pop("AGENT_TRUST_PROJECT", None)
+        else:
+            os.environ["AGENT_TRUST_PROJECT"] = prior_trust
 
 
 @check

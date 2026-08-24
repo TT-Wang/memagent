@@ -1409,7 +1409,6 @@ class CodingToolHost:
         finally:
             if activity_cb is not None:
                 cancel_scope.unbind_activity(prev_cb)
-        self._grant_shell_paths(args.get("command", ""))  # I2 reach=action: dirs the shell touched
         out = out.strip()
         if code == SANDBOX_ADOPTED:
             # The deadline passed but NOTHING was killed: the live process joined the background
@@ -1684,7 +1683,6 @@ class CodingToolHost:
 
     def _t_execute_code(self, args: dict) -> str:
         out = self._execute_code(args["code"], timeout=self._call_timeout(args.get("timeout")))
-        self._grant_shell_paths(args.get("code", ""))  # I2 reach=action: dirs code-as-action touched
         return out
 
     def _execute_code(self, code: str, *, timeout: float | None = None) -> str:

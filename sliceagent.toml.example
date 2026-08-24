@@ -1,6 +1,8 @@
 # sliceagent.toml — persistent settings (copy to ./sliceagent.toml or ~/.sliceagent/config.toml).
-# Precedence: ENV var > project ./sliceagent.toml > user ~/.sliceagent/config.toml > default.
-# So an env var (e.g. AGENT_MODEL=deepseek-v4-flash) still overrides this file for one-off runs.
+# Precedence: ENV var > trusted project ./sliceagent.toml > user ~/.sliceagent/config.toml > default.
+# Project files supply data-only preferences by default. Providers, MCP, plugins/skills, sandbox policy,
+# and verify_cmd require AGENT_TRUST_PROJECT=1 in the parent shell; repository .env cannot set that approval.
+# An env var (e.g. AGENT_MODEL=deepseek-v4-flash) still overrides files for one-off runs.
 #
 # Easiest path: run `sliceagent init` (or `/config` in-session) — it writes the [providers.<id>]
 # table + key for you (chmod 0600). Hand-editing this file is fully supported too.

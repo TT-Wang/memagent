@@ -1,10 +1,10 @@
 """Config — layered settings from sliceagent.toml (Step ③.2).
 
-A layered config file (user then project, project overriding)
+A layered config file (user then project, with untrusted project security fields removed)
 that declares persistent settings AND extension surfaces (skills dirs, MCP servers,
-plugin dirs). Precedence is ENV > project file > user file > default, so a quick
-environment override still wins over the file and prior env-driven behavior is
-preserved (the file just makes settings persistent).
+plugin dirs). Precedence is ENV > trusted project file > user file > default. Without the external
+project-trust opt-in, project files contribute data-only preferences and cannot replace executable,
+credential-destination, extension, or sandbox policy.
 
 Read-only TOML via stdlib tomllib (Python 3.11+ — no new dependency).
 """
@@ -88,23 +88,53 @@ def _truthy(v) -> bool:
     return str(v).strip().lower() in ("1", "true", "yes", "on")
 
 
+def project_config_trusted() -> bool:
+    """Whether this process explicitly trusts executable repository configuration.
+
+    The decision deliberately lives outside the repository.  The CLI's dotenv loader refuses this
+    variable, so a checkout cannot create its own approval by committing either config or a marker.
+    """
+    return _truthy(os.environ.get("AGENT_TRUST_PROJECT", ""))
+
+
+def _untrusted_project_data(data: dict) -> dict:
+    """Keep data-only project preferences while removing user-authority/security destinations."""
+    out = dict(data or {})
+    for key in ("providers", "provider", "mcp_servers", "plugins", "skills", "sandbox"):
+        out.pop(key, None)
+    oracle = out.get("oracle")
+    if isinstance(oracle, dict):
+        oracle = dict(oracle)
+        oracle.pop("verify_cmd", None)
+        if oracle:
+            out["oracle"] = oracle
+        else:
+            out.pop("oracle", None)
+    return out
+
+
 class Config:
     """Resolved settings. Each accessor checks ENV first, then the merged TOML, then a default."""
 
-    def __init__(self, data: dict | None = None):
+    def __init__(self, data: dict | None = None, *, project_trusted: bool = False):
         self.data = data or {}
+        self.project_trusted = bool(project_trusted)
 
     @classmethod
     def load(cls, root: str | None = None) -> "Config":
-        merged: dict = {}
         files = _config_files(root)
-        for index, f in enumerate(files):
-            if os.path.isfile(f):
-                if index == 0:  # user config may contain provider API keys; project config keeps repo modes
-                    private_dir(os.path.dirname(f))
-                    private_file(f)
-                merged = _deep_merge(merged, _read_toml(f))
-        return cls(merged)
+        user: dict = {}
+        if os.path.isfile(files[0]):
+            private_dir(os.path.dirname(files[0]))
+            private_file(files[0])
+            user = _read_toml(files[0])
+        project: dict = {}
+        for path in files[1:]:
+            if os.path.isfile(path):
+                project = _deep_merge(project, _read_toml(path))
+        trusted = project_config_trusted()
+        effective_project = project if trusted else _untrusted_project_data(project)
+        return cls(_deep_merge(user, effective_project), project_trusted=trusted)
 
     def _get(self, section: str, key: str, env: str | None, default):
         if env and os.environ.get(env) is not None:

@@ -16,6 +16,7 @@ New-Item -ItemType Directory -Force -Path $AppDir | Out-Null
 
 # Pinned artifacts + SHA256 (never releases/latest — rate limits + supply-chain pinning):
 $UvInstall      = "https://astral.sh/uv/0.11.26/install.ps1"
+$UvInstallSha   = "37b3bc94708aacb315254dfc69df326e40b670d3f4785cbde189903369dbd21b"
 $PortableGitUrl = "https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.2/PortableGit-2.55.0.2-64-bit.7z.exe"
 $PortableGitSha = "b20d42da3afa228e9fa6174480de820282667e799440d655e308f700dfa0d0df"
 $RipgrepUrl     = "https://github.com/BurntSushi/ripgrep/releases/download/15.1.0/ripgrep-15.1.0-x86_64-pc-windows-msvc.zip"
@@ -47,7 +48,15 @@ if (-not (Test-Path $UvExe)) {
 }
 if (-not (Test-Path $UvExe)) {
     Step "Installing uv (Python tool manager, pinned 0.11.26)..."
-    Invoke-Expression (Invoke-RestMethod -UseBasicParsing $UvInstall)
+    $UvInstallerPath = Join-Path $AppDir "uv-install-0.11.26.ps1"
+    Get-Verified $UvInstall $UvInstallSha $UvInstallerPath
+    try {
+        $UvInstaller = [ScriptBlock]::Create([IO.File]::ReadAllText($UvInstallerPath))
+        & $UvInstaller
+    }
+    finally {
+        Remove-Item $UvInstallerPath -ErrorAction SilentlyContinue
+    }
     $env:Path = "$env:USERPROFILE\.local\bin;$env:Path"   # this session; the installer handles new shells
     $UvExe = Join-Path $env:USERPROFILE ".local\bin\uv.exe"
 }

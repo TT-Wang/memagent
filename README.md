@@ -349,7 +349,7 @@ Prefix an unrelated request with `New task:` to start it with fresh task state w
 for `/resume`. Ambiguous follow-ups deliberately continue the active task so context is never discarded on a
 guess.
 
-It can edit code in the primary workspace and grounded focus roots (reversible with `/undo`), run regular shell commands through a sandbox (`local` by default, `docker` for container isolation on POSIX/WSL2), search the tree and the web, and delegate self-contained sub-tasks with `spawn_agent(agent=<kind>, task=…)` to a fresh one-shot child that runs its own history-bounded, task-elastic slice and returns one trusted report. Built-in kinds are the read-only `explorer`, the writable `general` worker, `reviewer`, and `verification`; your own `agents/*.md` definitions are always loaded alongside them. Native Windows uses the local backend; run SliceAgent inside WSL2 if you want the Docker backend. Delegation depth defaults to `1` (children cannot spawn children); raise `AGENT_SUBAGENT_DEPTH` only if you intentionally want nesting. `AGENT_ADVANCED_TOOLS=1` opts in persistent process and interactive terminal tools. Ordinary work runs directly from the user's request; the host retains only a narrow safeguard against high-confidence catastrophic shell commands. Secrets are scrubbed from anything persisted or logged.
+It can edit code in the primary workspace and grounded focus roots (reversible with `/undo`), run regular shell commands through a sandbox (`local` by default, `docker` for container isolation on POSIX/WSL2), search the tree and the web, and delegate self-contained sub-tasks with `spawn_agent(agent=<kind>, task=…)` to a fresh one-shot child that runs its own history-bounded, task-elastic slice and returns one trusted report. Built-in kinds are the read-only `explorer`, the writable `general` worker, `reviewer`, and `verification`; repository `agents/*.md` definitions require the external `AGENT_TRUST_PROJECT=1` opt-in. Native Windows uses the local backend; run SliceAgent inside WSL2 if you want the Docker backend. Delegation depth defaults to `1` (children cannot spawn children); raise `AGENT_SUBAGENT_DEPTH` only if you intentionally want nesting. `AGENT_ADVANCED_TOOLS=1` opts in persistent process and interactive terminal tools on the local backend; they stay disabled under Docker unless a contained implementation is available. Ordinary work runs directly from the user's request; the host retains only a narrow safeguard against high-confidence catastrophic shell commands. Secrets are scrubbed from anything persisted or logged.
 
 Every clean or interrupted agent task turn is sealed into the always-on local artifact/checkpoint path.
 Subagent reports return directly to the parent in launch order; when optional artifact persistence succeeds,
@@ -370,7 +370,7 @@ making claims, but the receipt does not block ordinary work, task switching, und
 Ambiguous recovery journals still stop startup before plugins or MCP processes run because that boundary
 protects the integrity of the durable local store rather than interpreting user intent.
 
-**Configuration.** `sliceagent config --list` prints every setting. Set them persistently in `~/.sliceagent/config.toml` (written by `init`), or override any one via an environment variable:
+**Configuration.** `sliceagent config --list` prints every setting. Set them persistently in `~/.sliceagent/config.toml` (written by `init`), or override any one via a parent-process environment variable. Repository `.env` files cannot set network destinations, proxies/TLS roots, executable extensions, sandbox policy, or host-root grants. Executable/security-sensitive project configuration and project agents/skills/plugins require `AGENT_TRUST_PROJECT=1` in the parent shell:
 
 | Setting | Default | Purpose |
 |---|---|---|
@@ -385,6 +385,7 @@ protects the integrity of the durable local store rather than interpreting user 
 | `LLM_STREAM_CLOSE_GRACE_SEC` | `2` | bounded wait to prove a cancelled/timed-out SSE request physically closed before any retry |
 | `LLM_PROVIDER_MAX_INFLIGHT` | `4` | process-wide physical request cap per provider account; indeterminate calls hold their slot until the transport closes |
 | `AGENT_ADVANCED_TOOLS` | *(off)* | enable persistent process and interactive terminal tools |
+| `AGENT_TRUST_PROJECT` | *(off)* | trust executable/security-sensitive project configuration and extensions for this process |
 | `SLICEAGENT_CACHE_DIR` | `~/.sliceagent` | always-on local checkpoints, immutable artifacts, and recovery journals |
 | `SLICEAGENT_VAULT` | `~/.sliceagent/vault` | legacy episodic/task compatibility records (not canonical typed L2) |
 | `AGENT_VERIFY_CMD` | *(unset)* | test command used as the verification oracle |
