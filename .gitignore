@@ -73,6 +73,14 @@ evals/*
 # Serializer census (audit instrument): code is versioned, captured run data
 # (evals/census_runs/, which may contain request content) stays local via the evals/* ignore.
 !evals/serializer_census.py
+# One redacted projection of a real run is versioned so the calibration gate has something to bite
+# on in a clean checkout: tests/test_census_calibration.py asserts `seen` (it refuses to pass
+# vacuously), so with the whole directory ignored it failed on every CI run while staying green on
+# any laptop that had run a census. The committed file carries region names and counts only — the
+# same surface this tool already prints to stdout. Full runs still stay local.
+!evals/census_runs/
+evals/census_runs/*
+!evals/census_runs/s2_taskdag_scheduler-tape.calibration.json
 # The component-A/B engine + its metric harnesses are load-bearing deliverable infra (spec P2):
 # code is versioned, captured run data (prompt_ab/runs/, *.json results) stays local.
 !evals/prompt_ab/

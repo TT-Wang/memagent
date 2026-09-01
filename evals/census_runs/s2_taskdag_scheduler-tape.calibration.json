@@ -1,0 +1,75 @@
+{
+  "_note": "Redacted projection of a real census run, committed so the calibration gate has something to bite on in a clean checkout. Field allowlist only: region names and counts — the same surface serializer_census.py already prints to stdout. Full runs stay local per the evals/* ignore (they may contain request content).",
+  "_source": "s2_taskdag_scheduler-tape.json (2026-08-05 run)",
+  "_fields_kept": [
+    "label",
+    "scenario",
+    "estimator",
+    "tokens_per_byte",
+    "totals_by_category[*].est_tokens",
+    "meter.in_total"
+  ],
+  "label": "tape",
+  "scenario": "s2_taskdag_scheduler",
+  "estimator": "recalibrated(meter.in_total/prompt_bytes) 2026-08-05",
+  "tokens_per_byte": 0.233819,
+  "totals_by_category": {
+    "msg_list_overhead": {
+      "est_tokens": 171
+    },
+    "schemas": {
+      "est_tokens": 310237
+    },
+    "system": {
+      "est_tokens": 190365
+    },
+    "seed:_pre_headers": {
+      "est_tokens": 434
+    },
+    "seed:ACTIVE USER INTENT": {
+      "est_tokens": 6181
+    },
+    "seed:OPEN FILES": {
+      "est_tokens": 7330
+    },
+    "seed:TURN CONTRACT": {
+      "est_tokens": 7199
+    },
+    "seed:_current_request_now": {
+      "est_tokens": 11074
+    },
+    "assistant_content": {
+      "est_tokens": 47
+    },
+    "assistant_tool_calls": {
+      "est_tokens": 34567
+    },
+    "assistant_reasoning": {
+      "est_tokens": 242871
+    },
+    "assistant_json_envelope": {
+      "est_tokens": 1713
+    },
+    "tool_result": {
+      "est_tokens": 77228
+    },
+    "seed:SESSION TAPE": {
+      "est_tokens": 218486
+    },
+    "seed:STABLE TASK OBJECTIVE": {
+      "est_tokens": 6540
+    },
+    "seed:RECENT CONVERSATION": {
+      "est_tokens": 35664
+    },
+    "seed:CURRENT ERROR": {
+      "est_tokens": 1678
+    },
+    "seed:RETAINED USER CORRECTIONS / CLARIFIC": {
+      "est_tokens": 2667
+    }
+  },
+  "meter": {
+    "in_total": 1154452
+  }
+}
