@@ -1,6 +1,10 @@
 version: 2
 updates:
-  - package-ecosystem: "pip"
+  # "uv", not "pip": this is a uv workspace. The pip ecosystem edits the root pyproject.toml
+  # only — it leaves uv.lock stale and never touches the member packages under packages/*, so
+  # every PR it opened failed the pinned-deps gate (manifest disagrees with the lock) and some
+  # could not even resolve (root said mcp==2.0.0 while sliceagent-cli still said 1.28.1).
+  - package-ecosystem: "uv"
     directory: "/"
     schedule:
       interval: "weekly"
