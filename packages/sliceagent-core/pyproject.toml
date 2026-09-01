@@ -12,8 +12,8 @@ keywords = ["agent-runtime", "llm", "context-engineering", "bounded-slice", "lon
 dependencies = []
 
 [project.optional-dependencies]
-openai = ["openai==3.3.1", "httpx==0.28.1"]
-dev = ["pytest==9.1.1", "ruff==0.16.4"]
+openai = ["openai==3.6.0", "httpx==0.28.1"]
+dev = ["pytest==9.1.1", "ruff==0.16.5"]
 
 [build-system]
 requires = ["hatchling"]
